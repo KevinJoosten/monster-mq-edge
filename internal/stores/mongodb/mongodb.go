@@ -341,6 +341,79 @@ func (a *MessageArchive) GetHistory(ctx context.Context, topic string, from, to 
 	return out, cur.Err()
 }
 
+func (a *MessageArchive) GetArchiveStats(ctx context.Context, startTime, endTime *time.Time) (minTimestamp *time.Time, dailyCounts []stores.DailyCount, err error) {
+	dailyCounts = []stores.DailyCount{}
+
+	// Build filter
+	filter := bson.M{}
+	timeFilter := bson.M{}
+	if startTime != nil {
+		timeFilter["$gte"] = startTime.UTC()
+	}
+	if endTime != nil {
+		timeFilter["$lte"] = endTime.UTC()
+	}
+	if len(timeFilter) > 0 {
+		filter["time"] = timeFilter
+	}
+
+	// 1. Get min timestamp
+	var minDoc bson.M
+	opts := options.FindOne().SetSort(bson.D{{Key: "time", Value: 1}})
+	err = a.coll().FindOne(ctx, filter, opts).Decode(&minDoc)
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, nil, err
+	}
+	if err == nil {
+		if t, ok := minDoc["time"].(bson.DateTime); ok {
+			ts := t.Time()
+			minTimestamp = &ts
+		} else if t, ok := minDoc["time"].(time.Time); ok {
+			minTimestamp = &t
+		}
+	}
+
+	// 2. Get daily counts
+	pipeline := mongo.Pipeline{}
+	if len(filter) > 0 {
+		pipeline = append(pipeline, bson.D{{Key: "$match", Value: filter}})
+	}
+	pipeline = append(pipeline,
+		bson.D{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: bson.D{
+				{Key: "$dateToString", Value: bson.D{
+					{Key: "format", Value: "%Y-%m-%d"},
+					{Key: "date", Value: "$time"},
+				}},
+			}},
+			{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+		bson.D{{Key: "$sort", Value: bson.D{{Key: "_id", Value: 1}}}},
+	)
+
+	cur, err := a.coll().Aggregate(ctx, pipeline)
+	if err != nil {
+		return minTimestamp, dailyCounts, err
+	}
+	defer cur.Close(ctx)
+
+	for cur.Next(ctx) {
+		var doc bson.M
+		if err := cur.Decode(&doc); err != nil {
+			return minTimestamp, dailyCounts, err
+		}
+		day := getStr(doc, "_id")
+		count := int64(getInt(doc, "count"))
+		if day != "" {
+			dailyCounts = append(dailyCounts, stores.DailyCount{
+				Date:  day,
+				Count: count,
+			})
+		}
+	}
+	return minTimestamp, dailyCounts, cur.Err()
+}
+
 func (a *MessageArchive) PurgeOlderThan(ctx context.Context, t time.Time) (stores.PurgeResult, error) {
 	res, err := a.coll().DeleteMany(ctx, bson.M{"time": bson.M{"$lt": t.UTC()}})
 	if err != nil {

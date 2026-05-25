@@ -111,6 +111,7 @@ type QueryResolver interface {
 	SystemLogs(ctx context.Context, startTime *string, endTime *string, lastMinutes *int, node *string, level []string, logger *string, sourceClass *string, sourceMethod *string, message *string, limit *int, orderByTime *OrderDirection) ([]*SystemLogEntry, error)
 	SearchTopics(ctx context.Context, pattern string, limit *int, archiveGroup *string) ([]string, error)
 	BrowseTopics(ctx context.Context, topic string, archiveGroup *string) ([]*Topic, error)
+	ArchiveStats(ctx context.Context, archiveGroup string, startTime *string, endTime *string) (*ArchiveStats, error)
 	BrokerConfig(ctx context.Context) (*BrokerConfig, error)
 	Broker(ctx context.Context, nodeID *string) (*Broker, error)
 	Brokers(ctx context.Context) ([]*Broker, error)
@@ -340,7 +341,7 @@ enum AggregationFunction { AVG MIN MAX COUNT }
 enum DatabaseConnectionType { POSTGRES MONGODB }
 
 enum MessageStoreType { NONE MEMORY HAZELCAST POSTGRES CRATEDB MONGODB SQLITE }
-enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB KAFKA SQLITE }
+enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB SQLITE }
 enum PayloadFormat { DEFAULT JSON }
 
 # -----------------------------------------------------------------------------
@@ -1039,6 +1040,7 @@ type Query {
     ): [SystemLogEntry!]!
     searchTopics(pattern: String!, limit: Int = 100, archiveGroup: String = "Default"): [String!]!
     browseTopics(topic: String!, archiveGroup: String = "Default"): [Topic!]!
+    archiveStats(archiveGroup: String!, startTime: String, endTime: String): ArchiveStats
     brokerConfig: BrokerConfig!
     broker(nodeId: String): Broker
     brokers: [Broker!]!
@@ -1082,6 +1084,16 @@ type Subscription {
         sourceMethod: String
         message: String
     ): SystemLogEntry!
+}
+
+type ArchiveStats {
+    minTimestamp: String
+    dailyCounts: [DailyCount!]!
+}
+
+type DailyCount {
+    date: String!
+    count: Long!
 }
 `, BuiltIn: false},
 	{Name: "../schema/winccoa.graphqls", Input: `# WinCC Open Architecture bridge. Names and casing follow the Java broker
@@ -1804,6 +1816,27 @@ func (ec *executionContext) field_Query_archiveGroups_args(ctx context.Context, 
 		return nil, err
 	}
 	args["lastValTypeNotEquals"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_archiveStats_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "archiveGroup", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["archiveGroup"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "startTime", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["startTime"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "endTime", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["endTime"] = arg2
 	return args, nil
 }
 
@@ -4340,6 +4373,70 @@ func (ec *executionContext) fieldContext_ArchiveGroupResult_archiveGroup(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _ArchiveStats_minTimestamp(ctx context.Context, field graphql.CollectedField, obj *ArchiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveStats_minTimestamp,
+		func(ctx context.Context) (any, error) {
+			return obj.MinTimestamp, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveStats_minTimestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveStats_dailyCounts(ctx context.Context, field graphql.CollectedField, obj *ArchiveStats) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveStats_dailyCounts,
+		func(ctx context.Context) (any, error) {
+			return obj.DailyCounts, nil
+		},
+		nil,
+		ec.marshalNDailyCount2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDailyCountᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveStats_dailyCounts(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveStats",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "date":
+				return ec.fieldContext_DailyCount_date(ctx, field)
+			case "count":
+				return ec.fieldContext_DailyCount_count(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DailyCount", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ArchivedMessage_topic(ctx context.Context, field graphql.CollectedField, obj *ArchivedMessage) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6817,6 +6914,64 @@ func (ec *executionContext) fieldContext_CurrentUser_isAdmin(_ context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DailyCount_date(ctx context.Context, field graphql.CollectedField, obj *DailyCount) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DailyCount_date,
+		func(ctx context.Context) (any, error) {
+			return obj.Date, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DailyCount_date(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DailyCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DailyCount_count(ctx context.Context, field graphql.CollectedField, obj *DailyCount) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DailyCount_count,
+		func(ctx context.Context) (any, error) {
+			return obj.Count, nil
+		},
+		nil,
+		ec.marshalNLong2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DailyCount_count(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DailyCount",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
 		},
 	}
 	return fc, nil
@@ -11348,6 +11503,53 @@ func (ec *executionContext) fieldContext_Query_browseTopics(ctx context.Context,
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Query_browseTopics_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_archiveStats(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_archiveStats,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ArchiveStats(ctx, fc.Args["archiveGroup"].(string), fc.Args["startTime"].(*string), fc.Args["endTime"].(*string))
+		},
+		nil,
+		ec.marshalOArchiveStats2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐArchiveStats,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_archiveStats(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "minTimestamp":
+				return ec.fieldContext_ArchiveStats_minTimestamp(ctx, field)
+			case "dailyCounts":
+				return ec.fieldContext_ArchiveStats_dailyCounts(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ArchiveStats", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_archiveStats_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -22935,6 +23137,47 @@ func (ec *executionContext) _ArchiveGroupResult(ctx context.Context, sel ast.Sel
 	return out
 }
 
+var archiveStatsImplementors = []string{"ArchiveStats"}
+
+func (ec *executionContext) _ArchiveStats(ctx context.Context, sel ast.SelectionSet, obj *ArchiveStats) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, archiveStatsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ArchiveStats")
+		case "minTimestamp":
+			out.Values[i] = ec._ArchiveStats_minTimestamp(ctx, field, obj)
+		case "dailyCounts":
+			out.Values[i] = ec._ArchiveStats_dailyCounts(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var archivedMessageImplementors = []string{"ArchivedMessage"}
 
 func (ec *executionContext) _ArchivedMessage(ctx context.Context, sel ast.SelectionSet, obj *ArchivedMessage) graphql.Marshaler {
@@ -23554,6 +23797,50 @@ func (ec *executionContext) _CurrentUser(ctx context.Context, sel ast.SelectionS
 			}
 		case "isAdmin":
 			out.Values[i] = ec._CurrentUser_isAdmin(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var dailyCountImplementors = []string{"DailyCount"}
+
+func (ec *executionContext) _DailyCount(ctx context.Context, sel ast.SelectionSet, obj *DailyCount) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, dailyCountImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DailyCount")
+		case "date":
+			out.Values[i] = ec._DailyCount_date(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "count":
+			out.Values[i] = ec._DailyCount_count(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -25254,6 +25541,25 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "archiveStats":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_archiveStats(ctx, field)
 				return res
 			}
 
@@ -29138,6 +29444,32 @@ func (ec *executionContext) unmarshalNCreateUserInput2monstermqᚗioᚋedgeᚋin
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNDailyCount2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDailyCountᚄ(ctx context.Context, sel ast.SelectionSet, v []*DailyCount) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNDailyCount2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDailyCount(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNDailyCount2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDailyCount(ctx context.Context, sel ast.SelectionSet, v *DailyCount) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DailyCount(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNDataFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDataFormat(ctx context.Context, v any) (DataFormat, error) {
 	var res DataFormat
 	err := res.UnmarshalGQL(v)
@@ -30536,6 +30868,13 @@ func (ec *executionContext) marshalOArchiveGroupInfo2ᚖmonstermqᚗioᚋedgeᚋ
 		return graphql.Null
 	}
 	return ec._ArchiveGroupInfo(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOArchiveStats2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐArchiveStats(ctx context.Context, sel ast.SelectionSet, v *ArchiveStats) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ArchiveStats(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOBoolean2bool(ctx context.Context, v any) (bool, error) {

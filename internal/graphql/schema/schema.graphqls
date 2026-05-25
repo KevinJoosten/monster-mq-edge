@@ -13,7 +13,7 @@ enum AggregationFunction { AVG MIN MAX COUNT }
 enum DatabaseConnectionType { POSTGRES MONGODB }
 
 enum MessageStoreType { NONE MEMORY HAZELCAST POSTGRES CRATEDB MONGODB SQLITE }
-enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB KAFKA SQLITE }
+enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB SQLITE }
 enum PayloadFormat { DEFAULT JSON }
 
 # -----------------------------------------------------------------------------
@@ -712,6 +712,7 @@ type Query {
     ): [SystemLogEntry!]!
     searchTopics(pattern: String!, limit: Int = 100, archiveGroup: String = "Default"): [String!]!
     browseTopics(topic: String!, archiveGroup: String = "Default"): [Topic!]!
+    archiveStats(archiveGroup: String!, startTime: String, endTime: String): ArchiveStats
     brokerConfig: BrokerConfig!
     broker(nodeId: String): Broker
     brokers: [Broker!]!
@@ -755,4 +756,14 @@ type Subscription {
         sourceMethod: String
         message: String
     ): SystemLogEntry!
+}
+
+type ArchiveStats {
+    minTimestamp: String
+    dailyCounts: [DailyCount!]!
+}
+
+type DailyCount {
+    date: String!
+    count: Long!
 }

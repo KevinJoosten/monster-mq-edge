@@ -361,6 +361,61 @@ func (a *MessageArchive) GetHistory(ctx context.Context, topic string, from, to 
 	return out, rows.Err()
 }
 
+func (a *MessageArchive) GetArchiveStats(ctx context.Context, startTime, endTime *time.Time) (minTimestamp *time.Time, dailyCounts []stores.DailyCount, err error) {
+	dailyCounts = []stores.DailyCount{}
+
+	// Build WHERE clause
+	whereClause := " WHERE 1=1"
+	var args []any
+	paramIndex := 1
+	if startTime != nil {
+		whereClause += fmt.Sprintf(" AND time >= $%d", paramIndex)
+		args = append(args, startTime.UTC())
+		paramIndex++
+	}
+	if endTime != nil {
+		whereClause += fmt.Sprintf(" AND time <= $%d", paramIndex)
+		args = append(args, endTime.UTC())
+		paramIndex++
+	}
+
+	// 1. Get min timestamp
+	var minTs *time.Time
+	minQ := fmt.Sprintf("SELECT MIN(time) FROM %s%s", a.tableName(), whereClause)
+	err = a.db.pool.QueryRow(ctx, minQ, args...).Scan(&minTs)
+	if err != nil {
+		return nil, nil, err
+	}
+	minTimestamp = minTs
+
+	// 2. Get daily counts
+	countsQ := fmt.Sprintf(`
+		SELECT DATE_TRUNC('day', time) AS day, COUNT(*) AS count
+		FROM %s%s
+		GROUP BY 1
+		ORDER BY 1 ASC
+	`, a.tableName(), whereClause)
+
+	rows, err := a.db.pool.Query(ctx, countsQ, args...)
+	if err != nil {
+		return minTimestamp, dailyCounts, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var dayTs time.Time
+		var count int64
+		if err := rows.Scan(&dayTs, &count); err != nil {
+			return minTimestamp, dailyCounts, err
+		}
+		dailyCounts = append(dailyCounts, stores.DailyCount{
+			Date:  dayTs.Format("2006-01-02"),
+			Count: count,
+		})
+	}
+	return minTimestamp, dailyCounts, rows.Err()
+}
+
 func (a *MessageArchive) PurgeOlderThan(ctx context.Context, t time.Time) (stores.PurgeResult, error) {
 	res, err := a.db.pool.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE time < $1`, a.tableName()), t.UTC())
 	if err != nil {

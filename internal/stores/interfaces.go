@@ -18,11 +18,17 @@ type MessageStore interface {
 	Close() error
 }
 
+type DailyCount struct {
+	Date  string `json:"date"`
+	Count int64  `json:"count"`
+}
+
 type MessageArchive interface {
 	Name() string
 	Type() MessageArchiveType
 	AddHistory(ctx context.Context, msgs []BrokerMessage) error
 	GetHistory(ctx context.Context, topic string, from, to *time.Time, limit int) ([]ArchivedMessage, error)
+	GetArchiveStats(ctx context.Context, startTime, endTime *time.Time) (minTimestamp *time.Time, dailyCounts []DailyCount, err error)
 	PurgeOlderThan(ctx context.Context, t time.Time) (PurgeResult, error)
 	EnsureTable(ctx context.Context) error
 	Close() error

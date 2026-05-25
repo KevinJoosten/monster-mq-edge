@@ -958,6 +958,58 @@ func (r *queryResolver) BrowseTopics(ctx context.Context, topic string, archiveG
 	return out, nil
 }
 
+func (r *queryResolver) ArchiveStats(ctx context.Context, archiveGroup string, startTime *string, endTime *string) (*generated.ArchiveStats, error) {
+	arc := r.archive(&archiveGroup)
+	if arc == nil {
+		return &generated.ArchiveStats{
+			MinTimestamp: nil,
+			DailyCounts:  []*generated.DailyCount{},
+		}, nil
+	}
+
+	var startVal *time.Time
+	if startTime != nil && *startTime != "" {
+		t, err := time.Parse(time.RFC3339, *startTime)
+		if err != nil {
+			return nil, err
+		}
+		startVal = &t
+	}
+
+	var endVal *time.Time
+	if endTime != nil && *endTime != "" {
+		t, err := time.Parse(time.RFC3339, *endTime)
+		if err != nil {
+			return nil, err
+		}
+		endVal = &t
+	}
+
+	minTs, dailyCounts, err := arc.GetArchiveStats(ctx, startVal, endVal)
+	if err != nil {
+		return nil, err
+	}
+
+	var minTsStr *string
+	if minTs != nil {
+		s := minTs.Format(time.RFC3339Nano)
+		minTsStr = &s
+	}
+
+	gqlCounts := make([]*generated.DailyCount, 0, len(dailyCounts))
+	for _, c := range dailyCounts {
+		gqlCounts = append(gqlCounts, &generated.DailyCount{
+			Date:  c.Date,
+			Count: c.Count,
+		})
+	}
+
+	return &generated.ArchiveStats{
+		MinTimestamp: minTsStr,
+		DailyCounts:  gqlCounts,
+	}, nil
+}
+
 func (r *queryResolver) ArchiveGroups(ctx context.Context, enabled *bool, lastValTypeEquals, lastValTypeNotEquals *generated.MessageStoreType) ([]*generated.ArchiveGroupInfo, error) {
 	configs, err := r.Storage.ArchiveConfig.GetAll(ctx)
 	if err != nil {

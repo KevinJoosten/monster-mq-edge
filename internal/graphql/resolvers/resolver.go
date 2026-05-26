@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/packets"
+
 	"monstermq.io/edge/internal/archive"
 	"monstermq.io/edge/internal/auth"
 	"monstermq.io/edge/internal/bridge/mqttclient"
@@ -40,6 +43,7 @@ type Resolver struct {
 	Logger    *slog.Logger
 	NodeID    string
 	Version   string
+	Mochi     *mqtt.Server
 
 	// Publish injects a message into the local broker (used by the publish mutation).
 	Publish func(topic string, payload []byte, retain bool, qos byte) error
@@ -49,6 +53,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 	bridges *mqttclient.Manager, winCCUa *winccua.Manager, winCCOa *winccoa.Manager,
 	authCache *auth.Cache, collector *metrics.Collector,
 	logBus *mlog.Bus, logger *slog.Logger,
+	mochi *mqtt.Server,
 	publish func(string, []byte, bool, byte) error) *Resolver {
 	return &Resolver{
 		Cfg:       cfg,
@@ -64,6 +69,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 		Logger:    logger,
 		NodeID:    cfg.NodeID,
 		Version:   version.Version,
+		Mochi:     mochi,
 		Publish:   publish,
 	}
 }
@@ -1513,8 +1519,32 @@ func (r *brokerResolver) Sessions(ctx context.Context, _ *generated.Broker, clea
 	return q.Sessions(ctx, nil, cleanSession, connected)
 }
 
-func (r *sessionResolver) Metrics(ctx context.Context, _ *generated.Session) ([]*generated.SessionMetrics, error) {
-	return []*generated.SessionMetrics{{Timestamp: nowISO()}}, nil
+func (r *sessionResolver) Metrics(ctx context.Context, obj *generated.Session) ([]*generated.SessionMetrics, error) {
+	sndCount := 0
+	rcvCount := 0
+
+	if r.Mochi != nil {
+		if cl, ok := r.Mochi.Clients.Get(obj.ClientID); ok && cl != nil {
+			if cl.State.Inflight != nil {
+				pks := cl.State.Inflight.GetAll(false)
+				for _, pk := range pks {
+					switch pk.FixedHeader.Type {
+					case packets.Publish, packets.Pubrel:
+						sndCount++
+					case packets.Pubrec:
+						rcvCount++
+					}
+				}
+			}
+		}
+	}
+
+	return []*generated.SessionMetrics{{
+		Timestamp:           nowISO(),
+		Connected:           &obj.Connected,
+		InFlightMessagesSnd: &sndCount,
+		InFlightMessagesRcv: &rcvCount,
+	}}, nil
 }
 func (r *sessionResolver) MetricsHistory(ctx context.Context, _ *generated.Session, from, to *string, lastMinutes *int) ([]*generated.SessionMetrics, error) {
 	return []*generated.SessionMetrics{}, nil

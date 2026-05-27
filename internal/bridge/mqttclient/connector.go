@@ -3,8 +3,10 @@ package mqttclient
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -46,6 +48,10 @@ type Config struct {
 	BufferSize           int       `json:"bufferSize,omitempty"`
 	PersistBuffer        bool      `json:"persistBuffer,omitempty"`
 	DeleteOldestMessages bool      `json:"deleteOldestMessages,omitempty"`
+	SslVerifyCertificate *bool     `json:"sslVerifyCertificate,omitempty"`
+	CaFile               string    `json:"caFile,omitempty"`
+	ClientCertFile       string    `json:"clientCertFile,omitempty"`
+	ClientKeyFile        string    `json:"clientKeyFile,omitempty"`
 }
 
 // LocalPublisher is implemented by mochi-mqtt's *Server (Publish).
@@ -178,7 +184,11 @@ func (c *Connector) Start(ctx context.Context) error {
 		c.logger.Info("bridge message buffering enabled", "name", c.name, "type", "PAHO", "persisted", c.cfg.PersistBuffer, "size", c.bufferSize())
 	}
 	if strings.HasPrefix(c.cfg.BrokerURL, "ssl://") || strings.HasPrefix(c.cfg.BrokerURL, "tls://") || strings.HasPrefix(c.cfg.BrokerURL, "wss://") {
-		opts.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})
+		tlsCfg, err := c.buildTLSConfig()
+		if err != nil {
+			return fmt.Errorf("bridge %s tls config: %w", c.name, err)
+		}
+		opts.SetTLSConfig(tlsCfg)
 	}
 
 	opts.SetOnConnectHandler(func(client paho.Client) {
@@ -686,6 +696,40 @@ func joinTopic(prefix, suffix string) string {
 
 func hasWildcard(pattern string) bool {
 	return strings.ContainsAny(pattern, "+#")
+}
+
+// buildTLSConfig creates a *tls.Config from the bridge's Config fields.
+func (c *Connector) buildTLSConfig() (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12}
+
+	// InsecureSkipVerify — default true (verify), nil treated as true.
+	if c.cfg.SslVerifyCertificate != nil && !*c.cfg.SslVerifyCertificate {
+		cfg.InsecureSkipVerify = true
+	}
+
+	// Custom CA bundle.
+	if c.cfg.CaFile != "" {
+		pem, err := os.ReadFile(c.cfg.CaFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA file %s: %w", c.cfg.CaFile, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("no valid certificates in CA file %s", c.cfg.CaFile)
+		}
+		cfg.RootCAs = pool
+	}
+
+	// Client certificate (mTLS to remote broker).
+	if c.cfg.ClientCertFile != "" && c.cfg.ClientKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(c.cfg.ClientCertFile, c.cfg.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load client cert: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return cfg, nil
 }
 
 // literalPrefix returns the longest literal prefix of an MQTT topic pattern —

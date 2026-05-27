@@ -114,11 +114,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "Enabled":          { "type": "boolean" },
-        "Address":          { "type": "string", "description": "Bind address. Defaults to 0.0.0.0 (IPv4). Use '::' for IPv6 dual-stack." },
-        "Port":             { "type": "integer", "minimum": 1, "maximum": 65535 },
-        "KeyStorePath":     { "type": "string", "description": "PKCS#12/JKS keystore path (TLS listeners only)." },
-        "KeyStorePassword": { "type": "string", "description": "Password for the keystore (TLS listeners only)." }
+        "Enabled":           { "type": "boolean" },
+        "Address":           { "type": "string", "description": "Bind address. Defaults to 0.0.0.0 (IPv4). Use '::' for IPv6 dual-stack." },
+        "Port":              { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "KeyStorePath":      { "type": "string", "description": "PEM cert:key path (TLS listeners only). Use 'cert.pem:key.pem' format." },
+        "KeyStorePassword":  { "type": "string", "description": "Password for the keystore (reserved for future PKCS12 support)." },
+        "CaFilePath":        { "type": "string", "description": "PEM CA certificate file for verifying client certs (mTLS)." },
+        "RequireClientCert": { "type": "boolean", "description": "When true, require and verify client certificates (mTLS). Needs CaFilePath.", "default": false }
       }
     },
     "StoreBackend": {

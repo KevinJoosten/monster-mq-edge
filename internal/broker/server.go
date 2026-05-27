@@ -172,7 +172,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		logger.Info("mqtt listener", "type", "ws", "port", cfg.WS.Port)
 	}
 	if cfg.TCPS.Enabled {
-		tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword)
+		tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword, cfg.TCPS.CaFilePath, cfg.TCPS.RequireClientCert)
 		if err != nil {
 			return nil, fmt.Errorf("tls config: %w", err)
 		}
@@ -183,7 +183,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		logger.Info("mqtt listener", "type", "tcps", "port", cfg.TCPS.Port)
 	}
 	if cfg.WSS.Enabled {
-		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword)
+		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword, cfg.WSS.CaFilePath, cfg.WSS.RequireClientCert)
 		if err != nil {
 			return nil, fmt.Errorf("wss tls config: %w", err)
 		}

@@ -44,11 +44,13 @@ func (s StoreType) isValidVolatileBackend() bool {
 }
 
 type Listener struct {
-	Enabled          bool   `yaml:"Enabled"`
-	Address          string `yaml:"Address,omitempty"`
-	Port             int    `yaml:"Port"`
-	KeyStorePath     string `yaml:"KeyStorePath,omitempty"`
-	KeyStorePassword string `yaml:"KeyStorePassword,omitempty"`
+	Enabled            bool   `yaml:"Enabled"`
+	Address            string `yaml:"Address,omitempty"`
+	Port               int    `yaml:"Port"`
+	KeyStorePath       string `yaml:"KeyStorePath,omitempty"`
+	KeyStorePassword   string `yaml:"KeyStorePassword,omitempty"`
+	CaFilePath         string `yaml:"CaFilePath,omitempty"`
+	RequireClientCert  bool   `yaml:"RequireClientCert,omitempty"`
 }
 
 // ListenAddress returns the address to bind, defaulting to 0.0.0.0 when unset.

@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"fmt"
 	"os"
-	"strings"
 )
 
 // loadTLS reads a PEM bundle from path. The file may contain either:
@@ -19,14 +18,7 @@ func loadTLS(path, _ string, caFile string, requireClient bool) (*tls.Config, er
 	if path == "" {
 		return nil, fmt.Errorf("KeyStorePath is empty")
 	}
-	var certPath, keyPath string
-	if i := strings.Index(path, ":"); i > 0 {
-		certPath = path[:i]
-		keyPath = path[i+1:]
-	} else {
-		certPath = path
-		keyPath = path
-	}
+	certPath, keyPath := splitCertKeyPath(path)
 	if _, err := os.Stat(certPath); err != nil {
 		return nil, fmt.Errorf("cert %s: %w", certPath, err)
 	}
@@ -52,4 +44,20 @@ func loadTLS(path, _ string, caFile string, requireClient bool) (*tls.Config, er
 	}
 
 	return cfg, nil
+}
+
+// splitCertKeyPath splits "cert.pem:key.pem" into two paths, handling
+// Windows drive letters (e.g. "C:\a\cert.pem:C:\b\key.pem") correctly.
+func splitCertKeyPath(path string) (string, string) {
+	for i := 1; i < len(path); i++ {
+		if path[i] != ':' {
+			continue
+		}
+		// A drive-letter colon is [alpha]:[\\/] — skip it.
+		if path[i-1] >= 'A' && path[i-1] <= 'z' && i+1 < len(path) && (path[i+1] == '\\' || path[i+1] == '/') {
+			continue
+		}
+		return path[:i], path[i+1:]
+	}
+	return path, path
 }

@@ -13,6 +13,7 @@ require (
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.mongodb.org/mongo-driver/v2 v2.5.1
+	go.mozilla.org/pkcs7 v0.9.0
 	golang.org/x/crypto v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.49.1

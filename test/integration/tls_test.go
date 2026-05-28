@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"math/big"
 	"net"
@@ -120,6 +121,7 @@ func newTestPKI(t *testing.T, dir string) *testPKI {
 	}
 
 	writePEM(pki.CACertPath, "CERTIFICATE", caDER)
+	writeKey(filepath.Join(dir, "ca-key.pem"), caKey)
 	writePEM(pki.ServerCertPath, "CERTIFICATE", srvDER)
 	writeKey(pki.ServerKeyPath, srvKey)
 	writePEM(pki.ClientCertPath, "CERTIFICATE", cliDER)
@@ -614,4 +616,301 @@ func TestBridgeMTLSClientCert(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bridge with client cert did not deliver")
 	}
+}
+
+// TestTLSCertHotReload verifies that the broker picks up rotated certificates
+// without restart. A new server cert is written to the same path, and the next
+// TLS connection receives the updated certificate.
+func TestTLSCertHotReload(t *testing.T) {
+	dir := t.TempDir()
+	pki := newTestPKI(t, dir)
+
+	cfg := config.Default()
+	cfg.NodeID = "tls-hotreload"
+	cfg.TCP.Enabled = false
+	cfg.TCPS.Enabled = true
+	cfg.TCPS.Port = 25895
+	cfg.TCPS.KeyStorePath = pki.ServerCertPath + ":" + pki.ServerKeyPath
+	cfg.WS.Enabled = false
+	cfg.GraphQL.Enabled = false
+	cfg.Metrics.Enabled = false
+	cfg.SQLite.Path = filepath.Join(dir, "test.db")
+
+	srv, err := broker.New(cfg, slog.New(slog.DiscardHandler), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve() }()
+	defer srv.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	// 1. Connect and capture the initial server cert serial number.
+	serial1 := getTLSPeerSerial(t, 25895, pki.CACertPool)
+
+	// 2. Generate a new server cert (same CA) and overwrite the files.
+	//    Sleep to ensure filesystem mtime differs (1s resolution on some FS).
+	time.Sleep(1100 * time.Millisecond)
+	newSerial := rotateServerCert(t, pki)
+
+	// 3. Connect again — the broker should serve the new cert.
+	//    Retry briefly in case the stat check races with our write.
+	var serial2 *big.Int
+	for i := 0; i < 5; i++ {
+		serial2 = getTLSPeerSerial(t, 25895, pki.CACertPool)
+		if serial2.Cmp(serial1) != 0 {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+
+	if serial2.Cmp(serial1) == 0 {
+		t.Fatal("server cert was not reloaded: serial unchanged after rotation")
+	}
+	if serial2.Cmp(newSerial) != 0 {
+		t.Fatalf("unexpected serial: got %v, want %v", serial2, newSerial)
+	}
+}
+
+// TestTLSCAHotReload verifies that a rotated CA file is picked up so new
+// client certs signed by the new CA are accepted without broker restart.
+func TestTLSCAHotReload(t *testing.T) {
+	dir := t.TempDir()
+	pki := newTestPKI(t, dir)
+
+	cfg := config.Default()
+	cfg.NodeID = "ca-hotreload"
+	cfg.TCP.Enabled = false
+	cfg.TCPS.Enabled = true
+	cfg.TCPS.Port = 25896
+	cfg.TCPS.KeyStorePath = pki.ServerCertPath + ":" + pki.ServerKeyPath
+	cfg.TCPS.CaFilePath = pki.CACertPath
+	cfg.TCPS.RequireClientCert = true
+	cfg.WS.Enabled = false
+	cfg.GraphQL.Enabled = false
+	cfg.Metrics.Enabled = false
+	cfg.SQLite.Path = filepath.Join(dir, "test.db")
+
+	srv, err := broker.New(cfg, slog.New(slog.DiscardHandler), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve() }()
+	defer srv.Close()
+	time.Sleep(200 * time.Millisecond)
+
+	// 1. Connect with original client cert — should work.
+	connectMTLS(t, 25896, pki.CACertPool, pki.ClientCertPath, pki.ClientKeyPath)
+
+	// 2. Generate a second CA + client cert, append new CA to the CA file.
+	time.Sleep(1100 * time.Millisecond)
+	newClientCert, newClientKey, newCAPool := rotateCA(t, pki)
+
+	// 3. Connect with the new client cert — broker should accept it after
+	//    reloading the CA file that now contains both CAs.
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		lastErr = tryConnectMTLS(25896, newCAPool, newClientCert, newClientKey)
+		if lastErr == nil {
+			break
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("new client cert rejected after CA rotation: %v", lastErr)
+	}
+}
+
+// --- helpers for hot-reload tests ---
+
+func getTLSPeerSerial(t *testing.T, port int, rootCAs *x509.CertPool) *big.Int {
+	t.Helper()
+	conn, err := tls.Dial("tcp", fmt.Sprintf("localhost:%d", port), &tls.Config{
+		RootCAs:    rootCAs,
+		MinVersion: tls.VersionTLS12,
+	})
+	if err != nil {
+		t.Fatalf("TLS dial failed: %v", err)
+	}
+	defer conn.Close()
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		t.Fatal("no peer certificates")
+	}
+	return state.PeerCertificates[0].SerialNumber
+}
+
+// rotateServerCert generates a new server cert signed by the same CA and
+// overwrites the PEM files. Returns the new cert's serial number.
+func rotateServerCert(t *testing.T, pki *testPKI) *big.Int {
+	t.Helper()
+
+	// Read back the CA cert+key to sign the new server cert.
+	caCert, caKey := loadCAForSigning(t, pki.CACertPath, findCAKeyPath(pki.CACertPath))
+
+	newSerial := big.NewInt(99)
+	srvKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srvTemplate := &x509.Certificate{
+		SerialNumber: newSerial,
+		Subject:      pkix.Name{CommonName: "localhost-rotated"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+		DNSNames:     []string{"localhost"},
+	}
+	srvDER, err := x509.CreateCertificate(rand.Reader, srvTemplate, caCert, &srvKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	writePEMFile(t, pki.ServerCertPath, "CERTIFICATE", srvDER)
+	keyDER, _ := x509.MarshalECPrivateKey(srvKey)
+	writePEMFile(t, pki.ServerKeyPath, "EC PRIVATE KEY", keyDER)
+
+	return newSerial
+}
+
+// rotateCA generates a new CA, issues a client cert from it, and appends the
+// new CA cert to the existing CA file. Returns paths to new client cert/key
+// and a pool trusting both CAs (for the client to verify the server).
+func rotateCA(t *testing.T, pki *testPKI) (certPath, keyPath string, pool *x509.CertPool) {
+	t.Helper()
+	dir := filepath.Dir(pki.CACertPath)
+
+	// New CA
+	caKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate2 := &x509.Certificate{
+		SerialNumber:          big.NewInt(100),
+		Subject:               pkix.Name{CommonName: "Test CA 2"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER2, err := x509.CreateCertificate(rand.Reader, caTemplate2, caTemplate2, &caKey2.PublicKey, caKey2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert2, _ := x509.ParseCertificate(caDER2)
+
+	// New client cert signed by CA2
+	cliKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cliTemplate2 := &x509.Certificate{
+		SerialNumber: big.NewInt(101),
+		Subject:      pkix.Name{CommonName: "new-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	cliDER2, err := x509.CreateCertificate(rand.Reader, cliTemplate2, caCert2, &cliKey2.PublicKey, caKey2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certPath = filepath.Join(dir, "client2-cert.pem")
+	keyPath = filepath.Join(dir, "client2-key.pem")
+	writePEMFile(t, certPath, "CERTIFICATE", cliDER2)
+	keyDER, _ := x509.MarshalECPrivateKey(cliKey2)
+	writePEMFile(t, keyPath, "EC PRIVATE KEY", keyDER)
+
+	// Append new CA to existing CA file (broker trusts both).
+	f, err := os.OpenFile(pki.CACertPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pem.Encode(f, &pem.Block{Type: "CERTIFICATE", Bytes: caDER2}); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Client needs to trust the original CA (server cert is signed by CA1).
+	pool = x509.NewCertPool()
+	pool.AddCert(caCert2) // not needed for server verify, but consistent
+	// Read original CA for the pool so client trusts the server cert.
+	origCA, _ := os.ReadFile(pki.CACertPath)
+	pool.AppendCertsFromPEM(origCA)
+
+	return certPath, keyPath, pool
+}
+
+func connectMTLS(t *testing.T, port int, rootCAs *x509.CertPool, certFile, keyFile string) {
+	t.Helper()
+	if err := tryConnectMTLS(port, rootCAs, certFile, keyFile); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func tryConnectMTLS(port int, rootCAs *x509.CertPool, certFile, keyFile string) error {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return err
+	}
+	opts := mqtt.NewClientOptions()
+	opts.AddBroker(fmt.Sprintf("ssl://localhost:%d", port))
+	opts.SetClientID(fmt.Sprintf("mtls-client-%d", time.Now().UnixNano()))
+	opts.SetConnectTimeout(3 * time.Second)
+	opts.SetTLSConfig(&tls.Config{
+		RootCAs:      rootCAs,
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12,
+	})
+	c := mqtt.NewClient(opts)
+	tok := c.Connect()
+	if !tok.WaitTimeout(3 * time.Second) {
+		return fmt.Errorf("connect timeout")
+	}
+	if tok.Error() != nil {
+		return tok.Error()
+	}
+	c.Disconnect(100)
+	return nil
+}
+
+func writePEMFile(t *testing.T, path, typ string, der []byte) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := pem.Encode(f, &pem.Block{Type: typ, Bytes: der}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func loadCAForSigning(t *testing.T, certPath, keyPath string) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(certPEM)
+	caCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kBlock, _ := pem.Decode(keyPEM)
+	caKey, err := x509.ParseECPrivateKey(kBlock.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return caCert, caKey
+}
+
+// findCAKeyPath derives the CA key path from the CA cert path. The testPKI
+// struct doesn't store it separately but newTestPKI always writes the key
+// alongside. We store it explicitly here.
+func findCAKeyPath(caCertPath string) string {
+	dir := filepath.Dir(caCertPath)
+	return filepath.Join(dir, "ca-key.pem")
 }

@@ -44,6 +44,8 @@ type Server struct {
 	winCCUa     *winccua.Manager
 	winCCOa     *winccoa.Manager
 	gqlSrv      *gql.Server
+	renewal     *renewalAgent
+	provision   *provisionAgent
 	metricsCtx  context.Context
 	metricsStop context.CancelFunc
 }
@@ -172,7 +174,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		logger.Info("mqtt listener", "type", "ws", "port", cfg.WS.Port)
 	}
 	if cfg.TCPS.Enabled {
-		tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword, cfg.TCPS.CaFilePath, cfg.TCPS.RequireClientCert)
+		tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword, cfg.TCPS.CaFilePath, cfg.TCPS.RequireClientCert, logger)
 		if err != nil {
 			return nil, fmt.Errorf("tls config: %w", err)
 		}
@@ -183,7 +185,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		logger.Info("mqtt listener", "type", "tcps", "port", cfg.TCPS.Port)
 	}
 	if cfg.WSS.Enabled {
-		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword, cfg.WSS.CaFilePath, cfg.WSS.RequireClientCert)
+		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword, cfg.WSS.CaFilePath, cfg.WSS.RequireClientCert, logger)
 		if err != nil {
 			return nil, fmt.Errorf("wss tls config: %w", err)
 		}
@@ -356,10 +358,33 @@ func (s *Server) Serve() error {
 			}
 		}()
 	}
+	if s.cfg.CertRenewal.Enabled {
+		publish := func(topic string, payload []byte, retain bool, qos byte) error {
+			return s.mochi.Publish(topic, payload, retain, qos)
+		}
+		s.renewal = startRenewalAgent(context.Background(), s.cfg, publish, s.logger)
+	}
+	if s.cfg.Provision.Enabled {
+		publish := func(topic string, payload []byte, retain bool, qos byte) error {
+			return s.mochi.Publish(topic, payload, retain, qos)
+		}
+		pa, err := startProvisionAgent(context.Background(), s.cfg, publish, s.logger)
+		if err != nil {
+			s.logger.Error("provision agent failed to start", "err", err)
+		} else {
+			s.provision = pa
+		}
+	}
 	return s.mochi.Serve()
 }
 
 func (s *Server) Close() error {
+	if s.renewal != nil {
+		s.renewal.stop()
+	}
+	if s.provision != nil {
+		s.provision.stop()
+	}
 	if s.bridges != nil {
 		s.bridges.Stop()
 	}

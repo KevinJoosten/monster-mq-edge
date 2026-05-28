@@ -112,6 +112,20 @@ type GraphQLConfig struct {
 	Port    int  `yaml:"Port"`
 }
 
+type CertRenewalConfig struct {
+	Enabled       bool   `yaml:"Enabled"`
+	ESTURL        string `yaml:"EstUrl"`
+	CheckInterval string `yaml:"CheckInterval"`
+	CertPath      string `yaml:"CertPath"`
+	KeyPath       string `yaml:"KeyPath"`
+}
+
+type ProvisionConfig struct {
+	Enabled        bool `yaml:"Enabled"`
+	BootstrapPort  int  `yaml:"BootstrapPort"`
+	ChallengeBytes int  `yaml:"ChallengeBytes"`
+}
+
 // FeaturesConfig is a flat set of feature toggles, mirroring the Features
 // section in the Java monster-mq broker. Each field enables/disables a
 // subsystem at startup. Add new flags here as they come online.
@@ -145,6 +159,8 @@ type Config struct {
 	Logging        LoggingConfig        `yaml:"Logging"`
 	GraphQL        GraphQLConfig        `yaml:"GraphQL"`
 	Features       FeaturesConfig       `yaml:"Features"`
+	CertRenewal    CertRenewalConfig    `yaml:"CertRenewal"`
+	Provision      ProvisionConfig      `yaml:"Provision"`
 
 	// QueuedMessagesEnabled selects how messages for offline persistent (clean=false)
 	// sessions are held until the client reconnects.

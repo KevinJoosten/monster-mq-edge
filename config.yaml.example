@@ -59,3 +59,21 @@ Features:
 # retained only until broker restart.
 # false -> rely on mochi-mqtt's in-memory inflight buffer.
 QueuedMessagesEnabled: true
+
+# CertRenewal: automatic TLS certificate renewal via EST (RFC 7030).
+# When enabled, the broker monitors the cert's remaining lifetime and
+# reenrolls via the configured EST server when 2/3 of the lifetime has passed.
+# CertRenewal:
+#   Enabled: true
+#   EstUrl: https://ca.local:8443
+#   CheckInterval: 1h
+#   CertPath: ./certs/server.pem
+#   KeyPath: ./certs/server-key.pem
+
+# Provision: zero-config bootstrapping via QR code.
+# A temporary HTTP listener displays a QR code encoding a one-time challenge.
+# The provisioning CA presents the challenge to receive its CSR signed.
+# Provision:
+#   Enabled: true
+#   BootstrapPort: 9443
+#   ChallengeBytes: 32

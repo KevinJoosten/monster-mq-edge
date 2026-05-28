@@ -107,6 +107,28 @@
       "type": "boolean",
       "description": "true: store messages for offline persistent (clean=false) sessions in the QueueStore so they survive broker restart. false: rely on mochi-mqtt's in-memory inflight buffer (lost on restart).",
       "default": true
+    },
+    "CertRenewal": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Automatic TLS certificate renewal via EST (RFC 7030).",
+      "properties": {
+        "Enabled":       { "type": "boolean", "description": "Enable the certificate renewal agent.", "default": false },
+        "EstUrl":        { "type": "string", "format": "uri", "description": "Base URL of the EST server (e.g. https://ca.local:8443)." },
+        "CheckInterval": { "type": "string", "description": "How often to check cert expiry (Go duration, e.g. '1h', '15m').", "default": "1h" },
+        "CertPath":      { "type": "string", "description": "Path to the TLS certificate PEM file to manage." },
+        "KeyPath":       { "type": "string", "description": "Path to the TLS private key PEM file to manage." }
+      }
+    },
+    "Provision": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Zero-config provisioning via QR code + CA push.",
+      "properties": {
+        "Enabled":        { "type": "boolean", "description": "Enable the provisioning endpoint.", "default": false },
+        "BootstrapPort":  { "type": "integer", "minimum": 1, "maximum": 65535, "description": "HTTP port for the bootstrap/provisioning listener.", "default": 9443 },
+        "ChallengeBytes": { "type": "integer", "minimum": 8, "maximum": 64, "description": "Number of random bytes in the bootstrap challenge token.", "default": 32 }
+      }
     }
   },
   "$defs": {

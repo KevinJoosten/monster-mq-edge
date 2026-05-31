@@ -492,10 +492,18 @@ type SessionMutations struct {
 	RemoveSessions *SessionRemovalResult `json:"removeSessions"`
 }
 
+type SessionRemovalDetail struct {
+	ClientID string  `json:"clientId"`
+	Success  bool    `json:"success"`
+	Error    *string `json:"error,omitempty"`
+	NodeID   *string `json:"nodeId,omitempty"`
+}
+
 type SessionRemovalResult struct {
-	Success      bool    `json:"success"`
-	Message      *string `json:"message,omitempty"`
-	RemovedCount int     `json:"removedCount"`
+	Success      bool                    `json:"success"`
+	Message      *string                 `json:"message,omitempty"`
+	RemovedCount int                     `json:"removedCount"`
+	Results      []*SessionRemovalDetail `json:"results"`
 }
 
 type SetPasswordInput struct {

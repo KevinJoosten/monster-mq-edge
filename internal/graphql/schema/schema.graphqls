@@ -124,7 +124,7 @@ type Broker {
     enabledFeatures: [String!]!
     metrics: [BrokerMetrics!]!
     metricsHistory(from: String, to: String, lastMinutes: Int): [BrokerMetrics!]!
-    sessions(cleanSession: Boolean, connected: Boolean): [Session!]!
+    sessions(cleanSession: Boolean, connected: Boolean, clientId: String): [Session!]!
 }
 
 type Session {
@@ -582,6 +582,14 @@ type SessionRemovalResult {
     success: Boolean!
     message: String
     removedCount: Int!
+    results: [SessionRemovalDetail!]!
+}
+
+type SessionRemovalDetail {
+    clientId: String!
+    success: Boolean!
+    error: String
+    nodeId: String
 }
 
 # -----------------------------------------------------------------------------
@@ -716,7 +724,7 @@ type Query {
     brokerConfig: BrokerConfig!
     broker(nodeId: String): Broker
     brokers: [Broker!]!
-    sessions(nodeId: String, cleanSession: Boolean, connected: Boolean): [Session!]!
+    sessions(nodeId: String, cleanSession: Boolean, connected: Boolean, clientId: String): [Session!]!
     session(clientId: String!, nodeId: String): Session
     users(username: String): [UserInfo!]!
     archiveGroups(

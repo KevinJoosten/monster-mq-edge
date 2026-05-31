@@ -69,7 +69,7 @@ type ArchiveGroupMutationsResolver interface {
 type BrokerResolver interface {
 	Metrics(ctx context.Context, obj *Broker) ([]*BrokerMetrics, error)
 	MetricsHistory(ctx context.Context, obj *Broker, from *string, to *string, lastMinutes *int) ([]*BrokerMetrics, error)
-	Sessions(ctx context.Context, obj *Broker, cleanSession *bool, connected *bool) ([]*Session, error)
+	Sessions(ctx context.Context, obj *Broker, cleanSession *bool, connected *bool, clientID *string) ([]*Session, error)
 }
 type MqttClientResolver interface {
 	Metrics(ctx context.Context, obj *MqttClient) ([]*MqttClientMetrics, error)
@@ -115,7 +115,7 @@ type QueryResolver interface {
 	BrokerConfig(ctx context.Context) (*BrokerConfig, error)
 	Broker(ctx context.Context, nodeID *string) (*Broker, error)
 	Brokers(ctx context.Context) ([]*Broker, error)
-	Sessions(ctx context.Context, nodeID *string, cleanSession *bool, connected *bool) ([]*Session, error)
+	Sessions(ctx context.Context, nodeID *string, cleanSession *bool, connected *bool, clientID *string) ([]*Session, error)
 	Session(ctx context.Context, clientID string, nodeID *string) (*Session, error)
 	Users(ctx context.Context, username *string) ([]*UserInfo, error)
 	ArchiveGroups(ctx context.Context, enabled *bool, lastValTypeEquals *MessageStoreType, lastValTypeNotEquals *MessageStoreType) ([]*ArchiveGroupInfo, error)
@@ -452,7 +452,7 @@ type Broker {
     enabledFeatures: [String!]!
     metrics: [BrokerMetrics!]!
     metricsHistory(from: String, to: String, lastMinutes: Int): [BrokerMetrics!]!
-    sessions(cleanSession: Boolean, connected: Boolean): [Session!]!
+    sessions(cleanSession: Boolean, connected: Boolean, clientId: String): [Session!]!
 }
 
 type Session {
@@ -910,6 +910,14 @@ type SessionRemovalResult {
     success: Boolean!
     message: String
     removedCount: Int!
+    results: [SessionRemovalDetail!]!
+}
+
+type SessionRemovalDetail {
+    clientId: String!
+    success: Boolean!
+    error: String
+    nodeId: String
 }
 
 # -----------------------------------------------------------------------------
@@ -1044,7 +1052,7 @@ type Query {
     brokerConfig: BrokerConfig!
     broker(nodeId: String): Broker
     brokers: [Broker!]!
-    sessions(nodeId: String, cleanSession: Boolean, connected: Boolean): [Session!]!
+    sessions(nodeId: String, cleanSession: Boolean, connected: Boolean, clientId: String): [Session!]!
     session(clientId: String!, nodeId: String): Session
     users(username: String): [UserInfo!]!
     archiveGroups(
@@ -1506,6 +1514,11 @@ func (ec *executionContext) field_Broker_sessions_args(ctx context.Context, rawA
 		return nil, err
 	}
 	args["connected"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "clientId", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["clientId"] = arg2
 	return args, nil
 }
 
@@ -2107,6 +2120,11 @@ func (ec *executionContext) field_Query_sessions_args(ctx context.Context, rawAr
 		return nil, err
 	}
 	args["connected"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "clientId", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["clientId"] = arg3
 	return args, nil
 }
 
@@ -5143,7 +5161,7 @@ func (ec *executionContext) _Broker_sessions(ctx context.Context, field graphql.
 		ec.fieldContext_Broker_sessions,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Broker().Sessions(ctx, obj, fc.Args["cleanSession"].(*bool), fc.Args["connected"].(*bool))
+			return ec.Resolvers.Broker().Sessions(ctx, obj, fc.Args["cleanSession"].(*bool), fc.Args["connected"].(*bool), fc.Args["clientId"].(*string))
 		},
 		nil,
 		ec.marshalNSession2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionᚄ,
@@ -11775,7 +11793,7 @@ func (ec *executionContext) _Query_sessions(ctx context.Context, field graphql.C
 		ec.fieldContext_Query_sessions,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().Sessions(ctx, fc.Args["nodeId"].(*string), fc.Args["cleanSession"].(*bool), fc.Args["connected"].(*bool))
+			return ec.Resolvers.Query().Sessions(ctx, fc.Args["nodeId"].(*string), fc.Args["cleanSession"].(*bool), fc.Args["connected"].(*bool), fc.Args["clientId"].(*string))
 		},
 		nil,
 		ec.marshalNSession2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionᚄ,
@@ -13670,6 +13688,8 @@ func (ec *executionContext) fieldContext_SessionMutations_removeSessions(ctx con
 				return ec.fieldContext_SessionRemovalResult_message(ctx, field)
 			case "removedCount":
 				return ec.fieldContext_SessionRemovalResult_removedCount(ctx, field)
+			case "results":
+				return ec.fieldContext_SessionRemovalResult_results(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SessionRemovalResult", field.Name)
 		},
@@ -13684,6 +13704,122 @@ func (ec *executionContext) fieldContext_SessionMutations_removeSessions(ctx con
 	if fc.Args, err = ec.field_SessionMutations_removeSessions_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SessionRemovalDetail_clientId(ctx context.Context, field graphql.CollectedField, obj *SessionRemovalDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SessionRemovalDetail_clientId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClientID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SessionRemovalDetail_clientId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SessionRemovalDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SessionRemovalDetail_success(ctx context.Context, field graphql.CollectedField, obj *SessionRemovalDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SessionRemovalDetail_success,
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SessionRemovalDetail_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SessionRemovalDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SessionRemovalDetail_error(ctx context.Context, field graphql.CollectedField, obj *SessionRemovalDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SessionRemovalDetail_error,
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SessionRemovalDetail_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SessionRemovalDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SessionRemovalDetail_nodeId(ctx context.Context, field graphql.CollectedField, obj *SessionRemovalDetail) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SessionRemovalDetail_nodeId,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_SessionRemovalDetail_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SessionRemovalDetail",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
 	}
 	return fc, nil
 }
@@ -13770,6 +13906,45 @@ func (ec *executionContext) fieldContext_SessionRemovalResult_removedCount(_ con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SessionRemovalResult_results(ctx context.Context, field graphql.CollectedField, obj *SessionRemovalResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_SessionRemovalResult_results,
+		func(ctx context.Context) (any, error) {
+			return obj.Results, nil
+		},
+		nil,
+		ec.marshalNSessionRemovalDetail2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionRemovalDetailᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_SessionRemovalResult_results(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SessionRemovalResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clientId":
+				return ec.fieldContext_SessionRemovalDetail_clientId(ctx, field)
+			case "success":
+				return ec.fieldContext_SessionRemovalDetail_success(ctx, field)
+			case "error":
+				return ec.fieldContext_SessionRemovalDetail_error(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_SessionRemovalDetail_nodeId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SessionRemovalDetail", field.Name)
 		},
 	}
 	return fc, nil
@@ -26329,6 +26504,54 @@ func (ec *executionContext) _SessionMutations(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var sessionRemovalDetailImplementors = []string{"SessionRemovalDetail"}
+
+func (ec *executionContext) _SessionRemovalDetail(ctx context.Context, sel ast.SelectionSet, obj *SessionRemovalDetail) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sessionRemovalDetailImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SessionRemovalDetail")
+		case "clientId":
+			out.Values[i] = ec._SessionRemovalDetail_clientId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "success":
+			out.Values[i] = ec._SessionRemovalDetail_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._SessionRemovalDetail_error(ctx, field, obj)
+		case "nodeId":
+			out.Values[i] = ec._SessionRemovalDetail_nodeId(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var sessionRemovalResultImplementors = []string{"SessionRemovalResult"}
 
 func (ec *executionContext) _SessionRemovalResult(ctx context.Context, sel ast.SelectionSet, obj *SessionRemovalResult) graphql.Marshaler {
@@ -26349,6 +26572,11 @@ func (ec *executionContext) _SessionRemovalResult(ctx context.Context, sel ast.S
 			out.Values[i] = ec._SessionRemovalResult_message(ctx, field, obj)
 		case "removedCount":
 			out.Values[i] = ec._SessionRemovalResult_removedCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "results":
+			out.Values[i] = ec._SessionRemovalResult_results(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -30069,6 +30297,32 @@ func (ec *executionContext) marshalNSessionMutations2ᚖmonstermqᚗioᚋedgeᚋ
 		return graphql.Null
 	}
 	return ec._SessionMutations(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNSessionRemovalDetail2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionRemovalDetailᚄ(ctx context.Context, sel ast.SelectionSet, v []*SessionRemovalDetail) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNSessionRemovalDetail2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionRemovalDetail(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNSessionRemovalDetail2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionRemovalDetail(ctx context.Context, sel ast.SelectionSet, v *SessionRemovalDetail) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._SessionRemovalDetail(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNSessionRemovalResult2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐSessionRemovalResult(ctx context.Context, sel ast.SelectionSet, v SessionRemovalResult) graphql.Marshaler {

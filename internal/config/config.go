@@ -50,6 +50,7 @@ type Listener struct {
 	KeyStorePath       string `yaml:"KeyStorePath,omitempty"`
 	KeyStorePassword   string `yaml:"KeyStorePassword,omitempty"`
 	CaFilePath         string `yaml:"CaFilePath,omitempty"`
+	CrlFilePath        string `yaml:"CrlFilePath,omitempty"`
 	RequireClientCert  bool   `yaml:"RequireClientCert,omitempty"`
 }
 
@@ -85,6 +86,22 @@ type UserManagementConfig struct {
 	AclCheckOnSubscription *bool  `yaml:"AclCheckOnSubscription,omitempty"`
 }
 
+// CertAuthConfig enables X.509 certificate-based authentication on TLS listeners.
+// When enabled, the OU (OrganizationalUnit) field of the client's peer certificate
+// is used as the ACL username, bypassing password validation.
+type CertAuthConfig struct {
+	Enabled   bool   `yaml:"Enabled"`
+	RoleField string `yaml:"RoleField,omitempty"` // default "OU"
+}
+
+// EffectiveRoleField returns the certificate subject field used as ACL username.
+func (c *CertAuthConfig) EffectiveRoleField() string {
+	if c.RoleField == "" {
+		return "OU"
+	}
+	return c.RoleField
+}
+
 // AclCheckOnSub returns the effective value: default true (subscribe-time check).
 func (u *UserManagementConfig) AclCheckOnSub() bool {
 	if u.AclCheckOnSubscription == nil {
@@ -113,17 +130,23 @@ type GraphQLConfig struct {
 }
 
 type CertRenewalConfig struct {
-	Enabled       bool   `yaml:"Enabled"`
-	ESTURL        string `yaml:"EstUrl"`
-	CheckInterval string `yaml:"CheckInterval"`
-	CertPath      string `yaml:"CertPath"`
-	KeyPath       string `yaml:"KeyPath"`
+	Enabled        bool   `yaml:"Enabled"`
+	Protocol       string `yaml:"Protocol"` // "est" (default) or "stepca"
+	ESTURL         string `yaml:"EstUrl"`
+	CAFilePath     string `yaml:"CaFilePath,omitempty"` // CA cert used to verify the renewal server; uses system roots when empty
+	CheckInterval  string `yaml:"CheckInterval"`
+	CertPath       string `yaml:"CertPath"`
+	KeyPath        string `yaml:"KeyPath"`
+	BridgeCertPath string `yaml:"BridgeCertPath"`
+	BridgeKeyPath  string `yaml:"BridgeKeyPath"`
 }
 
 type ProvisionConfig struct {
-	Enabled        bool `yaml:"Enabled"`
-	BootstrapPort  int  `yaml:"BootstrapPort"`
-	ChallengeBytes int  `yaml:"ChallengeBytes"`
+	Enabled        bool   `yaml:"Enabled"`
+	BootstrapPort  int    `yaml:"BootstrapPort"`
+	ChallengeBytes int    `yaml:"ChallengeBytes"`
+	CertPath       string `yaml:"CertPath"`
+	KeyPath        string `yaml:"KeyPath"`
 }
 
 // FeaturesConfig is a flat set of feature toggles, mirroring the Features
@@ -155,6 +178,7 @@ type Config struct {
 	MongoDB  MongoDBConfig  `yaml:"MongoDB"`
 
 	UserManagement UserManagementConfig `yaml:"UserManagement"`
+	CertAuth       CertAuthConfig       `yaml:"CertAuth"`
 	Metrics        MetricsConfig        `yaml:"Metrics"`
 	Logging        LoggingConfig        `yaml:"Logging"`
 	GraphQL        GraphQLConfig        `yaml:"GraphQL"`

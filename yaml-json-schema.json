@@ -64,6 +64,15 @@
         "AclCheckOnSubscription": { "type": "boolean", "description": "When false, wildcard subscriptions (e.g. #) are allowed and ACL is enforced at message delivery time instead. Default true." }
       }
     },
+    "CertAuth": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "X.509 certificate-based authentication. When enabled, the client's peer cert OU is used as ACL username, bypassing password validation. Requires a TLS listener with RequireClientCert: true.",
+      "properties": {
+        "Enabled":   { "type": "boolean", "description": "Enable cert-based auth on TLS listeners." },
+        "RoleField": { "type": "string", "enum": ["OU", "CN", "O"], "default": "OU", "description": "Certificate subject field to extract as ACL username." }
+      }
+    },
     "Metrics": {
       "type": "object",
       "additionalProperties": false,
@@ -142,6 +151,7 @@
         "KeyStorePath":      { "type": "string", "description": "PEM cert:key path (TLS listeners only). Use 'cert.pem:key.pem' format." },
         "KeyStorePassword":  { "type": "string", "description": "Password for the keystore (reserved for future PKCS12 support)." },
         "CaFilePath":        { "type": "string", "description": "PEM CA certificate file for verifying client certs (mTLS)." },
+        "CrlFilePath":       { "type": "string", "description": "PEM CRL file for certificate revocation checking. Hot-reloaded on file change." },
         "RequireClientCert": { "type": "boolean", "description": "When true, require and verify client certificates (mTLS). Needs CaFilePath.", "default": false }
       }
     },

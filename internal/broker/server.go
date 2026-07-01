@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
@@ -48,6 +49,7 @@ type Server struct {
 	provision   *provisionAgent
 	metricsCtx  context.Context
 	metricsStop context.CancelFunc
+	tcpsDeferred bool
 }
 
 func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, error) {
@@ -110,7 +112,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	server := mqtt.New(&mqtt.Options{InlineClient: true, Logger: logger})
 
 	if cfg.UserManagement.Enabled {
-		if err := server.AddHook(NewAuthHook(authCache), nil); err != nil {
+		if err := server.AddHook(NewAuthHook(authCache, cfg.CertAuth), nil); err != nil {
 			return nil, fmt.Errorf("add monstermq auth hook: %w", err)
 		}
 	} else {
@@ -173,19 +175,28 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		}
 		logger.Info("mqtt listener", "type", "ws", "port", cfg.WS.Port)
 	}
+	var tcpsDeferred bool
 	if cfg.TCPS.Enabled {
-		tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword, cfg.TCPS.CaFilePath, cfg.TCPS.RequireClientCert, logger)
-		if err != nil {
-			return nil, fmt.Errorf("tls config: %w", err)
+		// When provisioning is enabled and the cert doesn't exist yet, defer
+		// the TCPS listener until after enrollment delivers the certificate.
+		deferTCPS := cfg.Provision.Enabled && cfg.Provision.CertPath != "" && !fileExists(cfg.Provision.CertPath)
+		if deferTCPS {
+			logger.Info("tcps listener deferred until provisioning completes")
+			tcpsDeferred = true
+		} else {
+			tlsCfg, err := loadTLS(cfg.TCPS.KeyStorePath, cfg.TCPS.KeyStorePassword, cfg.TCPS.CaFilePath, cfg.TCPS.CrlFilePath, cfg.TCPS.RequireClientCert, logger)
+			if err != nil {
+				return nil, fmt.Errorf("tls config: %w", err)
+			}
+			l := listeners.NewTCP(listeners.Config{ID: "tcps", Address: fmt.Sprintf("%s:%d", cfg.TCPS.ListenAddress(), cfg.TCPS.Port), TLSConfig: tlsCfg})
+			if err := server.AddListener(l); err != nil {
+				return nil, fmt.Errorf("add tcps listener: %w", err)
+			}
+			logger.Info("mqtt listener", "type", "tcps", "port", cfg.TCPS.Port)
 		}
-		l := listeners.NewTCP(listeners.Config{ID: "tcps", Address: fmt.Sprintf("%s:%d", cfg.TCPS.ListenAddress(), cfg.TCPS.Port), TLSConfig: tlsCfg})
-		if err := server.AddListener(l); err != nil {
-			return nil, fmt.Errorf("add tcps listener: %w", err)
-		}
-		logger.Info("mqtt listener", "type", "tcps", "port", cfg.TCPS.Port)
 	}
 	if cfg.WSS.Enabled {
-		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword, cfg.WSS.CaFilePath, cfg.WSS.RequireClientCert, logger)
+		tlsCfg, err := loadTLS(cfg.WSS.KeyStorePath, cfg.WSS.KeyStorePassword, cfg.WSS.CaFilePath, cfg.WSS.CrlFilePath, cfg.WSS.RequireClientCert, logger)
 		if err != nil {
 			return nil, fmt.Errorf("wss tls config: %w", err)
 		}
@@ -231,6 +242,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		cfg: cfg, logger: logger, mochi: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, gqlSrv: gqlSrv,
+		tcpsDeferred: tcpsDeferred,
 	}, nil
 }
 
@@ -336,20 +348,16 @@ func (s *Server) Serve() error {
 	if s.archives != nil {
 		s.archives.RunRetention(context.Background())
 	}
-	if s.bridges != nil {
-		if err := s.bridges.Start(context.Background()); err != nil {
-			s.logger.Warn("bridges start error", "err", err)
-		}
-	}
-	if s.winCCUa != nil {
-		if err := s.winCCUa.Start(context.Background()); err != nil {
-			s.logger.Warn("winccua start error", "err", err)
-		}
-	}
-	if s.winCCOa != nil {
-		if err := s.winCCOa.Start(context.Background()); err != nil {
-			s.logger.Warn("winccoa start error", "err", err)
-		}
+
+	// Determine whether to defer outbound connections until provisioning.
+	awaitingProvision := s.cfg.Provision.Enabled &&
+		s.cfg.Provision.CertPath != "" &&
+		!fileExists(s.cfg.Provision.CertPath)
+
+	if awaitingProvision {
+		s.logger.Info("bridges deferred until provisioning completes")
+	} else {
+		s.startOutbound()
 	}
 	if s.gqlSrv != nil {
 		go func() {
@@ -368,10 +376,17 @@ func (s *Server) Serve() error {
 		publish := func(topic string, payload []byte, retain bool, qos byte) error {
 			return s.mochi.Publish(topic, payload, retain, qos)
 		}
-		pa, err := startProvisionAgent(context.Background(), s.cfg, publish, s.logger)
+		var devStore stores.DeviceConfigStore
+		if s.storage != nil {
+			devStore = s.storage.DeviceConfig
+		}
+		pa, err := startProvisionAgent(context.Background(), s.cfg, publish, devStore, s.logger)
 		if err != nil {
 			s.logger.Error("provision agent failed to start", "err", err)
 		} else {
+			if awaitingProvision {
+				pa.onProvisioned = s.startOutbound
+			}
 			s.provision = pa
 		}
 	}
@@ -423,3 +438,43 @@ func (s *Server) Bus() *pubsub.Bus                        { return s.bus }
 func (s *Server) Subscriptions() *topic.SubscriptionIndex { return s.subs }
 func (s *Server) Archives() *archive.Manager              { return s.archives }
 func (s *Server) Mochi() *mqtt.Server                     { return s.mochi }
+
+// startOutbound launches bridges and outbound connectors. Called either at
+// startup (if already provisioned) or after provisioning completes.
+func (s *Server) startOutbound() {
+	// Start deferred TCPS listener now that the cert is available.
+	if s.tcpsDeferred && s.cfg.TCPS.Enabled && fileExists(s.cfg.Provision.CertPath) {
+		tlsCfg, err := loadTLS(s.cfg.TCPS.KeyStorePath, s.cfg.TCPS.KeyStorePassword, s.cfg.TCPS.CaFilePath, s.cfg.TCPS.CrlFilePath, s.cfg.TCPS.RequireClientCert, s.logger)
+		if err != nil {
+			s.logger.Error("deferred tcps tls config failed", "err", err)
+		} else {
+			l := listeners.NewTCP(listeners.Config{ID: "tcps", Address: fmt.Sprintf("%s:%d", s.cfg.TCPS.ListenAddress(), s.cfg.TCPS.Port), TLSConfig: tlsCfg})
+			if err := s.mochi.AddListener(l); err != nil {
+				s.logger.Error("deferred tcps listener failed", "err", err)
+			} else {
+				s.mochi.Listeners.Serve("tcps", s.mochi.EstablishConnection)
+				s.logger.Info("mqtt listener started after provisioning", "type", "tcps", "port", s.cfg.TCPS.Port)
+			}
+		}
+	}
+	if s.bridges != nil {
+		if err := s.bridges.Start(context.Background()); err != nil {
+			s.logger.Warn("bridges start error", "err", err)
+		}
+	}
+	if s.winCCUa != nil {
+		if err := s.winCCUa.Start(context.Background()); err != nil {
+			s.logger.Warn("winccua start error", "err", err)
+		}
+	}
+	if s.winCCOa != nil {
+		if err := s.winCCOa.Start(context.Background()); err != nil {
+			s.logger.Warn("winccoa start error", "err", err)
+		}
+	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Size() > 0
+}

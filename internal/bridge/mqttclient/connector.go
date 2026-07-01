@@ -721,12 +721,18 @@ func (c *Connector) buildTLSConfig() (*tls.Config, error) {
 	}
 
 	// Client certificate (mTLS to remote broker).
+	// Use GetClientCertificate so the cert is re-read from disk on each
+	// TLS handshake — necessary for cert renewal to take effect without
+	// restarting the bridge.
 	if c.cfg.ClientCertFile != "" && c.cfg.ClientKeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(c.cfg.ClientCertFile, c.cfg.ClientKeyFile)
-		if err != nil {
-			return nil, fmt.Errorf("load client cert: %w", err)
+		certFile, keyFile := c.cfg.ClientCertFile, c.cfg.ClientKeyFile
+		cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, fmt.Errorf("load client cert: %w", err)
+			}
+			return &cert, nil
 		}
-		cfg.Certificates = []tls.Certificate{cert}
 	}
 
 	return cfg, nil

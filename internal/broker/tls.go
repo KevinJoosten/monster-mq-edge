@@ -3,6 +3,7 @@ package broker
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"os"
@@ -16,7 +17,7 @@ import (
 //
 // path uses "cert.pem:key.pem" format or a single combined PEM.
 // Password parameter is reserved for future PKCS12 support.
-func loadTLS(path, _ string, caFile string, requireClient bool, logger *slog.Logger) (*tls.Config, error) {
+func loadTLS(path, _ string, caFile string, crlFile string, requireClient bool, logger *slog.Logger) (*tls.Config, error) {
 	if path == "" {
 		return nil, fmt.Errorf("KeyStorePath is empty")
 	}
@@ -26,6 +27,7 @@ func loadTLS(path, _ string, caFile string, requireClient bool, logger *slog.Log
 		certPath: certPath,
 		keyPath:  keyPath,
 		caPath:   caFile,
+		crlPath:  crlFile,
 		logger:   logger,
 	}
 	if err := r.loadCert(); err != nil {
@@ -34,6 +36,11 @@ func loadTLS(path, _ string, caFile string, requireClient bool, logger *slog.Log
 	if caFile != "" {
 		if err := r.loadCA(); err != nil {
 			return nil, err
+		}
+	}
+	if crlFile != "" {
+		if err := r.loadCRL(); err != nil {
+			logger.Warn("CRL load failed, continuing without revocation", "err", err)
 		}
 	}
 
@@ -57,6 +64,7 @@ type certReloader struct {
 	certPath string
 	keyPath  string
 	caPath   string
+	crlPath  string
 	logger   *slog.Logger
 
 	mu       sync.RWMutex
@@ -64,6 +72,8 @@ type certReloader struct {
 	certTime time.Time
 	ca       *x509.CertPool
 	caTime   time.Time
+	revoked  map[string]bool // serial numbers (hex) of revoked certs
+	crlTime  time.Time
 }
 
 func (r *certReloader) loadCert() error {
@@ -118,7 +128,7 @@ func (r *certReloader) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate,
 }
 
 // GetConfigForClient is called on every TLS handshake when client auth is
-// configured. It reloads the CA pool if the file changed.
+// configured. It reloads the CA pool and CRL if the files changed.
 func (r *certReloader) GetConfigForClient(_ *tls.ClientHelloInfo) (*tls.Config, error) {
 	if r.caPath != "" && r.needsReloadCA() {
 		if err := r.loadCA(); err != nil {
@@ -127,17 +137,40 @@ func (r *certReloader) GetConfigForClient(_ *tls.ClientHelloInfo) (*tls.Config, 
 			r.logger.Info("CA hot-reloaded", "ca", r.caPath)
 		}
 	}
+	if r.crlPath != "" && r.needsReloadCRL() {
+		if err := r.loadCRL(); err != nil {
+			r.logger.Warn("CRL hot-reload failed, using cached", "err", err)
+		} else {
+			r.logger.Info("CRL hot-reloaded", "crl", r.crlPath)
+		}
+	}
 	r.mu.RLock()
 	cert := r.cert
 	ca := r.ca
+	revoked := r.revoked
 	r.mu.RUnlock()
 
-	return &tls.Config{
+	cfg := &tls.Config{
 		Certificates: []tls.Certificate{*cert},
 		ClientCAs:    ca,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		MinVersion:   tls.VersionTLS12,
-	}, nil
+	}
+	if len(revoked) > 0 {
+		cfg.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+			for _, raw := range rawCerts {
+				c, err := x509.ParseCertificate(raw)
+				if err != nil {
+					continue
+				}
+				if revoked[c.SerialNumber.Text(16)] {
+					return fmt.Errorf("certificate serial %s is revoked", c.SerialNumber.Text(16))
+				}
+			}
+			return nil
+		}
+	}
+	return cfg, nil
 }
 
 func (r *certReloader) needsReloadCert() bool {
@@ -158,6 +191,46 @@ func (r *certReloader) needsReloadCA() bool {
 	}
 	r.mu.RLock()
 	stale := !info.ModTime().Equal(r.caTime)
+	r.mu.RUnlock()
+	return stale
+}
+
+func (r *certReloader) loadCRL() error {
+	info, err := os.Stat(r.crlPath)
+	if err != nil {
+		return fmt.Errorf("CRL file %s: %w", r.crlPath, err)
+	}
+	data, err := os.ReadFile(r.crlPath)
+	if err != nil {
+		return fmt.Errorf("read CRL file %s: %w", r.crlPath, err)
+	}
+	// Support both DER and PEM-encoded CRLs.
+	if block, _ := pem.Decode(data); block != nil {
+		data = block.Bytes
+	}
+	crl, err := x509.ParseRevocationList(data)
+	if err != nil {
+		return fmt.Errorf("parse CRL %s: %w", r.crlPath, err)
+	}
+	revoked := make(map[string]bool, len(crl.RevokedCertificateEntries))
+	for _, entry := range crl.RevokedCertificateEntries {
+		revoked[entry.SerialNumber.Text(16)] = true
+	}
+	r.mu.Lock()
+	r.revoked = revoked
+	r.crlTime = info.ModTime()
+	r.mu.Unlock()
+	r.logger.Info("CRL loaded", "file", r.crlPath, "revoked", len(revoked))
+	return nil
+}
+
+func (r *certReloader) needsReloadCRL() bool {
+	info, err := os.Stat(r.crlPath)
+	if err != nil {
+		return false
+	}
+	r.mu.RLock()
+	stale := !info.ModTime().Equal(r.crlTime)
 	r.mu.RUnlock()
 	return stale
 }

@@ -6,9 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path"
 	"sort"
 	"strings"
 	"time"
+
+	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/packets"
 
 	"monstermq.io/edge/internal/archive"
 	"monstermq.io/edge/internal/auth"
@@ -40,6 +44,7 @@ type Resolver struct {
 	Logger    *slog.Logger
 	NodeID    string
 	Version   string
+	Mochi     *mqtt.Server
 
 	// Publish injects a message into the local broker (used by the publish mutation).
 	Publish func(topic string, payload []byte, retain bool, qos byte) error
@@ -49,6 +54,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 	bridges *mqttclient.Manager, winCCUa *winccua.Manager, winCCOa *winccoa.Manager,
 	authCache *auth.Cache, collector *metrics.Collector,
 	logBus *mlog.Bus, logger *slog.Logger,
+	mochi *mqtt.Server,
 	publish func(string, []byte, bool, byte) error) *Resolver {
 	return &Resolver{
 		Cfg:       cfg,
@@ -64,6 +70,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 		Logger:    logger,
 		NodeID:    cfg.NodeID,
 		Version:   version.Version,
+		Mochi:     mochi,
 		Publish:   publish,
 	}
 }
@@ -624,13 +631,29 @@ func (r *Resolver) brokerObj() *generated.Broker {
 	}
 }
 
-func (r *queryResolver) Sessions(ctx context.Context, nodeID *string, cleanSession, connected *bool) ([]*generated.Session, error) {
+func wildcardMatch(s, pattern string) bool {
+	if pattern == "" {
+		return true
+	}
+	s = strings.ToLower(s)
+	pattern = strings.ToLower(pattern)
+	if !strings.ContainsAny(pattern, "*?") {
+		return strings.Contains(s, pattern)
+	}
+	matched, err := path.Match(pattern, s)
+	return err == nil && matched
+}
+
+func (r *queryResolver) Sessions(ctx context.Context, nodeID *string, cleanSession, connected *bool, clientID *string) ([]*generated.Session, error) {
 	out := []*generated.Session{}
 	err := r.Storage.Sessions.IterateSessions(ctx, func(info stores.SessionInfo) bool {
 		if cleanSession != nil && info.CleanSession != *cleanSession {
 			return true
 		}
 		if connected != nil && info.Connected != *connected {
+			return true
+		}
+		if clientID != nil && !wildcardMatch(info.ClientID, *clientID) {
 			return true
 		}
 		out = append(out, sessionToGraphQL(info))
@@ -956,6 +979,58 @@ func (r *queryResolver) BrowseTopics(ctx context.Context, topic string, archiveG
 		out = append(out, &generated.Topic{Name: name, IsLeaf: leaves[name]})
 	}
 	return out, nil
+}
+
+func (r *queryResolver) ArchiveStats(ctx context.Context, archiveGroup string, startTime *string, endTime *string) (*generated.ArchiveStats, error) {
+	arc := r.archive(&archiveGroup)
+	if arc == nil {
+		return &generated.ArchiveStats{
+			MinTimestamp: nil,
+			DailyCounts:  []*generated.DailyCount{},
+		}, nil
+	}
+
+	var startVal *time.Time
+	if startTime != nil && *startTime != "" {
+		t, err := time.Parse(time.RFC3339, *startTime)
+		if err != nil {
+			return nil, err
+		}
+		startVal = &t
+	}
+
+	var endVal *time.Time
+	if endTime != nil && *endTime != "" {
+		t, err := time.Parse(time.RFC3339, *endTime)
+		if err != nil {
+			return nil, err
+		}
+		endVal = &t
+	}
+
+	minTs, dailyCounts, err := arc.GetArchiveStats(ctx, startVal, endVal)
+	if err != nil {
+		return nil, err
+	}
+
+	var minTsStr *string
+	if minTs != nil {
+		s := minTs.Format(time.RFC3339Nano)
+		minTsStr = &s
+	}
+
+	gqlCounts := make([]*generated.DailyCount, 0, len(dailyCounts))
+	for _, c := range dailyCounts {
+		gqlCounts = append(gqlCounts, &generated.DailyCount{
+			Date:  c.Date,
+			Count: c.Count,
+		})
+	}
+
+	return &generated.ArchiveStats{
+		MinTimestamp: minTsStr,
+		DailyCounts:  gqlCounts,
+	}, nil
 }
 
 func (r *queryResolver) ArchiveGroups(ctx context.Context, enabled *bool, lastValTypeEquals, lastValTypeNotEquals *generated.MessageStoreType) ([]*generated.ArchiveGroupInfo, error) {
@@ -1456,13 +1531,37 @@ func snapshotToBrokerMetrics(s metrics.BrokerSnapshot) *generated.BrokerMetrics 
 	}
 }
 
-func (r *brokerResolver) Sessions(ctx context.Context, _ *generated.Broker, cleanSession, connected *bool) ([]*generated.Session, error) {
+func (r *brokerResolver) Sessions(ctx context.Context, _ *generated.Broker, cleanSession, connected *bool, clientID *string) ([]*generated.Session, error) {
 	q := &queryResolver{r.Resolver}
-	return q.Sessions(ctx, nil, cleanSession, connected)
+	return q.Sessions(ctx, nil, cleanSession, connected, clientID)
 }
 
-func (r *sessionResolver) Metrics(ctx context.Context, _ *generated.Session) ([]*generated.SessionMetrics, error) {
-	return []*generated.SessionMetrics{{Timestamp: nowISO()}}, nil
+func (r *sessionResolver) Metrics(ctx context.Context, obj *generated.Session) ([]*generated.SessionMetrics, error) {
+	sndCount := 0
+	rcvCount := 0
+
+	if r.Mochi != nil {
+		if cl, ok := r.Mochi.Clients.Get(obj.ClientID); ok && cl != nil {
+			if cl.State.Inflight != nil {
+				pks := cl.State.Inflight.GetAll(false)
+				for _, pk := range pks {
+					switch pk.FixedHeader.Type {
+					case packets.Publish, packets.Pubrel:
+						sndCount++
+					case packets.Pubrec:
+						rcvCount++
+					}
+				}
+			}
+		}
+	}
+
+	return []*generated.SessionMetrics{{
+		Timestamp:           nowISO(),
+		Connected:           &obj.Connected,
+		InFlightMessagesSnd: &sndCount,
+		InFlightMessagesRcv: &rcvCount,
+	}}, nil
 }
 func (r *sessionResolver) MetricsHistory(ctx context.Context, _ *generated.Session, from, to *string, lastMinutes *int) ([]*generated.SessionMetrics, error) {
 	return []*generated.SessionMetrics{}, nil
@@ -1978,13 +2077,54 @@ func (r *userManagementMutationsResolver) DeleteACLRule(ctx context.Context, _ *
 }
 
 func (r *sessionMutationsResolver) RemoveSessions(ctx context.Context, _ *generated.SessionMutations, clientIds []string) (*generated.SessionRemovalResult, error) {
-	count := 0
+	results := make([]*generated.SessionRemovalDetail, 0, len(clientIds))
+	successCount := 0
+
 	for _, id := range clientIds {
-		if err := r.Storage.Sessions.DelClient(ctx, id); err == nil {
-			count++
+		var detailErr *string
+		success := true
+
+		// 1. Disconnect and delete client from mochi-mqtt memory
+		if r.Mochi != nil {
+			if cl, ok := r.Mochi.Clients.Get(id); ok {
+				// DisconnectClient sends a disconnect packet and closes the network connection
+				_ = r.Mochi.DisconnectClient(cl, packets.CodeDisconnect)
+				r.Mochi.Clients.Delete(id)
+			}
 		}
+
+		// 2. Delete the client session and subscriptions from database store
+		if err := r.Storage.Sessions.DelClient(ctx, id); err != nil {
+			success = false
+			errMsg := err.Error()
+			detailErr = &errMsg
+		} else {
+			successCount++
+		}
+
+		nodeID := r.NodeID
+		results = append(results, &generated.SessionRemovalDetail{
+			ClientID: id,
+			Success:  success,
+			Error:    detailErr,
+			NodeID:   &nodeID,
+		})
 	}
-	return &generated.SessionRemovalResult{Success: true, RemovedCount: count}, nil
+
+	overallSuccess := successCount == len(clientIds)
+	var message string
+	if overallSuccess {
+		message = fmt.Sprintf("Successfully removed all %d session(s)", successCount)
+	} else {
+		message = fmt.Sprintf("Removed %d out of %d session(s)", successCount, len(clientIds))
+	}
+
+	return &generated.SessionRemovalResult{
+		Success:      overallSuccess,
+		Message:      &message,
+		RemovedCount: successCount,
+		Results:      results,
+	}, nil
 }
 
 func (r *mqttClientMutationsResolver) Create(ctx context.Context, _ *generated.MqttClientMutations, input generated.MqttClientInput) (*generated.MqttClientResult, error) {

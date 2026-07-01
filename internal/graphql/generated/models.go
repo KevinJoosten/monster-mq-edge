@@ -73,6 +73,11 @@ type ArchiveGroupResult struct {
 	ArchiveGroup *ArchiveGroupInfo `json:"archiveGroup,omitempty"`
 }
 
+type ArchiveStats struct {
+	MinTimestamp *string       `json:"minTimestamp,omitempty"`
+	DailyCounts  []*DailyCount `json:"dailyCounts"`
+}
+
 type ArchivedMessage struct {
 	Topic                  string          `json:"topic"`
 	Payload                string          `json:"payload"`
@@ -206,6 +211,11 @@ type CreateUserInput struct {
 type CurrentUser struct {
 	Username string `json:"username"`
 	IsAdmin  bool   `json:"isAdmin"`
+}
+
+type DailyCount struct {
+	Date  string `json:"date"`
+	Count int64  `json:"count"`
 }
 
 type DatabaseConnectionInfo struct {
@@ -482,10 +492,18 @@ type SessionMutations struct {
 	RemoveSessions *SessionRemovalResult `json:"removeSessions"`
 }
 
+type SessionRemovalDetail struct {
+	ClientID string  `json:"clientId"`
+	Success  bool    `json:"success"`
+	Error    *string `json:"error,omitempty"`
+	NodeID   *string `json:"nodeId,omitempty"`
+}
+
 type SessionRemovalResult struct {
-	Success      bool    `json:"success"`
-	Message      *string `json:"message,omitempty"`
-	RemovedCount int     `json:"removedCount"`
+	Success      bool                    `json:"success"`
+	Message      *string                 `json:"message,omitempty"`
+	RemovedCount int                     `json:"removedCount"`
+	Results      []*SessionRemovalDetail `json:"results"`
 }
 
 type SetPasswordInput struct {
@@ -1073,7 +1091,6 @@ const (
 	MessageArchiveTypePostgres MessageArchiveType = "POSTGRES"
 	MessageArchiveTypeCratedb  MessageArchiveType = "CRATEDB"
 	MessageArchiveTypeMongodb  MessageArchiveType = "MONGODB"
-	MessageArchiveTypeKafka    MessageArchiveType = "KAFKA"
 	MessageArchiveTypeSQLIte   MessageArchiveType = "SQLITE"
 )
 
@@ -1082,13 +1099,12 @@ var AllMessageArchiveType = []MessageArchiveType{
 	MessageArchiveTypePostgres,
 	MessageArchiveTypeCratedb,
 	MessageArchiveTypeMongodb,
-	MessageArchiveTypeKafka,
 	MessageArchiveTypeSQLIte,
 }
 
 func (e MessageArchiveType) IsValid() bool {
 	switch e {
-	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeMongodb, MessageArchiveTypeKafka, MessageArchiveTypeSQLIte:
+	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeMongodb, MessageArchiveTypeSQLIte:
 		return true
 	}
 	return false

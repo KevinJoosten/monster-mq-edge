@@ -234,7 +234,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	// 8. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled {
-		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, publishFn)
+		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn)
 		gqlSrv = gql.NewServer(cfg, resolver, logger)
 	}
 

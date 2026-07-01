@@ -69,7 +69,12 @@ func (ra *renewalAgent) run(ctx context.Context) {
 		interval = time.Hour
 	}
 
-	ra.logger.Info("started", "interval", interval, "estUrl", ra.cfg.ESTURL)
+	if ra.cfg.CAFilePath != "" {
+		ra.logger.Info("started", "interval", interval, "estUrl", ra.cfg.ESTURL, "caFile", ra.cfg.CAFilePath)
+	} else {
+		ra.logger.Warn("started without CaFilePath — renewal server must be trusted by the system root pool",
+			"interval", interval, "estUrl", ra.cfg.ESTURL)
+	}
 
 	// Initial check immediately, then on ticker.
 	ra.check(ctx)

@@ -2,6 +2,7 @@ package integration
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,18 @@ import (
 	"monstermq.io/edge/internal/broker"
 	"monstermq.io/edge/internal/config"
 )
+
+// bootstrapClient talks to the provisioning bootstrap listener, which
+// serves TLS with an ephemeral self-signed cert (pinned via the QR "bfp"
+// fingerprint in production; accepted blindly in tests).
+func bootstrapClient() *http.Client {
+	return &http.Client{
+		Timeout: 5 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+}
 
 // TestProvisionQRBootstrap verifies the provisioning endpoint:
 // 1. GET /provision/qr returns a challenge payload
@@ -44,10 +57,11 @@ func TestProvisionQRBootstrap(t *testing.T) {
 	defer srv.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	baseURL := fmt.Sprintf("http://localhost:%d", cfg.Provision.BootstrapPort)
+	baseURL := fmt.Sprintf("https://localhost:%d", cfg.Provision.BootstrapPort)
+	client := bootstrapClient()
 
 	// Step 1: Get the QR payload.
-	resp, err := http.Get(baseURL + "/provision/qr")
+	resp, err := client.Get(baseURL + "/provision/qr")
 	if err != nil {
 		t.Fatalf("GET /provision/qr failed: %v", err)
 	}
@@ -77,7 +91,7 @@ func TestProvisionQRBootstrap(t *testing.T) {
 		KeyPEM:    "fake-key",
 	}
 	body, _ := json.Marshal(badReq)
-	resp2, err := http.Post(baseURL+"/provision/enroll", "application/json", bytes.NewReader(body))
+	resp2, err := client.Post(baseURL+"/provision/enroll", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +107,7 @@ func TestProvisionQRBootstrap(t *testing.T) {
 		KeyPEM:    "-----BEGIN EC PRIVATE KEY-----\nMHQ...\n-----END EC PRIVATE KEY-----\n",
 	}
 	body, _ = json.Marshal(goodReq)
-	resp3, err := http.Post(baseURL+"/provision/enroll", "application/json", bytes.NewReader(body))
+	resp3, err := client.Post(baseURL+"/provision/enroll", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +118,7 @@ func TestProvisionQRBootstrap(t *testing.T) {
 
 	// Step 4: Try again — should get 410 Gone (already provisioned).
 	time.Sleep(100 * time.Millisecond)
-	resp4, err := http.Get(baseURL + "/provision/qr")
+	resp4, err := client.Get(baseURL + "/provision/qr")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +155,7 @@ func TestProvisionRejectsInvalidMethod(t *testing.T) {
 	defer srv.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/provision/enroll", cfg.Provision.BootstrapPort))
+	resp, err := bootstrapClient().Get(fmt.Sprintf("https://localhost:%d/provision/enroll", cfg.Provision.BootstrapPort))
 	if err != nil {
 		t.Fatal(err)
 	}

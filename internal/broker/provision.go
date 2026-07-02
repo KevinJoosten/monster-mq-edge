@@ -2,14 +2,20 @@ package broker
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -35,10 +41,17 @@ type provisionAgent struct {
 	srv           *http.Server
 	listener      net.Listener
 
+	// bfp is the hex SHA-256 fingerprint of the ephemeral bootstrap TLS
+	// cert; delivered in the QR payload so the CA can pin the channel.
+	bfp string
+
 	mu        sync.Mutex
 	challenge string
 	completed bool
 	certPEM   []byte
+	// deviceKey backs the CSR served at /provision/csr, so the private
+	// key never leaves the device (hardened flow). Regenerated on reset.
+	deviceKey *ecdsa.PrivateKey
 }
 
 // ProvisionQR is the JSON payload encoded in the QR code.
@@ -46,6 +59,7 @@ type ProvisionQR struct {
 	NodeID    string `json:"nodeId"`
 	Challenge string `json:"challenge"`
 	Endpoint  string `json:"endpoint"`
+	Bfp       string `json:"bfp"` // hex SHA-256 of the bootstrap TLS cert
 }
 
 // ProvisionRequest is the JSON body POSTed by the provisioning CA.
@@ -86,6 +100,15 @@ func startProvisionAgent(ctx context.Context, cfg *config.Config, publish publis
 	}
 	pa.challenge = hex.EncodeToString(token)
 
+	// Device-held key pair backing /provision/csr. When the CA signs the
+	// CSR, the private key never leaves this device; the legacy
+	// CA-generated-key flow remains available for older CAs.
+	deviceKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate device key: %w", err)
+	}
+	pa.deviceKey = deviceKey
+
 	// If a cert already exists on disk, mark as provisioned (survives restarts).
 	if certData, err := os.ReadFile(pa.cfg.CertPath); err == nil && len(certData) > 0 {
 		pa.completed = true
@@ -96,6 +119,7 @@ func startProvisionAgent(ctx context.Context, cfg *config.Config, publish publis
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", pa.handleQRPage)
 	mux.HandleFunc("/provision/qr", pa.handleQR)
+	mux.HandleFunc("/provision/csr", pa.handleCSR)
 	mux.HandleFunc("/provision/enroll", pa.handleEnroll)
 	mux.HandleFunc("/provision/status", pa.handleStatus)
 	mux.HandleFunc("/provision/reset", pa.handleReset)
@@ -105,6 +129,22 @@ func startProvisionAgent(ctx context.Context, cfg *config.Config, publish publis
 	if err != nil {
 		return nil, fmt.Errorf("provision listen %s: %w", addr, err)
 	}
+
+	// The bootstrap channel runs TLS with an ephemeral self-signed cert.
+	// Its fingerprint travels in the QR payload ("bfp") so the CA can pin
+	// exactly this listener — the enrollment payload contains the issued
+	// cert (and, in the legacy flow, a private key), which must never
+	// cross the OT LAN in plaintext.
+	bootstrapCert, fingerprint, err := newBootstrapTLSCert(cfg.NodeID)
+	if err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("bootstrap tls cert: %w", err)
+	}
+	pa.bfp = fingerprint
+	ln = tls.NewListener(ln, &tls.Config{
+		Certificates: []tls.Certificate{bootstrapCert},
+		MinVersion:   tls.VersionTLS12,
+	})
 	pa.listener = ln
 
 	pa.srv = &http.Server{
@@ -137,6 +177,58 @@ func (pa *provisionAgent) stop() {
 	_ = pa.srv.Shutdown(ctx)
 }
 
+// newBootstrapTLSCert generates the ephemeral self-signed certificate for
+// the bootstrap listener and returns it with its hex SHA-256 fingerprint.
+func newBootstrapTLSCert(nodeID string) (tls.Certificate, string, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return tls.Certificate{}, "", err
+	}
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return tls.Certificate{}, "", err
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: nodeID + "-bootstrap"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{nodeID, "localhost"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return tls.Certificate{}, "", err
+	}
+	sum := sha256.Sum256(der)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key},
+		hex.EncodeToString(sum[:]), nil
+}
+
+// handleCSR serves a PKCS#10 CSR for the device-held key so the CA can
+// issue a certificate without the private key ever leaving the device.
+func (pa *provisionAgent) handleCSR(w http.ResponseWriter, r *http.Request) {
+	pa.mu.Lock()
+	completed := pa.completed
+	key := pa.deviceKey
+	pa.mu.Unlock()
+
+	if completed {
+		http.Error(w, "already provisioned", http.StatusGone)
+		return
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: pa.nodeID},
+	}, key)
+	if err != nil {
+		http.Error(w, "csr: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	_ = pem.Encode(w, &pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+}
+
 // handleQRPage serves an HTML page that displays the provisioning QR code.
 // This is meant to be shown on a screen connected to the edge device.
 func (pa *provisionAgent) handleQRPage(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +250,13 @@ func (pa *provisionAgent) handleQRPage(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = pa.listener.Addr().String()
 	}
-	endpoint := fmt.Sprintf("http://%s/provision/enroll", host)
+	endpoint := fmt.Sprintf("https://%s/provision/enroll", host)
 
 	qr := ProvisionQR{
 		NodeID:    pa.nodeID,
 		Challenge: pa.challenge,
 		Endpoint:  endpoint,
+		Bfp:       pa.bfp,
 	}
 	qrJSON, _ := json.Marshal(qr)
 
@@ -341,12 +434,13 @@ func (pa *provisionAgent) handleQR(w http.ResponseWriter, r *http.Request) {
 	if host == "" {
 		host = pa.listener.Addr().String()
 	}
-	endpoint := fmt.Sprintf("http://%s/provision/enroll", host)
+	endpoint := fmt.Sprintf("https://%s/provision/enroll", host)
 
 	qr := ProvisionQR{
 		NodeID:    pa.nodeID,
 		Challenge: pa.challenge,
 		Endpoint:  endpoint,
+		Bfp:       pa.bfp,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -381,9 +475,29 @@ func (pa *provisionAgent) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.CertPEM == "" || req.KeyPEM == "" {
-		http.Error(w, "certPem and keyPem required", http.StatusBadRequest)
+	if req.CertPEM == "" {
+		http.Error(w, "certPem required", http.StatusBadRequest)
 		return
+	}
+
+	keyPEM := req.KeyPEM
+	if keyPEM == "" {
+		// Hardened flow: the CA signed our CSR (served at /provision/csr),
+		// so pair the issued cert with the device-held key that never
+		// left this device.
+		pa.mu.Lock()
+		key := pa.deviceKey
+		pa.mu.Unlock()
+		if key == nil {
+			http.Error(w, "no device key available; keyPem required", http.StatusBadRequest)
+			return
+		}
+		keyDER, err := x509.MarshalECPrivateKey(key)
+		if err != nil {
+			http.Error(w, "marshal device key", http.StatusInternalServerError)
+			return
+		}
+		keyPEM = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	}
 
 	// Write cert and key to disk so the renewal agent can find them.
@@ -396,7 +510,7 @@ func (pa *provisionAgent) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "failed to write cert", http.StatusInternalServerError)
 			return
 		}
-		if err := os.WriteFile(pa.cfg.KeyPath, []byte(req.KeyPEM), 0600); err != nil {
+		if err := os.WriteFile(pa.cfg.KeyPath, []byte(keyPEM), 0600); err != nil {
 			pa.logger.Error("failed to write key", "err", err)
 			http.Error(w, "failed to write key", http.StatusInternalServerError)
 			return
@@ -500,10 +614,19 @@ func (pa *provisionAgent) handleReset(w http.ResponseWriter, r *http.Request) {
 		os.Remove(pa.cfg.KeyPath)
 	}
 
+	// Fresh device key for the next enrollment — the old one may have
+	// been paired with a now-revoked certificate.
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	pa.mu.Lock()
 	pa.completed = false
 	pa.certPEM = nil
 	pa.challenge = hex.EncodeToString(token)
+	pa.deviceKey = newKey
 	pa.mu.Unlock()
 
 	pa.logger.Info("provision state reset, cert removed from disk")

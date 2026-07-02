@@ -128,8 +128,18 @@ func (r *certReloader) GetCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate,
 }
 
 // GetConfigForClient is called on every TLS handshake when client auth is
-// configured. It reloads the CA pool and CRL if the files changed.
+// configured. It reloads the server cert, CA pool, and CRL if the files
+// changed. The cert check must happen here too: when the per-client config
+// carries Certificates, Go never consults GetCertificate, so mTLS listeners
+// would otherwise serve a stale cert after renewal.
 func (r *certReloader) GetConfigForClient(_ *tls.ClientHelloInfo) (*tls.Config, error) {
+	if r.needsReloadCert() {
+		if err := r.loadCert(); err != nil {
+			r.logger.Warn("cert hot-reload failed, using cached", "err", err)
+		} else {
+			r.logger.Info("cert hot-reloaded", "cert", r.certPath)
+		}
+	}
 	if r.caPath != "" && r.needsReloadCA() {
 		if err := r.loadCA(); err != nil {
 			r.logger.Warn("CA hot-reload failed, using cached", "err", err)

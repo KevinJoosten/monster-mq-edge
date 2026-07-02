@@ -222,3 +222,168 @@ func writeKeyFile(t *testing.T, path string, key *ecdsa.PrivateKey) {
 	}
 	writePEMFile(t, path, "EC PRIVATE KEY", der)
 }
+
+// TestESTRenewalIncludesBridgeCert verifies the EST renewal path also
+// re-enrolls the bridge client cert (OU=bridge) — under stepca the CA
+// pushes it, under EST the agent must request it explicitly, preserving
+// the OU profile so CertAuth keeps mapping it to the bridge ACL user.
+func TestESTRenewalIncludesBridgeCert(t *testing.T) {
+	dir := t.TempDir()
+
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	// Short-lived server cert (already past renewal threshold).
+	srvKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srvTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "bridge-renew-test"},
+		NotBefore:    time.Now().Add(-4 * time.Second),
+		NotAfter:     time.Now().Add(1 * time.Second),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+		DNSNames:     []string{"localhost"},
+	}
+	srvDER, _ := x509.CreateCertificate(rand.Reader, srvTemplate, caCert, &srvKey.PublicKey, caKey)
+
+	// Short-lived bridge client cert with the OU=bridge profile.
+	brKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	brTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "bridge-renew-test", OrganizationalUnit: []string{"bridge"}},
+		NotBefore:    time.Now().Add(-4 * time.Second),
+		NotAfter:     time.Now().Add(1 * time.Second),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	brDER, _ := x509.CreateCertificate(rand.Reader, brTemplate, caCert, &brKey.PublicKey, caKey)
+
+	certPath := filepath.Join(dir, "server-cert.pem")
+	keyPath := filepath.Join(dir, "server-key.pem")
+	bridgeCertPath := filepath.Join(dir, "bridge-cert.pem")
+	bridgeKeyPath := filepath.Join(dir, "bridge-key.pem")
+
+	writePEMFile(t, certPath, "CERTIFICATE", srvDER)
+	writeKeyFile(t, keyPath, srvKey)
+	writePEMFile(t, bridgeCertPath, "CERTIFICATE", brDER)
+	writeKeyFile(t, bridgeKeyPath, brKey)
+
+	nextSerial := int64(100)
+	estServer := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/est/simplereenroll" || r.Method != http.MethodPost {
+			http.Error(w, "not found", 404)
+			return
+		}
+		body := make([]byte, r.ContentLength)
+		if _, err := r.Body.Read(body); err != nil && err.Error() != "EOF" {
+			http.Error(w, "bad body", 400)
+			return
+		}
+		csrDER, err := base64.StdEncoding.DecodeString(string(body))
+		if err != nil {
+			http.Error(w, "bad base64", 400)
+			return
+		}
+		csr, err := x509.ParseCertificateRequest(csrDER)
+		if err != nil {
+			http.Error(w, "bad CSR", 400)
+			return
+		}
+		nextSerial++
+		newTemplate := &x509.Certificate{
+			SerialNumber: big.NewInt(nextSerial),
+			Subject:      csr.Subject, // honor the CSR profile, like provision-app
+			NotBefore:    time.Now().Add(-time.Minute),
+			NotAfter:     time.Now().Add(time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+			IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+			DNSNames:     csr.DNSNames,
+		}
+		newDER, err := x509.CreateCertificate(rand.Reader, newTemplate, caCert, csr.PublicKey, caKey)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("sign failed: %v", err), 500)
+			return
+		}
+		p7DER, err := pkcs7.DegenerateCertificate(newDER)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("pkcs7 failed: %v", err), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/pkcs7-mime")
+		w.Write([]byte(base64.StdEncoding.EncodeToString(p7DER)))
+	}))
+	defer estServer.Close()
+
+	estLeaf, err := x509.ParseCertificate(estServer.TLS.Certificates[0].Certificate[0])
+	if err != nil {
+		t.Fatalf("parse EST server cert: %v", err)
+	}
+	estCAPath := filepath.Join(dir, "est-ca.pem")
+	writePEMFile(t, estCAPath, "CERTIFICATE", estLeaf.Raw)
+
+	cfg := config.Default()
+	cfg.NodeID = "bridge-renew-test"
+	cfg.TCP.Enabled = true
+	cfg.TCP.Port = 26885
+	cfg.TCPS.Enabled = false
+	cfg.WS.Enabled = false
+	cfg.GraphQL.Enabled = false
+	cfg.Metrics.Enabled = false
+	cfg.SQLite.Path = filepath.Join(dir, "test.db")
+	cfg.CertRenewal = config.CertRenewalConfig{
+		Enabled:        true,
+		Protocol:       "est",
+		ESTURL:         estServer.URL,
+		CAFilePath:     estCAPath,
+		CheckInterval:  "500ms",
+		CertPath:       certPath,
+		KeyPath:        keyPath,
+		BridgeCertPath: bridgeCertPath,
+		BridgeKeyPath:  bridgeKeyPath,
+	}
+
+	srv, err := broker.New(cfg, slog.New(slog.DiscardHandler), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = srv.Serve() }()
+	defer srv.Close()
+
+	time.Sleep(2 * time.Second)
+
+	// Bridge cert must be renewed with a fresh serial, the OU=bridge
+	// profile intact, and a key on disk that matches the new cert.
+	raw, err := os.ReadFile(bridgeCertPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(raw)
+	if block == nil {
+		t.Fatal("no PEM in renewed bridge cert")
+	}
+	newBr, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newBr.SerialNumber.Int64() <= 3 {
+		t.Fatalf("bridge cert not renewed: serial %d", newBr.SerialNumber.Int64())
+	}
+	if len(newBr.Subject.OrganizationalUnit) != 1 || newBr.Subject.OrganizationalUnit[0] != "bridge" {
+		t.Fatalf("bridge OU lost on renewal: %v", newBr.Subject.OrganizationalUnit)
+	}
+	if _, err := tls.LoadX509KeyPair(bridgeCertPath, bridgeKeyPath); err != nil {
+		t.Fatalf("renewed bridge cert/key do not pair: %v", err)
+	}
+}

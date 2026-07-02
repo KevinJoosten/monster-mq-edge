@@ -225,12 +225,15 @@ func (ra *renewalAgent) renewStepCA(ctx context.Context) error {
 	return nil
 }
 
-// renewEST uses the RFC 7030 EST /simplereenroll endpoint.
+// renewEST uses the RFC 7030 EST /simplereenroll endpoint. Every
+// re-enrollment generates a fresh key pair (key rotation). The bridge
+// client cert rides the same channel: the CA enforces CN equality with
+// the authenticating cert and honors the CSR's OU profile, so the
+// bridge cert keeps its OU=bridge ACL identity.
 func (ra *renewalAgent) renewEST(ctx context.Context) error {
-	// Generate new key pair
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	client, err := ra.mtlsClient()
 	if err != nil {
-		return fmt.Errorf("generate key: %w", err)
+		return err
 	}
 
 	// Load the current cert to copy subject/SANs
@@ -239,61 +242,10 @@ func (ra *renewalAgent) renewEST(ctx context.Context) error {
 		return fmt.Errorf("load current cert for CSR: %w", err)
 	}
 
-	// Build CSR with same subject and SANs
-	csrTemplate := &x509.CertificateRequest{
-		Subject:  currentCert.Subject,
-		DNSNames: currentCert.DNSNames,
-	}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
-	if err != nil {
-		return fmt.Errorf("create CSR: %w", err)
-	}
-
-	// EST reenrollment: POST base64(DER) CSR with mTLS auth
-	url := ra.cfg.ESTURL + "/.well-known/est/simplereenroll"
-	body := base64.StdEncoding.EncodeToString(csrDER)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/pkcs10")
-	req.Body = io.NopCloser(stringReader(body))
-	req.ContentLength = int64(len(body))
-
-	client, err := ra.mtlsClient()
+	certPEM, keyPEM, err := ra.estReenroll(ctx, client, currentCert)
 	if err != nil {
 		return err
 	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("EST request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("EST returned %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	// Parse response — could be PKCS#7 or raw PEM depending on CA
-	respBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read EST response: %w", err)
-	}
-
-	certPEM, err := ra.extractCertFromResponse(respBytes, resp.Header.Get("Content-Type"))
-	if err != nil {
-		return fmt.Errorf("parse EST response: %w", err)
-	}
-
-	// Write key
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return fmt.Errorf("marshal key: %w", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 
 	// Atomic write: key first, then cert (certReloader checks cert mtime)
 	if err := atomicWrite(ra.cfg.KeyPath, keyPEM); err != nil {
@@ -303,7 +255,85 @@ func (ra *renewalAgent) renewEST(ctx context.Context) error {
 		return fmt.Errorf("write cert: %w", err)
 	}
 
+	// Renew the bridge client cert over the same mTLS channel. A bridge
+	// failure doesn't fail the whole renewal — the server cert is
+	// already safe on disk and the next check retries the bridge.
+	if ra.cfg.BridgeCertPath != "" && ra.cfg.BridgeKeyPath != "" {
+		if bridgeCert, err := loadCertFile(ra.cfg.BridgeCertPath); err == nil {
+			bCertPEM, bKeyPEM, err := ra.estReenroll(ctx, client, bridgeCert)
+			if err != nil {
+				ra.logger.Error("bridge cert EST renewal failed", "err", err)
+			} else if err := atomicWrite(ra.cfg.BridgeKeyPath, bKeyPEM); err != nil {
+				ra.logger.Error("write bridge key", "err", err)
+			} else if err := atomicWrite(ra.cfg.BridgeCertPath, bCertPEM); err != nil {
+				ra.logger.Error("write bridge cert", "err", err)
+			} else {
+				ra.logger.Info("bridge cert renewed via EST", "path", ra.cfg.BridgeCertPath)
+			}
+		}
+	}
+
 	return nil
+}
+
+// estReenroll performs one EST /simplereenroll round-trip: fresh key,
+// CSR copying the template cert's subject and SANs, returns the issued
+// cert and new key as PEM.
+func (ra *renewalAgent) estReenroll(ctx context.Context, client *http.Client, template *x509.Certificate) ([]byte, []byte, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generate key: %w", err)
+	}
+
+	csrTemplate := &x509.CertificateRequest{
+		Subject:  template.Subject,
+		DNSNames: template.DNSNames,
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create CSR: %w", err)
+	}
+
+	// EST reenrollment: POST base64(DER) CSR with mTLS auth
+	url := ra.cfg.ESTURL + "/.well-known/est/simplereenroll"
+	body := base64.StdEncoding.EncodeToString(csrDER)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/pkcs10")
+	req.Body = io.NopCloser(stringReader(body))
+	req.ContentLength = int64(len(body))
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("EST request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, nil, fmt.Errorf("EST returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// Parse response — could be PKCS#7 or raw PEM depending on CA
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read EST response: %w", err)
+	}
+
+	certPEM, err := ra.extractCertFromResponse(respBytes, resp.Header.Get("Content-Type"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("parse EST response: %w", err)
+	}
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal key: %w", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return certPEM, keyPEM, nil
 }
 
 func (ra *renewalAgent) mtlsClient() (*http.Client, error) {
@@ -367,13 +397,17 @@ func (ra *renewalAgent) extractCertFromResponse(data []byte, contentType string)
 }
 
 func (ra *renewalAgent) loadCurrentCert() (*x509.Certificate, error) {
-	certPEM, err := os.ReadFile(ra.cfg.CertPath)
+	return loadCertFile(ra.cfg.CertPath)
+}
+
+func loadCertFile(path string) (*x509.Certificate, error) {
+	certPEM, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 	block, _ := pem.Decode(certPEM)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block in %s", ra.cfg.CertPath)
+		return nil, fmt.Errorf("no PEM block in %s", path)
 	}
 	return x509.ParseCertificate(block.Bytes)
 }

@@ -47,6 +47,9 @@ func TestProvisionQRBootstrap(t *testing.T) {
 		Enabled:        true,
 		BootstrapPort:  27443,
 		ChallengeBytes: 16,
+		// This test exercises the network QR flow (headless/demo mode);
+		// the default "local" mode hides the challenge from the network.
+		ChallengeExposure: "network",
 	}
 
 	srv, err := broker.New(cfg, slog.New(slog.DiscardHandler), nil)

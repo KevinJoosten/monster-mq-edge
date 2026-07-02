@@ -49,9 +49,37 @@ type provisionAgent struct {
 	challenge string
 	completed bool
 	certPEM   []byte
+	// failedEnrolls counts wrong-challenge attempts since the last
+	// successful enrollment or reset; at maxEnrollFailures the bootstrap
+	// locks (423) until reset or restart — fail secure against
+	// commissioning-time hijack attempts.
+	failedEnrolls int
 	// deviceKey backs the CSR served at /provision/csr, so the private
 	// key never leaves the device (hardened flow). Regenerated on reset.
 	deviceKey *ecdsa.PrivateKey
+}
+
+// maxEnrollFailures is the number of wrong-challenge enrollment attempts
+// tolerated before the bootstrap listener locks until reset/restart.
+const maxEnrollFailures = 10
+
+// networkExposure reports whether the enrollment challenge may be served
+// over the network (screenless/demo deployments). Default is local-only:
+// the challenge appears solely on the physically attached display, so
+// possessing it proves someone read the device's screen.
+func (pa *provisionAgent) networkExposure() bool {
+	return pa.cfg.ChallengeExposure == "network"
+}
+
+// isLoopback reports whether the request originates from the device itself
+// (e.g. the kiosk browser rendering the QR page on the attached display).
+func isLoopback(remoteAddr string) bool {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ProvisionQR is the JSON payload encoded in the QR code.
@@ -246,6 +274,15 @@ func (pa *provisionAgent) handleQRPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The QR page carries the challenge, so in local mode it renders only
+	// on the device itself (kiosk browser on the attached display).
+	// Network visitors get a pointer to the physical screen instead.
+	if !pa.networkExposure() && !isLoopback(r.RemoteAddr) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, checkDisplayPageHTML, pa.nodeID, pa.nodeID)
+		return
+	}
+
 	host := r.Host
 	if host == "" {
 		host = pa.listener.Addr().String()
@@ -380,6 +417,29 @@ td{font-family:monospace;word-break:break-all}
 	)
 }
 
+const checkDisplayPageHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Provision: %s</title>
+<style>
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;font-family:-apple-system,sans-serif;background:#0f1419;color:#e6edf3;text-align:center;padding:24px}
+h1{font-size:1.3rem;color:#d29922;margin-bottom:8px}
+p{color:#8b949e;font-size:0.95rem;max-width:34rem;line-height:1.5}
+.node{font-family:monospace;color:#58a6ff}
+</style>
+</head>
+<body>
+<h1>&#128274; Check the device display</h1>
+<p>Node <span class="node">%s</span> is in provisioning mode. For
+security, the enrollment QR code is shown only on the screen physically
+attached to this device &mdash; scanning it there proves you are at the
+machine. This page intentionally does not include the enrollment
+challenge.</p>
+</body>
+</html>`
+
 const provisionPageHTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -437,10 +497,16 @@ func (pa *provisionAgent) handleQR(w http.ResponseWriter, r *http.Request) {
 	endpoint := fmt.Sprintf("https://%s/provision/enroll", host)
 
 	qr := ProvisionQR{
-		NodeID:    pa.nodeID,
-		Challenge: pa.challenge,
-		Endpoint:  endpoint,
-		Bfp:       pa.bfp,
+		NodeID:   pa.nodeID,
+		Endpoint: endpoint,
+		Bfp:      pa.bfp,
+	}
+	// The challenge is the sole authorization for enrollment. In local
+	// mode it lives only on the attached display (the loopback-gated QR
+	// page); this network-facing JSON endpoint never carries it —
+	// otherwise anyone on the LAN could hijack an unprovisioned device.
+	if pa.networkExposure() {
+		qr.Challenge = pa.challenge
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -468,12 +534,29 @@ func (pa *provisionAgent) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pa.mu.Lock()
+	locked := pa.failedEnrolls >= maxEnrollFailures
+	pa.mu.Unlock()
+	if locked {
+		pa.logger.Error("enrollment locked: too many failed challenge attempts — reset or restart required")
+		http.Error(w, "enrollment locked", http.StatusLocked)
+		return
+	}
+
 	// Constant-time challenge comparison
 	if subtle.ConstantTimeCompare([]byte(req.Challenge), []byte(pa.challenge)) != 1 {
-		pa.logger.Warn("invalid challenge presented")
+		pa.mu.Lock()
+		pa.failedEnrolls++
+		failures := pa.failedEnrolls
+		pa.mu.Unlock()
+		pa.logger.Warn("invalid challenge presented", "failures", failures, "max", maxEnrollFailures)
 		http.Error(w, "invalid challenge", http.StatusForbidden)
 		return
 	}
+
+	pa.mu.Lock()
+	pa.failedEnrolls = 0
+	pa.mu.Unlock()
 
 	if req.CertPEM == "" {
 		http.Error(w, "certPem required", http.StatusBadRequest)
@@ -627,6 +710,7 @@ func (pa *provisionAgent) handleReset(w http.ResponseWriter, r *http.Request) {
 	pa.certPEM = nil
 	pa.challenge = hex.EncodeToString(token)
 	pa.deviceKey = newKey
+	pa.failedEnrolls = 0
 	pa.mu.Unlock()
 
 	pa.logger.Info("provision state reset, cert removed from disk")

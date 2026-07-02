@@ -263,3 +263,106 @@ func TestEnrollLegacyWithProvidedKey(t *testing.T) {
 		t.Fatal("written key differs from the CA-provided key")
 	}
 }
+
+// startTestAgentExposure starts an agent with an explicit ChallengeExposure.
+func startTestAgentExposure(t *testing.T, exposure string) (*provisionAgent, string, context.CancelFunc) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := &config.Config{
+		NodeID: "edge-test",
+		Provision: config.ProvisionConfig{
+			Enabled:           true,
+			BootstrapPort:     0,
+			ChallengeBytes:    8,
+			CertPath:          filepath.Join(dir, "server.crt"),
+			KeyPath:           filepath.Join(dir, "server.key"),
+			ChallengeExposure: exposure,
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	pa, err := startProvisionAgent(ctx, cfg, nil, nil, logger)
+	if err != nil {
+		cancel()
+		t.Fatalf("start agent: %v", err)
+	}
+	_, port, _ := net.SplitHostPort(pa.listener.Addr().String())
+	return pa, "https://127.0.0.1:" + port, cancel
+}
+
+// TestQRHidesChallengeByDefault: physical-presence hardening — the
+// enrollment challenge must not be obtainable over the network unless
+// explicitly configured (screenless/demo deployments).
+func TestQRHidesChallengeByDefault(t *testing.T) {
+	_, base, cancel := startTestAgentExposure(t, "") // default = local
+	defer cancel()
+
+	resp, err := insecureClient().Get(base + "/provision/qr")
+	if err != nil {
+		t.Fatalf("GET qr: %v", err)
+	}
+	defer resp.Body.Close()
+	var qr struct {
+		Challenge string `json:"challenge"`
+		Bfp       string `json:"bfp"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if qr.Challenge != "" {
+		t.Fatal("challenge leaked over the network in local mode")
+	}
+	if qr.Bfp == "" {
+		t.Fatal("bfp must still be served for discovery/pinning")
+	}
+}
+
+func TestQRServesChallengeInNetworkMode(t *testing.T) {
+	_, base, cancel := startTestAgentExposure(t, "network")
+	defer cancel()
+
+	resp, err := insecureClient().Get(base + "/provision/qr")
+	if err != nil {
+		t.Fatalf("GET qr: %v", err)
+	}
+	defer resp.Body.Close()
+	var qr struct {
+		Challenge string `json:"challenge"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if qr.Challenge == "" {
+		t.Fatal("network mode must serve the challenge (screenless deployments)")
+	}
+}
+
+// TestEnrollLocksAfterRepeatedBadChallenges: brute-force / hijack-attempt
+// lockout — after 10 failed challenges the bootstrap refuses enrollment
+// until reset or restart.
+func TestEnrollLocksAfterRepeatedBadChallenges(t *testing.T) {
+	pa, base, cancel := startTestAgentExposure(t, "network")
+	defer cancel()
+
+	for i := 0; i < 10; i++ {
+		resp := enroll(t, base, map[string]string{
+			"challenge": "wrong-guess",
+			"certPem":   "x",
+		})
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("attempt %d: expected 403, got %d", i, resp.StatusCode)
+		}
+	}
+
+	// 11th attempt — even with the CORRECT challenge — must be locked out.
+	resp := enroll(t, base, map[string]string{
+		"challenge": pa.challenge,
+		"certPem":   "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+		"keyPem":    "k",
+	})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusLocked {
+		t.Fatalf("expected 423 Locked after 10 failures, got %d", resp.StatusCode)
+	}
+}

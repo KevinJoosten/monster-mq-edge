@@ -147,6 +147,13 @@ type ProvisionConfig struct {
 	ChallengeBytes int    `yaml:"ChallengeBytes"`
 	CertPath       string `yaml:"CertPath"`
 	KeyPath        string `yaml:"KeyPath"`
+	// ChallengeExposure controls where the enrollment challenge is visible.
+	// "local" (default): only on the physically attached display (loopback
+	// requests to the QR page) — possessing the challenge proves someone
+	// read the device's screen. "network": also served via /provision/qr
+	// for screenless devices and demo stacks — a documented risk
+	// acceptance (anyone on the LAN can attempt enrollment).
+	ChallengeExposure string `yaml:"ChallengeExposure"`
 }
 
 // FeaturesConfig is a flat set of feature toggles, mirroring the Features

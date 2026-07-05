@@ -65,7 +65,8 @@ if "!BUILD!"=="true" (
     echo Building monstermq-edge...
     if not exist bin mkdir bin
     set "CGO_ENABLED=0"
-    go build -trimpath -ldflags="-s -w" -o "!BIN!" .\cmd\monstermq-edge
+    set /p VERSION=<version.txt
+    go build -trimpath -ldflags="-s -w -X monstermq.io/edge/internal/version.Version=!VERSION!" -o "!BIN!" .\cmd\monstermq-edge
     if !errorlevel! neq 0 (
         echo Build failed
         exit /b 1

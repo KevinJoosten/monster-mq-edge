@@ -2,7 +2,8 @@ SHELL := /bin/bash
 BIN := bin/monstermq-edge
 PKG := ./cmd/monstermq-edge
 
-LDFLAGS := -s -w
+VERSION := $(shell cat version.txt 2>/dev/null | tr -d '\n' | tr -d '\r')
+LDFLAGS := -s -w -X monstermq.io/edge/internal/version.Version=$(VERSION)
 GOFLAGS := -trimpath
 
 .PHONY: build build-arm64 build-armv7 test test-race lint clean gen run deb-arm64 deb-armv7 deb-amd64 deb-all

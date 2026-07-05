@@ -69,7 +69,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 		LogBus:    logBus,
 		Logger:    logger,
 		NodeID:    cfg.NodeID,
-		Version:   version.Version,
+		Version:   formatEdgeVersion(version.Version),
 		Mochi:     mochi,
 		Publish:   publish,
 	}
@@ -629,6 +629,13 @@ func (r *Resolver) brokerObj() *generated.Broker {
 		IsLeader:              true, IsCurrent: true,
 		EnabledFeatures: r.enabledFeatures(),
 	}
+}
+
+func formatEdgeVersion(v string) string {
+	if strings.HasSuffix(strings.ToUpper(v), "-EDGE") {
+		return strings.TrimSuffix(strings.ToLower(v), "-edge") + "-EDGE"
+	}
+	return v + "-EDGE"
 }
 
 func wildcardMatch(s, pattern string) bool {

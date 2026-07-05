@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -64,6 +65,7 @@ func (h *StorageHook) Provides(b byte) bool {
 }
 
 func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
+	pv := int(cl.Properties.ProtocolVersion)
 	info := stores.SessionInfo{
 		ClientID:        cl.ID,
 		NodeID:          h.nodeID,
@@ -71,7 +73,8 @@ func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 		Connected:       true,
 		UpdateTime:      time.Now(),
 		ClientAddress:   cl.Net.Remote,
-		ProtocolVersion: int(cl.Properties.ProtocolVersion),
+		ProtocolVersion: pv,
+		Information:     fmt.Sprintf(`{"ProtocolVersion":%d}`, pv),
 	}
 	if err := h.store.Sessions.SetClient(context.Background(), info); err != nil {
 		h.logger.Warn("session persist failed", "client", cl.ID, "err", err)

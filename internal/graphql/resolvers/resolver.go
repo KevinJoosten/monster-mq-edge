@@ -674,6 +674,14 @@ func sessionToGraphQL(info stores.SessionInfo) *generated.Session {
 	addr := info.ClientAddress
 	infoStr := info.Information
 	pv := info.ProtocolVersion
+	if pv == 0 && infoStr != "" {
+		var meta struct {
+			ProtocolVersion int `json:"ProtocolVersion"`
+		}
+		if json.Unmarshal([]byte(infoStr), &meta) == nil && meta.ProtocolVersion != 0 {
+			pv = meta.ProtocolVersion
+		}
+	}
 	rm := info.ReceiveMaximum
 	mps := info.MaximumPacketSize
 	tam := info.TopicAliasMaximum

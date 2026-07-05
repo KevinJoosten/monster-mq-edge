@@ -156,13 +156,15 @@ sed -e "s/{{VERSION}}/${DEB_VERSION}/g" \
     -e "s/{{DESCRIPTION}}/${DESCRIPTION}/g" \
     scripts/deb/control.template > "${CONTROL_DIR}/control"
 
-# Copy maintainer scripts
+# Copy maintainer scripts and conffiles
 cp scripts/deb/postinst "${CONTROL_DIR}/postinst"
 cp scripts/deb/prerm "${CONTROL_DIR}/prerm"
 cp scripts/deb/postrm "${CONTROL_DIR}/postrm"
+cp scripts/deb/conffiles "${CONTROL_DIR}/conffiles"
 
-# Make maintainer scripts executable
+# Make maintainer scripts executable and set conffiles permission
 chmod 755 "${CONTROL_DIR}/postinst" "${CONTROL_DIR}/prerm" "${CONTROL_DIR}/postrm"
+chmod 644 "${CONTROL_DIR}/conffiles"
 
 # 4. Package archives
 echo -e "${GREEN}4. Creating package archives...${NC}"

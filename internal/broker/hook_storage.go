@@ -59,6 +59,7 @@ func (h *StorageHook) Provides(b byte) bool {
 		mqtt.OnPublished,
 		mqtt.OnRetainMessage,
 		mqtt.OnPacketSent,
+		mqtt.OnSelectRetainedMessages,
 	}, []byte{b})
 }
 
@@ -169,4 +170,33 @@ func (h *StorageHook) OnRetainMessage(cl *mqtt.Client, pk packets.Packet, r int6
 	if err := h.store.Retained.AddAll(ctx, []stores.BrokerMessage{msg}); err != nil {
 		h.logger.Warn("retained persist failed", "topic", pk.TopicName, "err", err)
 	}
+}
+
+// OnSelectRetainedMessages returns matching retained messages from the store.
+func (h *StorageHook) OnSelectRetainedMessages(filter string) ([]packets.Packet, error) {
+	if h.retainedInMemory {
+		return nil, nil
+	}
+	ctx := context.Background()
+	var pks []packets.Packet
+	err := h.store.Retained.FindMatchingMessages(ctx, filter, func(msg stores.BrokerMessage) bool {
+		pk := packets.Packet{
+			FixedHeader: packets.FixedHeader{
+				Type:   packets.Publish,
+				Qos:    msg.QoS,
+				Retain: true,
+			},
+			TopicName: msg.TopicName,
+			Payload:   msg.Payload,
+		}
+		if msg.MessageExpiryInterval != nil {
+			pk.Properties.MessageExpiryInterval = *msg.MessageExpiryInterval
+		}
+		pks = append(pks, pk)
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pks, nil
 }

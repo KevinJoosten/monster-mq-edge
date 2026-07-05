@@ -146,14 +146,12 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	// 5. Restore retained messages from storage into mochi's in-memory retained map.
 	// Skipped when RetainedStoreType is MEMORY: nothing is persisted, so there's
 	// nothing to restore — mochi's own in-memory map is the source of truth.
+	// Also skipped when RetainedStoreType is a DB store: they are loaded on-demand
+	// via OnSelectRetainedMessages hook.
 	if retainedInMemory {
 		logger.Info("retained messages: in-memory mode (no DB persistence)")
 	} else {
-		logger.Info("loading retained messages...")
-		if err := restoreRetained(ctx, server, storage); err != nil {
-			logger.Warn("retained restore failed", "err", err)
-		}
-		logger.Info("retained messages loaded")
+		logger.Info("retained messages: database-backed on-demand mode (bypassing pre-load)")
 	}
 
 	// 6. Listeners
@@ -304,12 +302,6 @@ func hydrateSubscriptionIndex(ctx context.Context, subs *topic.SubscriptionIndex
 	})
 }
 
-func restoreRetained(ctx context.Context, server *mqtt.Server, storage *stores.Storage) error {
-	return storage.Retained.FindMatchingMessages(ctx, "#", func(msg stores.BrokerMessage) bool {
-		_ = server.Publish(msg.TopicName, msg.Payload, true, msg.QoS)
-		return true
-	})
-}
 
 func (s *Server) Serve() error {
 	if s.collector != nil {

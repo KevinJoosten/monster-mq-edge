@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,10 +30,36 @@ type QueueHook struct {
 	server           *mqtt.Server
 	logger           *slog.Logger
 	maxQueueMessages int
+	mu               sync.RWMutex
+	persistent       map[string]bool
 }
 
 func NewQueueHook(s *stores.Storage, subs *topic.SubscriptionIndex, server *mqtt.Server, logger *slog.Logger, maxQueue int) *QueueHook {
-	return &QueueHook{store: s, subs: subs, server: server, logger: logger, maxQueueMessages: maxQueue}
+	h := &QueueHook{
+		store:            s,
+		subs:             subs,
+		server:           server,
+		logger:           logger,
+		maxQueueMessages: maxQueue,
+		persistent:       make(map[string]bool),
+	}
+	h.hydratePersistentClients()
+	return h
+}
+
+func (h *QueueHook) hydratePersistentClients() {
+	ctx := context.Background()
+	err := h.store.Sessions.IterateSessions(ctx, func(info stores.SessionInfo) bool {
+		if !info.CleanSession {
+			h.mu.Lock()
+			h.persistent[info.ClientID] = true
+			h.mu.Unlock()
+		}
+		return true
+	})
+	if err != nil {
+		h.logger.Error("queue hook: failed to hydrate persistent clients", "err", err)
+	}
 }
 
 func (h *QueueHook) ID() string { return "monstermq-queue" }
@@ -41,6 +68,8 @@ func (h *QueueHook) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnPublished,
 		mqtt.OnSessionEstablished,
+		mqtt.OnDisconnect,
+		mqtt.OnClientExpired,
 	}, []byte{b})
 }
 
@@ -110,11 +139,10 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 		if cl, ok := h.server.Clients.Get(c.ClientID); ok && !cl.Closed() {
 			continue
 		}
-		info, err := h.store.Sessions.GetSession(ctx, c.ClientID)
-		if err != nil || info == nil {
-			continue
-		}
-		if info.CleanSession || info.Connected {
+		h.mu.RLock()
+		isPersistent := h.persistent[c.ClientID]
+		h.mu.RUnlock()
+		if !isPersistent {
 			continue
 		}
 		out = append(out, c.ClientID)
@@ -138,6 +166,15 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 //   - mochi inflight empty      → post-restart (or first attach); mochi has no
 //                                 history. Drain our DB queue and replay.
 func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
+	persistent := !((cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryInterval == 0) || (cl.Properties.ProtocolVersion < 5 && cl.Properties.Clean))
+	h.mu.Lock()
+	if persistent {
+		h.persistent[cl.ID] = true
+	} else {
+		delete(h.persistent, cl.ID)
+	}
+	h.mu.Unlock()
+
 	if cl.Properties.Clean {
 		return
 	}
@@ -189,5 +226,19 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 			}
 		}
 	}
+}
+
+func (h *QueueHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	if expire {
+		h.mu.Lock()
+		delete(h.persistent, cl.ID)
+		h.mu.Unlock()
+	}
+}
+
+func (h *QueueHook) OnClientExpired(cl *mqtt.Client) {
+	h.mu.Lock()
+	delete(h.persistent, cl.ID)
+	h.mu.Unlock()
 }
 

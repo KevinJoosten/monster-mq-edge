@@ -666,6 +666,30 @@ func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage,
 	return err
 }
 
+func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatchItem) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	docs := make([]any, 0, len(batch))
+	now := time.Now().Unix()
+	for _, item := range batch {
+		docs = append(docs, bson.M{
+			"message_uuid":  item.Message.MessageUUID,
+			"client_id":     item.ClientID,
+			"topic":         item.Message.TopicName,
+			"payload":       bson.Binary{Data: item.Message.Payload},
+			"qos":           int(item.Message.QoS),
+			"retained":      item.Message.IsRetain,
+			"publisher_id":  item.Message.ClientID,
+			"creation_time": item.Message.Time.UnixMilli(),
+			"vt":            now,
+			"read_ct":       0,
+		})
+	}
+	_, err := q.coll().InsertMany(ctx, docs)
+	return err
+}
+
 func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int) ([]stores.BrokerMessage, error) {
 	if batchSize <= 0 {
 		batchSize = 10

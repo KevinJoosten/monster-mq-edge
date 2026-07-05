@@ -116,7 +116,7 @@ dev/done/                  # completed or archived plans
   for resolution.
 - New config fields land in `internal/config/config.go` **and** in
   `yaml-json-schema.json` **and** (if they affect default deployment) in
-  `config.yaml.example`.
+  `config.yaml.example` **and** `scripts/deb/config.yaml`.
 - Tests live in `test/integration/` and drive the broker through its real
   network listeners. Don't add unit-test-only abstractions that mock the
   broker out of the loop.

@@ -78,9 +78,15 @@ type SessionStore interface {
 	Close() error
 }
 
+type QueueBatchItem struct {
+	ClientID string
+	Message  BrokerMessage
+}
+
 type QueueStore interface {
 	Enqueue(ctx context.Context, clientID string, msg BrokerMessage) error
 	EnqueueMulti(ctx context.Context, msg BrokerMessage, clientIDs []string) error
+	EnqueueBatch(ctx context.Context, batch []QueueBatchItem) error
 	Dequeue(ctx context.Context, clientID string, batchSize int) ([]BrokerMessage, error)
 	Ack(ctx context.Context, clientID string, messageUUID string) error
 	PurgeForClient(ctx context.Context, clientID string) (int64, error)

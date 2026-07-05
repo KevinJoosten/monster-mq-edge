@@ -92,6 +92,42 @@ func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage,
 	return tx.Commit()
 }
 
+func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatchItem) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	insert := fmt.Sprintf(`INSERT INTO %s
+        (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, queueTable)
+	q.db.Lock()
+	defer q.db.Unlock()
+	tx, err := q.db.Conn().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.PrepareContext(ctx, insert)
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, item := range batch {
+		retained := 0
+		if item.Message.IsRetain {
+			retained = 1
+		}
+		var expiry sql.NullInt64
+		if item.Message.MessageExpiryInterval != nil {
+			expiry = sql.NullInt64{Int64: int64(*item.Message.MessageExpiryInterval), Valid: true}
+		}
+		if _, err := stmt.ExecContext(ctx, item.Message.MessageUUID, item.ClientID, item.Message.TopicName, item.Message.Payload, int(item.Message.QoS), retained, item.Message.ClientID, item.Message.Time.UnixMilli(), expiry); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int) ([]stores.BrokerMessage, error) {
 	if batchSize <= 0 {
 		batchSize = 10

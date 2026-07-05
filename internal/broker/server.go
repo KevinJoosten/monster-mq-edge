@@ -86,6 +86,11 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		return nil, err
 	}
 
+	if storage.Queue != nil {
+		storage.Queue = stores.NewBatchingQueueStore(storage.Queue, 1000, 50*time.Millisecond)
+		prependStorageCloser(storage, storage.Queue.Close)
+	}
+
 	// 2. Auth cache
 	authCache := mauth.NewCache(storage.Users, cfg.UserManagement.AnonymousEnabled || !cfg.UserManagement.Enabled, cfg.UserManagement.AclCheckOnSub())
 	if err := authCache.Refresh(ctx); err != nil {
@@ -249,17 +254,7 @@ func configureVolatileStores(ctx context.Context, cfg *config.Config, storage *s
 		appendStorageCloser(storage, db.Close)
 	}
 	if cfg.QueueStore() == config.StoreMemory {
-		db, err := storesqlite.OpenMemory("monstermq-queue-" + cfg.NodeID)
-		if err != nil {
-			return err
-		}
-		queue := storesqlite.NewQueueStore(db, 30*time.Second)
-		if err := queue.EnsureTable(ctx); err != nil {
-			_ = db.Close()
-			return err
-		}
-		storage.Queue = queue
-		appendStorageCloser(storage, db.Close)
+		storage.Queue = storememory.NewQueueStore(30 * time.Second)
 	}
 	return nil
 }
@@ -273,6 +268,22 @@ func appendStorageCloser(storage *stores.Storage, closeFn func() error) {
 		}
 		if err := closeFn(); err != nil && first == nil {
 			first = err
+		}
+		return first
+	}
+}
+
+func prependStorageCloser(storage *stores.Storage, closeFn func() error) {
+	prev := storage.Closer
+	storage.Closer = func() error {
+		var first error
+		if err := closeFn(); err != nil {
+			first = err
+		}
+		if prev != nil {
+			if err := prev(); err != nil && first == nil {
+				first = err
+			}
 		}
 		return first
 	}

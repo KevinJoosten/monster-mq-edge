@@ -155,7 +155,7 @@ type Config struct {
 	//   false → rely on mochi-mqtt's in-memory inflight buffer. Messages are lost
 	//           on broker restart but lower latency / no DB writes per publish.
 	QueuedMessagesEnabled bool `yaml:"QueuedMessagesEnabled"`
-	MaxQueueMessages      int  `yaml:"MaxQueueMessages"`
+	MaxQueueMessages      *int `yaml:"MaxQueueMessages"`
 }
 
 func Default() *Config {
@@ -177,7 +177,7 @@ func Default() *Config {
 		Logging:               LoggingConfig{Level: "INFO", MqttSyslogEnabled: false, RingBufferSize: 1000},
 		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
 		QueuedMessagesEnabled: true,
-		MaxQueueMessages:      1000,
+		MaxQueueMessages:      nil,
 	}
 }
 
@@ -265,4 +265,16 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// GetMaxQueueMessages returns the effective max queue size for offline sessions.
+// If unset (nil), it returns 1000 for MEMORY queue store type, and 0 (unlimited) for other stores.
+func (c *Config) GetMaxQueueMessages() int {
+	if c.MaxQueueMessages != nil {
+		return *c.MaxQueueMessages
+	}
+	if c.QueueStore() == StoreMemory {
+		return 1000
+	}
+	return 0
 }

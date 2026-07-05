@@ -138,7 +138,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	}
 
 	if cfg.QueuedMessagesEnabled {
-		if err := server.AddHook(NewQueueHook(storage, subs, server, logger, cfg.MaxQueueMessages), nil); err != nil {
+		if err := server.AddHook(NewQueueHook(storage, subs, server, logger, cfg.GetMaxQueueMessages()), nil); err != nil {
 			return nil, fmt.Errorf("add queue hook: %w", err)
 		}
 	}

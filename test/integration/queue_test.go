@@ -344,10 +344,11 @@ func TestQueueStoreMemoryDoesNotUseSQLiteFile(t *testing.T) {
 func TestQueuedMessagesLimit(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "queuelimit.db")
 	port := 25002
+	limit := 2
 
 	// Start broker with MaxQueueMessages = 2
 	srv := startWithDB(t, port, dbPath, func(c *config.Config) {
-		c.MaxQueueMessages = 2
+		c.MaxQueueMessages = &limit
 	})
 
 	// 1) Subscribe with persistent session
@@ -393,7 +394,7 @@ func TestQueuedMessagesLimit(t *testing.T) {
 	srv.Close()
 	time.Sleep(150 * time.Millisecond)
 	srv2 := startWithDB(t, port, dbPath, func(c *config.Config) {
-		c.MaxQueueMessages = 2
+		c.MaxQueueMessages = &limit
 	})
 	defer srv2.Close()
 

@@ -86,8 +86,10 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		return nil, err
 	}
 
-	if storage.Queue != nil {
-		storage.Queue = stores.NewBatchingQueueStore(storage.Queue, 1000, 50*time.Millisecond)
+	if storage.Queue != nil && cfg.QueueStore() != config.StoreMemory {
+		batchSize := cfg.GetQueueBatchSize()
+		flushInterval := time.Duration(cfg.GetQueueFlushIntervalMs()) * time.Millisecond
+		storage.Queue = stores.NewBatchingQueueStore(storage.Queue, batchSize, flushInterval)
 		prependStorageCloser(storage, storage.Queue.Close)
 	}
 

@@ -156,6 +156,8 @@ type Config struct {
 	//           on broker restart but lower latency / no DB writes per publish.
 	QueuedMessagesEnabled bool `yaml:"QueuedMessagesEnabled"`
 	MaxQueueMessages      *int `yaml:"MaxQueueMessages"`
+	QueueBatchSize        *int `yaml:"QueueBatchSize"`
+	QueueFlushIntervalMs  *int `yaml:"QueueFlushIntervalMs"`
 }
 
 func Default() *Config {
@@ -178,6 +180,8 @@ func Default() *Config {
 		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
 		QueuedMessagesEnabled: true,
 		MaxQueueMessages:      nil,
+		QueueBatchSize:        nil,
+		QueueFlushIntervalMs:  nil,
 	}
 }
 
@@ -277,4 +281,20 @@ func (c *Config) GetMaxQueueMessages() int {
 		return 1000
 	}
 	return 0
+}
+
+// GetQueueBatchSize returns the configured bulk enqueue batch size, defaulting to 1000.
+func (c *Config) GetQueueBatchSize() int {
+	if c.QueueBatchSize != nil {
+		return *c.QueueBatchSize
+	}
+	return 1000
+}
+
+// GetQueueFlushIntervalMs returns the configured bulk enqueue flush interval in milliseconds, defaulting to 50.
+func (c *Config) GetQueueFlushIntervalMs() int {
+	if c.QueueFlushIntervalMs != nil {
+		return *c.QueueFlushIntervalMs
+	}
+	return 50
 }

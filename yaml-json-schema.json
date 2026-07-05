@@ -112,6 +112,16 @@
       "type": "integer",
       "description": "Max offline messages queued per client. 0 means unlimited.",
       "default": 1000
+    },
+    "QueueBatchSize": {
+      "type": "integer",
+      "description": "The maximum number of queued messages to buffer before flushing to the database.",
+      "default": 1000
+    },
+    "QueueFlushIntervalMs": {
+      "type": "integer",
+      "description": "The interval in milliseconds to wait before flushing buffered queued messages to the database.",
+      "default": 50
     }
   },
   "$defs": {

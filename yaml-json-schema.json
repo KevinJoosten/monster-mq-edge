@@ -107,6 +107,11 @@
       "type": "boolean",
       "description": "true: store messages for offline persistent (clean=false) sessions in the QueueStore so they survive broker restart. false: rely on mochi-mqtt's in-memory inflight buffer (lost on restart).",
       "default": true
+    },
+    "MaxQueueMessages": {
+      "type": "integer",
+      "description": "Max offline messages queued per client. 0 or unset means unlimited.",
+      "default": 0
     }
   },
   "$defs": {

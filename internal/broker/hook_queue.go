@@ -24,14 +24,15 @@ import (
 // reconnect the rows are dequeued and written directly to the now-online client.
 type QueueHook struct {
 	mqtt.HookBase
-	store  *stores.Storage
-	subs   *topic.SubscriptionIndex
-	server *mqtt.Server
-	logger *slog.Logger
+	store            *stores.Storage
+	subs             *topic.SubscriptionIndex
+	server           *mqtt.Server
+	logger           *slog.Logger
+	maxQueueMessages int
 }
 
-func NewQueueHook(s *stores.Storage, subs *topic.SubscriptionIndex, server *mqtt.Server, logger *slog.Logger) *QueueHook {
-	return &QueueHook{store: s, subs: subs, server: server, logger: logger}
+func NewQueueHook(s *stores.Storage, subs *topic.SubscriptionIndex, server *mqtt.Server, logger *slog.Logger, maxQueue int) *QueueHook {
+	return &QueueHook{store: s, subs: subs, server: server, logger: logger, maxQueueMessages: maxQueue}
 }
 
 func (h *QueueHook) ID() string { return "monstermq-queue" }
@@ -56,6 +57,28 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 	if len(subs) == 0 {
 		return
 	}
+
+	if h.maxQueueMessages > 0 {
+		filteredSubs := make([]string, 0, len(subs))
+		for _, cid := range subs {
+			count, err := h.store.Queue.Count(ctx, cid)
+			if err != nil {
+				h.logger.Warn("queue hook: check client queue size failed", "client", cid, "err", err)
+				filteredSubs = append(filteredSubs, cid)
+				continue
+			}
+			if count < int64(h.maxQueueMessages) {
+				filteredSubs = append(filteredSubs, cid)
+			} else {
+				h.logger.Warn("queue hook: client queue full, message dropped", "client", cid, "limit", h.maxQueueMessages, "count", count, "topic", pk.TopicName)
+			}
+		}
+		subs = filteredSubs
+		if len(subs) == 0 {
+			return
+		}
+	}
+
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,

@@ -340,3 +340,96 @@ func TestQueueStoreMemoryDoesNotUseSQLiteFile(t *testing.T) {
 		t.Fatal("expected no file-backed messagequeue table")
 	}
 }
+
+func TestQueuedMessagesLimit(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "queuelimit.db")
+	port := 25002
+
+	// Start broker with MaxQueueMessages = 2
+	srv := startWithDB(t, port, dbPath, func(c *config.Config) {
+		c.MaxQueueMessages = 2
+	})
+
+	// 1) Subscribe with persistent session
+	sub := mqtt.NewClient(persistentOpts(port, "persistent-limit-sub"))
+	if tok := sub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := sub.Subscribe("queuelimit/+", 1, nil); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	sub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let session row update to connected=false
+
+	// 2) Publish 3 messages while subscriber is offline
+	pub := mqtt.NewClient(mqttOpts(port, "publisher"))
+	if tok := pub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	for _, payload := range []string{"m1", "m2", "m3"} {
+		if tok := pub.Publish("queuelimit/topic", 1, false, payload); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+			t.Fatal(tok.Error())
+		}
+	}
+	pub.Disconnect(100)
+	time.Sleep(200 * time.Millisecond) // let queue hook flush
+
+	// 3) Verify only 2 rows are enqueued (since limit is 2)
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var rows int
+	if err := conn.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM messagequeue WHERE client_id = ?`, "persistent-limit-sub").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("expected exactly 2 enqueued rows due to limit, got %d", rows)
+	}
+
+	// 4) Reconnect and verify only 2 messages are received
+	srv.Close()
+	time.Sleep(150 * time.Millisecond)
+	srv2 := startWithDB(t, port, dbPath, func(c *config.Config) {
+		c.MaxQueueMessages = 2
+	})
+	defer srv2.Close()
+
+	sub2 := mqtt.NewClient(persistentOpts(port, "persistent-limit-sub"))
+	if tok := sub2.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	defer sub2.Disconnect(100)
+
+	got := make(chan string, 3)
+	if tok := sub2.Subscribe("queuelimit/+", 1, func(_ mqtt.Client, m mqtt.Message) {
+		got <- string(m.Payload())
+	}); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+
+	// We expect exactly 2 messages (m1 and m2, as m3 was dropped)
+	received := []string{}
+	for i := 0; i < 2; i++ {
+		select {
+		case payload := <-got:
+			received = append(received, payload)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for message %d, received so far: %v", i+1, received)
+		}
+	}
+
+	// Verify no third message arrives
+	select {
+	case payload := <-got:
+		t.Fatalf("received unexpected third message: %s", payload)
+	case <-time.After(500 * time.Millisecond):
+		// Success: no third message received
+	}
+
+	if received[0] != "m1" || received[1] != "m2" {
+		t.Fatalf("expected payloads [m1, m2], got %v", received)
+	}
+}

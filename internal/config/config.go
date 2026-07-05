@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 
 type StoreType string
 
@@ -152,11 +155,12 @@ type Config struct {
 	//   false → rely on mochi-mqtt's in-memory inflight buffer. Messages are lost
 	//           on broker restart but lower latency / no DB writes per publish.
 	QueuedMessagesEnabled bool `yaml:"QueuedMessagesEnabled"`
+	MaxQueueMessages      int  `yaml:"MaxQueueMessages"`
 }
 
 func Default() *Config {
 	return &Config{
-		NodeID:                "edge",
+		NodeID:                "",
 		TCP:                   Listener{Enabled: true, Port: 1883},
 		TCPS:                  Listener{Enabled: false, Port: 8883},
 		WS:                    Listener{Enabled: false, Port: 1884},
@@ -173,6 +177,7 @@ func Default() *Config {
 		Logging:               LoggingConfig{Level: "INFO", MqttSyslogEnabled: false, RingBufferSize: 1000},
 		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
 		QueuedMessagesEnabled: true,
+		MaxQueueMessages:      0,
 	}
 }
 
@@ -216,6 +221,13 @@ func (c *Config) MetricsStore() StoreType {
 // Called after the YAML is parsed so the broker fails fast on bad config
 // instead of silently falling back to a default.
 func (c *Config) Validate() error {
+	if c.NodeID == "" {
+		if hn, err := os.Hostname(); err == nil && hn != "" {
+			c.NodeID = hn
+		} else {
+			c.NodeID = "edge"
+		}
+	}
 	if c.DefaultStoreType == "" {
 		return fmt.Errorf("DefaultStoreType is required")
 	}

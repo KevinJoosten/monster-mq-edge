@@ -58,3 +58,7 @@ Features:
 # retained only until broker restart.
 # false -> rely on mochi-mqtt's in-memory inflight buffer.
 QueuedMessagesEnabled: true
+
+# MaxQueueMessages: 1000  -> limit the max number of offline messages queued per client.
+# 0 or unset means unlimited.
+MaxQueueMessages: 0

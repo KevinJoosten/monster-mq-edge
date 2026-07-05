@@ -107,6 +107,9 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 	}
 	out := make([]string, 0, len(candidates))
 	for _, c := range candidates {
+		if cl, ok := h.server.Clients.Get(c.ClientID); ok && !cl.Closed() {
+			continue
+		}
 		info, err := h.store.Sessions.GetSession(ctx, c.ClientID)
 		if err != nil || info == nil {
 			continue

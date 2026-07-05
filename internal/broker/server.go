@@ -145,9 +145,12 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	}
 
 	if cfg.QueuedMessagesEnabled {
+		logger.Info("queued messages: enabled", "store", cfg.QueueStore(), "max", cfg.GetMaxQueueMessages())
 		if err := server.AddHook(NewQueueHook(storage, subs, server, logger, cfg.GetMaxQueueMessages()), nil); err != nil {
 			return nil, fmt.Errorf("add queue hook: %w", err)
 		}
+	} else {
+		logger.Info("queued messages: disabled (relying on mochi-mqtt in-memory inflight)")
 	}
 
 	// 5. Restore retained messages from storage into mochi's in-memory retained map.

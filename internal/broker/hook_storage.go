@@ -61,6 +61,7 @@ func (h *StorageHook) Provides(b byte) bool {
 		mqtt.OnRetainMessage,
 		mqtt.OnPacketSent,
 		mqtt.OnSelectRetainedMessages,
+		mqtt.OnClientExpired,
 	}, []byte{b})
 }
 
@@ -81,9 +82,21 @@ func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 	}
 }
 
-func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, _ bool) {
-	if err := h.store.Sessions.SetConnected(context.Background(), cl.ID, false); err != nil {
-		h.logger.Warn("session disconnect persist failed", "client", cl.ID, "err", err)
+func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	if expire {
+		if err := h.store.Sessions.DelClient(context.Background(), cl.ID); err != nil {
+			h.logger.Warn("session delete failed on disconnect", "client", cl.ID, "err", err)
+		}
+	} else {
+		if err := h.store.Sessions.SetConnected(context.Background(), cl.ID, false); err != nil {
+			h.logger.Warn("session disconnect persist failed", "client", cl.ID, "err", err)
+		}
+	}
+}
+
+func (h *StorageHook) OnClientExpired(cl *mqtt.Client) {
+	if err := h.store.Sessions.DelClient(context.Background(), cl.ID); err != nil {
+		h.logger.Warn("session delete failed on client expiry", "client", cl.ID, "err", err)
 	}
 }
 

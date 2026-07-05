@@ -110,8 +110,8 @@
     },
     "MaxQueueMessages": {
       "type": "integer",
-      "description": "Max offline messages queued per client. 0 or unset means unlimited.",
-      "default": 0
+      "description": "Max offline messages queued per client. 0 means unlimited.",
+      "default": 1000
     }
   },
   "$defs": {

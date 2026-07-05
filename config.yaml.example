@@ -60,5 +60,5 @@ Features:
 QueuedMessagesEnabled: true
 
 # MaxQueueMessages: 1000  -> limit the max number of offline messages queued per client.
-# 0 or unset means unlimited.
-MaxQueueMessages: 0
+# 0 means unlimited.
+MaxQueueMessages: 1000

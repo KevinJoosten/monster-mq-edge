@@ -177,7 +177,7 @@ func Default() *Config {
 		Logging:               LoggingConfig{Level: "INFO", MqttSyslogEnabled: false, RingBufferSize: 1000},
 		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
 		QueuedMessagesEnabled: true,
-		MaxQueueMessages:      0,
+		MaxQueueMessages:      1000,
 	}
 }
 

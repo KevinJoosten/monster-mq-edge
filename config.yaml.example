@@ -45,7 +45,7 @@ Logging:
 
 GraphQL:
   Enabled: true
-  Port: 8080
+  Port: 4000
 
 Features:
   MqttClient: true

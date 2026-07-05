@@ -188,6 +188,10 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 		return
 	}
 
+	if err := h.store.Queue.ResetVisibility(ctx, cl.ID); err != nil {
+		h.logger.Warn("queue hook: reset visibility failed", "client", cl.ID, "err", err)
+	}
+
 	for {
 		batch, err := h.store.Queue.Dequeue(ctx, cl.ID, 100)
 		if err != nil {

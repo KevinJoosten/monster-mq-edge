@@ -138,6 +138,10 @@ func (b *BatchingQueueStore) PurgeAll(ctx context.Context) (int64, error) {
 	return b.underlying.PurgeAll(ctx)
 }
 
+func (b *BatchingQueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	return b.underlying.ResetVisibility(ctx, clientID)
+}
+
 func (b *BatchingQueueStore) Count(ctx context.Context, clientID string) (int64, error) {
 	underlyingCount, err := b.underlying.Count(ctx, clientID)
 	if err != nil {

@@ -156,6 +156,20 @@ func (q *QueueStore) CountAll(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	queue, ok := q.queues[clientID]
+	if !ok {
+		return nil
+	}
+	for _, item := range queue {
+		item.vt = 0
+	}
+	return nil
+}
+
 func (q *QueueStore) Close() error {
 	return nil
 }

@@ -230,6 +230,11 @@ func (q *QueueStore) PurgeAll(ctx context.Context) (int64, error) {
 	return n, nil
 }
 
+func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	_, err := q.db.Exec(fmt.Sprintf("UPDATE %s SET vt = 0 WHERE client_id = ?", queueTable), clientID)
+	return err
+}
+
 func (q *QueueStore) Count(ctx context.Context, clientID string) (int64, error) {
 	row := q.db.Conn().QueryRowContext(ctx, fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE client_id = ?", queueTable), clientID)
 	var n int64

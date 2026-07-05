@@ -846,6 +846,11 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 	return out, rows.Err()
 }
 
+func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	_, err := q.db.pool.Exec(ctx, `UPDATE messagequeue SET vt = 0 WHERE client_id = $1`, clientID)
+	return err
+}
+
 func (q *QueueStore) Ack(ctx context.Context, clientID, messageUUID string) error {
 	_, err := q.db.pool.Exec(ctx, `DELETE FROM messagequeue WHERE client_id=$1 AND message_uuid=$2`, clientID, messageUUID)
 	return err

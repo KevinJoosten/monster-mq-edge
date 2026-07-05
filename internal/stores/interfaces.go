@@ -91,6 +91,7 @@ type QueueStore interface {
 	Ack(ctx context.Context, clientID string, messageUUID string) error
 	PurgeForClient(ctx context.Context, clientID string) (int64, error)
 	PurgeAll(ctx context.Context) (int64, error)
+	ResetVisibility(ctx context.Context, clientID string) error
 	Count(ctx context.Context, clientID string) (int64, error)
 	CountAll(ctx context.Context) (int64, error)
 	Close() error

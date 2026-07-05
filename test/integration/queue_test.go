@@ -434,3 +434,70 @@ func TestQueuedMessagesLimit(t *testing.T) {
 		t.Fatalf("expected payloads [m1, m2], got %v", received)
 	}
 }
+
+func TestQueueVisibilityResetOnReconnect(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "vis.db")
+	port := 25003
+
+	// 1) Start broker and establish a persistent subscriber
+	srv := startWithDB(t, port, dbPath, nil)
+	sub := mqtt.NewClient(persistentOpts(port, "persistent-vis-sub"))
+	if tok := sub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := sub.Subscribe("vis/+", 1, nil); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	sub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let session go offline
+
+	// 2) Publish a message to queue it
+	pub := mqtt.NewClient(mqttOpts(port, "publisher"))
+	if tok := pub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := pub.Publish("vis/topic", 1, false, "vis-msg"); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	pub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let it queue
+
+	// 3) Access SQLite database to set visibility timeout to a future timestamp (simulate failed write)
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	futureVT := time.Now().Add(10 * time.Minute).Unix()
+	if _, err := conn.Exec(`UPDATE messagequeue SET vt = ? WHERE client_id = ?`, futureVT, "persistent-vis-sub"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restart the broker on the same DB file so we test session establishment
+	srv.Close()
+	time.Sleep(150 * time.Millisecond)
+	srv2 := startWithDB(t, port, dbPath, nil)
+	defer srv2.Close()
+
+	// 4) Reconnect immediately (before 10 min visibility expires) and verify message is still delivered
+	// (ResetVisibility should reset vt to 0 and allow immediate delivery)
+	opts := persistentOpts(port, "persistent-vis-sub")
+	got := make(chan string, 1)
+	opts.SetDefaultPublishHandler(func(_ mqtt.Client, m mqtt.Message) {
+		got <- string(m.Payload())
+	})
+	sub2 := mqtt.NewClient(opts)
+	if tok := sub2.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	defer sub2.Disconnect(100)
+
+	select {
+	case payload := <-got:
+		if payload != "vis-msg" {
+			t.Fatalf("expected payload vis-msg, got %s", payload)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout: queued message got stuck due to future visibility timeout")
+	}
+}

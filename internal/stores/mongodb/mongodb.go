@@ -736,6 +736,11 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 	return out, nil
 }
 
+func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	_, err := q.coll().UpdateMany(ctx, bson.M{"client_id": clientID}, bson.M{"$set": bson.M{"vt": 0}})
+	return err
+}
+
 func (q *QueueStore) Ack(ctx context.Context, clientID, messageUUID string) error {
 	_, err := q.coll().DeleteOne(ctx, bson.M{"client_id": clientID, "message_uuid": messageUUID})
 	return err

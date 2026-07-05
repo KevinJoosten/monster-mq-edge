@@ -1,0 +1,35 @@
+#!/bin/sh
+set -e
+
+# Add system group monstermq if it doesn't exist
+if ! getent group monstermq >/dev/null; then
+    groupadd --system monstermq
+fi
+
+# Add system user monstermq if it doesn't exist
+if ! getent passwd monstermq >/dev/null; then
+    useradd --system \
+            -g monstermq \
+            -d /var/lib/monstermq \
+            -s /usr/sbin/nologin \
+            -c "MonsterMQ System User" \
+            monstermq
+fi
+
+# Create directories and set correct owner/group
+mkdir -p /var/lib/monstermq
+chown -R monstermq:monstermq /var/lib/monstermq
+
+# Ensure config directory exists and has correct permissions
+mkdir -p /etc/monstermq
+if [ -f /etc/monstermq/config.yaml ]; then
+    chown -R monstermq:monstermq /etc/monstermq
+    chmod 640 /etc/monstermq/config.yaml
+fi
+
+# Systemd integration
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+    systemctl enable monstermq-edge.service || true
+    systemctl restart monstermq-edge.service || true
+fi

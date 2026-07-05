@@ -1,0 +1,7 @@
+Package: monstermq-edge
+Version: {{VERSION}}
+Section: misc
+Priority: optional
+Architecture: {{ARCH}}
+Maintainer: {{MAINTAINER}}
+Description: {{DESCRIPTION}}

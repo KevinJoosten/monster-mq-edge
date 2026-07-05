@@ -5,7 +5,7 @@ PKG := ./cmd/monstermq-edge
 LDFLAGS := -s -w
 GOFLAGS := -trimpath
 
-.PHONY: build build-arm64 build-armv7 test test-race lint clean gen run
+.PHONY: build build-arm64 build-armv7 test test-race lint clean gen run deb-arm64 deb-armv7 deb-amd64 deb-all
 
 build:
 	@mkdir -p bin
@@ -24,6 +24,18 @@ build-amd64:
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build $(GOFLAGS) -ldflags="$(LDFLAGS)" -o bin/monstermq-edge-linux-amd64 $(PKG)
 
 build-all: build-amd64 build-arm64 build-armv7
+
+deb-arm64:
+	./scripts/build-deb.sh --arch arm64
+
+deb-armv7:
+	./scripts/build-deb.sh --arch armhf
+
+deb-amd64:
+	./scripts/build-deb.sh --arch amd64
+
+deb-all: deb-arm64 deb-armv7 deb-amd64
+
 
 test:
 	go test ./... -count=1 -timeout 60s

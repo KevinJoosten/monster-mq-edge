@@ -61,7 +61,7 @@ QueuedMessagesEnabled: true
 
 # MaxQueueMessages: 1000  -> limit the max number of offline messages queued per client.
 # 0 means unlimited.
-MaxQueueMessages: 1000
+MaxQueueMessages: 100000
 
 # QueueBatchSize: 1000  -> bulk write batch size limit before flushing to the database
 QueueBatchSize: 1000

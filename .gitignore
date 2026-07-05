@@ -5,5 +5,5 @@ data/
 *.db-wal
 .idea/
 .vscode/
-config.yaml
+/config.yaml
 .DS_Store

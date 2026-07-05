@@ -1,5 +1,3 @@
-NodeId: edge-rpi-01
-
 TCP:  { Enabled: true,  Port: 1883, Address: "0.0.0.0" }  # use "::" for IPv6
 TCPS: { Enabled: false, Port: 8883, Address: "0.0.0.0", KeyStorePath: "data/keystore", KeyStorePassword: "" }
 WS:   { Enabled: true,  Port: 1884, Address: "0.0.0.0" }
@@ -15,23 +13,22 @@ SessionStoreType: MEMORY
 RetainedStoreType: MEMORY
 
 SQLite:
-  Path: ./data/monstermq.db
+  Path: /var/lib/monstermq/monstermq.db
 
-Postgres:
-  Url: "postgres://localhost:5432/monstermq"
-  User: monstermq
-  Pass: monstermq
+# Postgres:
+#   Url: "postgres://localhost:5432/monstermq"
+#   User: monstermq
+#   Pass: monstermq
 
-MongoDB:
-  Url: "mongodb://localhost:27017"
-  Database: monstermq
+# MongoDB:
+#   Url: "mongodb://localhost:27017"
+#   Database: monstermq
 
 UserManagement:
   Enabled: false
   PasswordAlgorithm: BCRYPT
   AnonymousEnabled: true
   AclCacheEnabled: true
-  # AclCheckOnSubscription: false  # When false, wildcard subscriptions are allowed; ACL enforced at delivery time.
 
 Metrics:
   Enabled: true
@@ -69,4 +66,3 @@ QueueBatchSize: 1000
 
 # QueueFlushIntervalMs -> flush interval in milliseconds for buffered queue writes
 QueueFlushIntervalMs: 250
-

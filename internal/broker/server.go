@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"time"
 
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/hooks/auth"
-	"github.com/mochi-mqtt/server/v2/listeners"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/hooks/auth"
+	"monstermq.io/edge/internal/mqtt/listeners"
 
 	"monstermq.io/edge/internal/archive"
 	mauth "monstermq.io/edge/internal/auth"

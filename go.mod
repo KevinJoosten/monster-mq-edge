@@ -10,7 +10,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/jackc/pgx/v5 v5.9.2
-	github.com/mochi-mqtt/server/v2 v2.7.9
+	github.com/rs/xid v1.4.0
 	github.com/vektah/gqlparser/v2 v2.5.33
 	go.mongodb.org/mongo-driver/v2 v2.5.1
 	golang.org/x/crypto v0.51.0
@@ -28,10 +28,11 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/rs/xid v1.4.0 // indirect
+	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/sosodev/duration v1.4.0 // indirect
 	github.com/urfave/cli/v3 v3.7.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
@@ -48,5 +49,3 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
-
-replace github.com/mochi-mqtt/server/v2 => ./mochi-mqtt-server

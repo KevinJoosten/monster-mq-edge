@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/packets"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/packets"
 
 	"monstermq.io/edge/internal/pubsub"
 	"monstermq.io/edge/internal/stores"

@@ -84,12 +84,6 @@ if ! git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
         echo "Pushing branch ${CURRENT_BRANCH} and tag ${TAG}..."
         git push origin "$CURRENT_BRANCH"
         git push origin "$TAG"
-        
-        # Also push submodule if needed
-        SUBMODULE_BRANCH=$(git -C mochi-mqtt-server branch --show-current)
-        echo "Pushing submodule branch ${SUBMODULE_BRANCH} and tag ${TAG}..."
-        git -C mochi-mqtt-server push origin "$SUBMODULE_BRANCH"
-        git -C mochi-mqtt-server push origin "$TAG"
     else
         echo -e "${RED}Error: Tag must be pushed to remote before creating GitHub release.${NC}"
         exit 1

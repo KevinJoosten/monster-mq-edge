@@ -4,11 +4,11 @@
 # This script:
 # 1. Reads version from version.txt
 # 2. Increments the patch version
-# 3. Checks for uncommitted changes in both parent and submodule repos
+# 3. Checks for uncommitted changes in the repository
 # 4. Updates version.txt to the new clean version
 # 5. Writes release notes
 # 6. Commits changes
-# 7. Creates git tags on both parent and mochi-mqtt-server submodule repos
+# 7. Creates git tag on the repository
 # 8. Prints pushing instructions
 
 set -e  # Exit on error
@@ -54,9 +54,9 @@ echo -e "${YELLOW}Current version: ${BASE_VERSION}${NC}"
 echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
 echo -e "${GREEN}Git SHA: ${GIT_SHA}${NC}"
 
-# Check for uncommitted changes in parent repository
+# Check for uncommitted changes in repository
 if ! git diff-index --quiet HEAD --; then
-    echo -e "${YELLOW}Warning: You have uncommitted changes in parent repo${NC}"
+    echo -e "${YELLOW}Warning: You have uncommitted changes${NC}"
     read -p "Do you want to continue? (y/n) " -n 1 -r
     echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -65,27 +65,10 @@ if ! git diff-index --quiet HEAD --; then
     fi
 fi
 
-# Check for uncommitted changes in mochi-mqtt-server submodule
-if ! git -C mochi-mqtt-server diff-index --quiet HEAD --; then
-    echo -e "${YELLOW}Warning: You have uncommitted changes in mochi-mqtt-server submodule${NC}"
-    read -p "Do you want to continue? (y/n) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo -e "${RED}Release cancelled${NC}"
-        exit 1
-    fi
-fi
-
-# Check if parent tag already exists
+# Check if tag already exists
 if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Parent tag v${NEW_VERSION} already exists${NC}"
+    echo -e "${RED}Error: Tag v${NEW_VERSION} already exists${NC}"
     echo -e "${YELLOW}Please manually update version.txt if you need a different version${NC}"
-    exit 1
-fi
-
-# Check if submodule tag already exists
-if git -C mochi-mqtt-server rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
-    echo -e "${RED}Error: Submodule tag v${NEW_VERSION} already exists${NC}"
     exit 1
 fi
 
@@ -119,27 +102,18 @@ git commit -m "Bump version to ${NEW_VERSION}" || {
     echo -e "${YELLOW}No changes to commit${NC}"
 }
 
-# Create git tag on parent repo
-echo -e "${YELLOW}Creating parent tag v${NEW_VERSION}...${NC}"
+# Create git tag on repository
+echo -e "${YELLOW}Creating tag v${NEW_VERSION}...${NC}"
 git tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
-echo -e "${GREEN}✓ Created parent tag v${NEW_VERSION}${NC}"
-
-# Create git tag on mochi-mqtt-server submodule repo
-echo -e "${YELLOW}Creating submodule tag v${NEW_VERSION}...${NC}"
-git -C mochi-mqtt-server tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
-echo -e "${GREEN}✓ Created submodule tag v${NEW_VERSION}${NC}"
+echo -e "${GREEN}✓ Created tag v${NEW_VERSION}${NC}"
 
 echo ""
 echo -e "${GREEN}=== Release Complete ===${NC}"
-echo -e "${GREEN}Version ${NEW_VERSION} has been tagged in both repositories.${NC}"
+echo -e "${GREEN}Version ${NEW_VERSION} has been tagged.${NC}"
 echo ""
 echo -e "${YELLOW}Next steps to push commits and tags to remote:${NC}"
-echo "  1. Push parent commits and tag:"
+echo "  1. Push commits and tag:"
 PARENT_BRANCH=$(git branch --show-current)
 echo "     git push origin ${PARENT_BRANCH}"
 echo "     git push origin v${NEW_VERSION}"
-echo "  2. Push submodule commits and tag:"
-SUBMODULE_BRANCH=$(git -C mochi-mqtt-server branch --show-current)
-echo "     git -C mochi-mqtt-server push origin ${SUBMODULE_BRANCH}"
-echo "     git -C mochi-mqtt-server push origin v${NEW_VERSION}"
 echo ""

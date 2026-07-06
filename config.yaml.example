@@ -55,6 +55,12 @@ Features:
   WinCCOa: false
   DeviceImportExport: true
 
+HostMonitoring:
+  Enabled: false
+  BaseTopic: "nodes/{NodeId}/host"
+  IntervalSeconds: 60
+  QoS: 0
+
 # QueuedMessagesEnabled: true  -> use QueueStoreType for offline persistent
 # (clean=false) sessions. With QueueStoreType: MEMORY, queued messages are
 # retained only until broker restart.

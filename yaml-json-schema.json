@@ -103,6 +103,31 @@
         "DeviceImportExport": { "type": "boolean", "description": "Enable generic device configuration export/import GraphQL operations." }
       }
     },
+    "HostMonitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "description": "Enable host monitoring to periodically publish CPU, memory, and disk stats to MQTT."
+        },
+        "BaseTopic": {
+          "type": "string",
+          "description": "The topic format to publish metrics to. Replaces {NodeId} or {node_id}."
+        },
+        "IntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The frequency in seconds to collect and publish stats."
+        },
+        "QoS": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "The MQTT QoS level to publish messages with (0, 1, or 2)."
+        }
+      }
+    },
     "QueuedMessagesEnabled": {
       "type": "boolean",
       "description": "true: store messages for offline persistent (clean=false) sessions in the QueueStore so they survive broker restart. false: rely on mochi-mqtt's in-memory inflight buffer (lost on restart).",

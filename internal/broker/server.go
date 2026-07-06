@@ -27,6 +27,7 @@ import (
 	storepg "monstermq.io/edge/internal/stores/postgres"
 	storesqlite "monstermq.io/edge/internal/stores/sqlite"
 	"monstermq.io/edge/internal/topic"
+	"monstermq.io/edge/internal/hostinfo"
 )
 
 // Server is the top-level lifecycle holder for the edge broker.
@@ -44,6 +45,7 @@ type Server struct {
 	winCCUa     *winccua.Manager
 	winCCOa     *winccoa.Manager
 	gqlSrv      *gql.Server
+	hostMonitor *hostinfo.Collector
 	metricsCtx  context.Context
 	metricsStop context.CancelFunc
 }
@@ -226,6 +228,12 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		winCCOa = winccoa.NewManager(storage.DeviceConfig, publishFn, cfg.NodeID, logger)
 	}
 
+	// 7c. Host Monitoring
+	var hostMonitor *hostinfo.Collector
+	if cfg.HostMonitoring.Enabled {
+		hostMonitor = hostinfo.NewCollector(cfg.NodeID, cfg.HostMonitoring.IntervalSeconds, cfg.HostMonitoring.BaseTopic, cfg.HostMonitoring.QoS, publishFn, logger)
+	}
+
 	// 8. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled {
@@ -237,6 +245,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		cfg: cfg, logger: logger, mochi: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, gqlSrv: gqlSrv,
+		hostMonitor: hostMonitor,
 	}, nil
 }
 
@@ -357,6 +366,9 @@ func (s *Server) Serve() error {
 			s.logger.Warn("winccoa start error", "err", err)
 		}
 	}
+	if s.hostMonitor != nil {
+		s.hostMonitor.Start(context.Background())
+	}
 	if s.gqlSrv != nil {
 		go func() {
 			if err := s.gqlSrv.Start(); err != nil {
@@ -376,6 +388,9 @@ func (s *Server) Close() error {
 	}
 	if s.winCCOa != nil {
 		s.winCCOa.Stop()
+	}
+	if s.hostMonitor != nil {
+		s.hostMonitor.Stop()
 	}
 	if s.metricsStop != nil {
 		s.metricsStop()

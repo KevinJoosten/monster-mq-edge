@@ -113,6 +113,13 @@ type GraphQLConfig struct {
 	Port    int  `yaml:"Port"`
 }
 
+type HostMonitoringConfig struct {
+	Enabled         bool   `yaml:"Enabled"`
+	BaseTopic       string `yaml:"BaseTopic"`
+	IntervalSeconds int    `yaml:"IntervalSeconds"`
+	QoS             int    `yaml:"QoS"`
+}
+
 // FeaturesConfig is a flat set of feature toggles, mirroring the Features
 // section in the Java monster-mq broker. Each field enables/disables a
 // subsystem at startup. Add new flags here as they come online.
@@ -146,6 +153,7 @@ type Config struct {
 	Logging        LoggingConfig        `yaml:"Logging"`
 	GraphQL        GraphQLConfig        `yaml:"GraphQL"`
 	Features       FeaturesConfig       `yaml:"Features"`
+	HostMonitoring HostMonitoringConfig `yaml:"HostMonitoring"`
 
 	// QueuedMessagesEnabled selects how messages for offline persistent (clean=false)
 	// sessions are held until the client reconnects.
@@ -178,6 +186,13 @@ func Default() *Config {
 		Metrics:               MetricsConfig{Enabled: true, CollectionIntervalSeconds: 1, RetentionHours: 168, MaxHistoryRows: 3600},
 		Logging:               LoggingConfig{Level: "INFO", MqttSyslogEnabled: false, RingBufferSize: 1000},
 		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
+		Features:              FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false}, // Note: actually features default to false, we don't have to change features list but keep default format clean
+		HostMonitoring: HostMonitoringConfig{
+			Enabled:         false,
+			BaseTopic:       "nodes/{NodeId}/host",
+			IntervalSeconds: 60,
+			QoS:             0,
+		},
 		QueuedMessagesEnabled: true,
 		MaxQueueMessages:      nil,
 		QueueBatchSize:        nil,
@@ -266,6 +281,17 @@ func (c *Config) Validate() error {
 		case StoreNone, StoreMemory, StoreSQLite, StorePostgres, StoreMongoDB:
 		default:
 			return fmt.Errorf("invalid Metrics.StoreType %q (must be one of NONE, MEMORY, SQLITE, POSTGRES, MONGODB)", c.Metrics.StoreType)
+		}
+	}
+	if c.HostMonitoring.Enabled {
+		if c.HostMonitoring.IntervalSeconds <= 0 {
+			return fmt.Errorf("HostMonitoring.IntervalSeconds must be greater than 0")
+		}
+		if c.HostMonitoring.QoS < 0 || c.HostMonitoring.QoS > 2 {
+			return fmt.Errorf("HostMonitoring.QoS must be between 0 and 2")
+		}
+		if c.HostMonitoring.BaseTopic == "" {
+			return fmt.Errorf("HostMonitoring.BaseTopic cannot be empty when enabled")
 		}
 	}
 	return nil

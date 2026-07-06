@@ -1,0 +1,8 @@
+Release v0.1.5
+Built from commit: b5c66b2
+Date: 2026-07-06 23:07:47
+
+Changes since v0.1.4:
+---
+b5c66b2 Optimize publish hot path: cut per-subscriber allocations and idle hook work
+e8bf9ff Refactor CPU metrics to nested structure with host and broker fields

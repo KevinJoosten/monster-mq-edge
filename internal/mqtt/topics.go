@@ -266,6 +266,16 @@ func (s *Subscriptions) Add(id string, val packets.Subscription) {
 	s.internal[id] = val
 }
 
+// Each calls fn for every subscription while holding the read lock, avoiding
+// the map copy of GetAll. fn must not call back into methods of s.
+func (s *Subscriptions) Each(fn func(id string, sub packets.Subscription)) {
+	s.RLock()
+	defer s.RUnlock()
+	for k, v := range s.internal {
+		fn(k, v)
+	}
+}
+
 // GetAll returns all subscriptions.
 func (s *Subscriptions) GetAll() map[string]packets.Subscription {
 	s.RLock()
@@ -633,18 +643,25 @@ func (x *TopicsIndex) gatherSubscriptions(topic string, particle *particle, subs
 		subs.Subscriptions = map[string]packets.Subscription{}
 	}
 
-	for client, sub := range particle.subscriptions.GetAll() {
+	particle.subscriptions.Each(func(client string, sub packets.Subscription) {
 		if len(sub.Filter) > 0 && topic[0] == '$' && (sub.Filter[0] == '+' || sub.Filter[0] == '#') { // don't match $ topics with top level wildcards [MQTT-4.7.1-1] [MQTT-4.7.1-2]
-			continue
+			return
 		}
 
 		cls, ok := subs.Subscriptions[client]
+		if !ok && sub.Identifier == 0 {
+			// Fast path: first match for this client and no subscription
+			// identifier to track — Merge would only allocate an Identifiers
+			// map holding a zero id, which is skipped at encode time anyway.
+			subs.Subscriptions[client] = sub
+			return
+		}
 		if !ok {
 			cls = sub
 		}
 
 		subs.Subscriptions[client] = cls.Merge(sub)
-	}
+	})
 }
 
 // gatherSharedSubscriptions gathers all shared subscriptions for a particle.

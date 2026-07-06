@@ -37,6 +37,9 @@ type StorageHook struct {
 // Implemented by archive.Manager. Kept as an interface here to avoid an import cycle.
 type ArchiveDispatcher interface {
 	Dispatch(msg stores.BrokerMessage)
+	// HasGroups reports whether any archive group is active; when false the
+	// publish hot path skips building the BrokerMessage for dispatch.
+	HasGroups() bool
 }
 
 // MetricsCounter is implemented by metrics.Collector.
@@ -143,6 +146,11 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 	if h.metrics != nil {
 		h.metrics.IncIn()
 	}
+	hasBus := h.bus != nil && h.bus.HasSubscribers()
+	hasArchive := h.archives != nil && h.archives.HasGroups()
+	if !hasBus && !hasArchive {
+		return // nobody consumes the message; skip uuid/copy/dispatch entirely
+	}
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
@@ -158,8 +166,10 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		v := pk.Properties.MessageExpiryInterval
 		msg.MessageExpiryInterval = &v
 	}
-	h.bus.Publish(msg)
-	if h.archives != nil {
+	if hasBus {
+		h.bus.Publish(msg)
+	}
+	if hasArchive {
 		h.archives.Dispatch(msg)
 	}
 }

@@ -3,6 +3,7 @@ package pubsub
 import (
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"monstermq.io/edge/internal/stores"
 )
@@ -11,9 +12,10 @@ import (
 // MQTT-style topic events. Subscribers can express MQTT-style topic filters
 // (with + and # wildcards).
 type Bus struct {
-	mu   sync.RWMutex
-	next int
-	subs map[int]*sub
+	mu    sync.RWMutex
+	next  int
+	subs  map[int]*sub
+	count atomic.Int32
 }
 
 type sub struct {
@@ -32,8 +34,15 @@ func (b *Bus) Subscribe(filters []string, buffer int) (id int, ch <-chan stores.
 	b.next++
 	id = b.next
 	b.subs[id] = &sub{filters: filters, ch: c}
+	b.count.Store(int32(len(b.subs)))
 	b.mu.Unlock()
 	return id, c
+}
+
+// HasSubscribers reports whether any subscription is active. Lock-free so the
+// broker publish hot path can skip message construction when the bus is idle.
+func (b *Bus) HasSubscribers() bool {
+	return b.count.Load() > 0
 }
 
 func (b *Bus) Unsubscribe(id int) {
@@ -42,6 +51,7 @@ func (b *Bus) Unsubscribe(id int) {
 	if s, ok := b.subs[id]; ok {
 		close(s.ch)
 		delete(b.subs, id)
+		b.count.Store(int32(len(b.subs)))
 	}
 }
 

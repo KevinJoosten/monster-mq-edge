@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"monstermq.io/edge/internal/config"
@@ -32,7 +33,14 @@ type Manager struct {
 
 	mu          sync.RWMutex
 	groups      map[string]*Group
+	groupCount  atomic.Int32 // mirrors len(groups) for the lock-free HasGroups probe
 	deployError map[string]string // last deploy error per group name (for the dashboard)
+}
+
+// HasGroups reports whether any archive group is running. Lock-free so the
+// broker publish hot path can skip message construction when idle.
+func (m *Manager) HasGroups() bool {
+	return m.groupCount.Load() > 0
 }
 
 func (m *Manager) StartMetrics(ctx context.Context, store stores.MetricsStore, interval time.Duration) {
@@ -155,6 +163,7 @@ func (m *Manager) startGroup(ctx context.Context, c stores.ArchiveGroupConfig) e
 	g.Start()
 	m.mu.Lock()
 	m.groups[c.Name] = g
+	m.groupCount.Store(int32(len(m.groups)))
 	delete(m.deployError, c.Name)
 	m.mu.Unlock()
 	closeOnErr = false
@@ -398,6 +407,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 			g.Stop()
 			m.mu.Lock()
 			delete(m.groups, name)
+			m.groupCount.Store(int32(len(m.groups)))
 			m.mu.Unlock()
 		}
 	}
@@ -462,6 +472,7 @@ func (m *Manager) Stop() {
 		g.Stop()
 	}
 	m.groups = map[string]*Group{}
+	m.groupCount.Store(0)
 }
 
 // Snapshot returns a stable view of the current groups for resolvers.

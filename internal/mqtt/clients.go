@@ -18,6 +18,7 @@ import (
 
 	"github.com/rs/xid"
 
+	"monstermq.io/edge/internal/mqtt/mempool"
 	"monstermq.io/edge/internal/mqtt/packets"
 )
 
@@ -556,7 +557,8 @@ func (cl *Client) WritePacket(pk packets.Packet) error {
 	pk = cl.ops.hooks.OnPacketEncode(cl, pk)
 
 	var err error
-	buf := new(bytes.Buffer)
+	buf := mempool.GetBuffer()
+	defer mempool.PutBuffer(buf)
 	switch pk.FixedHeader.Type {
 	case packets.Connect:
 		err = pk.ConnectEncode(buf)

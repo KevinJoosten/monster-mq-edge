@@ -72,10 +72,20 @@ make build-amd64    # Linux x86_64
 
 ## Docker
 
+To build the Docker image, you can run the build script under `docker/` which automatically tags the image and embeds the version from `version.txt`:
+
+```bash
+./docker/build.sh -n
+```
+
+Or you can build manually with `docker buildx` from the repository root:
+
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t monstermq-edge:latest .
 docker run --rm -p 1883:1883 -p 8080:8080 monstermq-edge:latest
 ```
+
+The version is automatically read from `version.txt` at the root of the repository and embedded in the binary's version metadata. To override the version during manual builds, pass `--build-arg VERSION=1.2.3`.
 
 ## Storage backends
 

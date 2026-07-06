@@ -3,6 +3,7 @@
 package hostinfo
 
 import (
+	"os"
 	"runtime"
 	"syscall"
 	"time"
@@ -15,6 +16,8 @@ type SystemMonitor struct {
 	lastUserTime          uint64
 	lastProcessCPUTime    time.Duration
 	lastProcessSampleTime time.Time
+	lastDiskStats         DiskStats
+	lastDiskTime          time.Time
 }
 
 type FILETIME struct {
@@ -198,7 +201,18 @@ func (sm *SystemMonitor) readMemory() (MemoryStats, error) {
 }
 
 func (sm *SystemMonitor) readDisk() (DiskStats, error) {
-	pathPtr, err := syscall.UTF16PtrFromString(".")
+	now := time.Now()
+	if !sm.lastDiskTime.IsZero() && now.Sub(sm.lastDiskTime) < 30*time.Second {
+		return sm.lastDiskStats, nil
+	}
+
+	drive := os.Getenv("SystemDrive")
+	if drive == "" {
+		drive = "C:"
+	}
+	drive += "\\"
+
+	pathPtr, err := syscall.UTF16PtrFromString(drive)
 	if err != nil {
 		return DiskStats{}, err
 	}
@@ -222,10 +236,14 @@ func (sm *SystemMonitor) readDisk() (DiskStats, error) {
 		usedPercent = (float64(used) / float64(total)) * 100.0
 	}
 
-	return DiskStats{
+	stats := DiskStats{
 		Total:       total,
 		Free:        free,
 		Used:        used,
 		UsedPercent: usedPercent,
-	}, nil
+	}
+
+	sm.lastDiskStats = stats
+	sm.lastDiskTime = now
+	return stats, nil
 }

@@ -24,6 +24,8 @@ type SystemMonitor struct {
 	lastCPUSteal          uint64
 	lastProcessCPUTime    time.Duration
 	lastProcessSampleTime time.Time
+	lastDiskStats         DiskStats
+	lastDiskTime          time.Time
 }
 
 func NewSystemMonitor() *SystemMonitor {
@@ -229,6 +231,11 @@ func (sm *SystemMonitor) readMemory() (MemoryStats, error) {
 }
 
 func (sm *SystemMonitor) readDisk() (DiskStats, error) {
+	now := time.Now()
+	if !sm.lastDiskTime.IsZero() && now.Sub(sm.lastDiskTime) < 30*time.Second {
+		return sm.lastDiskStats, nil
+	}
+
 	var stat syscall.Statfs_t
 	err := syscall.Statfs("/", &stat)
 	if err != nil {
@@ -243,10 +250,14 @@ func (sm *SystemMonitor) readDisk() (DiskStats, error) {
 		usedPercent = (float64(used) / float64(total)) * 100.0
 	}
 
-	return DiskStats{
+	stats := DiskStats{
 		Total:       total,
 		Free:        free,
 		Used:        used,
 		UsedPercent: usedPercent,
-	}, nil
+	}
+
+	sm.lastDiskStats = stats
+	sm.lastDiskTime = now
+	return stats, nil
 }

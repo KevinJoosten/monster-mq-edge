@@ -1,11 +1,15 @@
 package hostinfo
 
 type HostStats struct {
-	Timestamp         string      `json:"timestamp"` // RFC3339 format
-	CPUPercent        float64     `json:"cpuPercent"`
-	ProcessCPUPercent float64     `json:"processCpuPercent"`
-	Memory            MemoryStats `json:"memory"`
-	Disk              DiskStats   `json:"disk"`
+	Timestamp string      `json:"timestamp"` // RFC3339 format
+	CPU       CPUStats    `json:"cpu"`
+	Memory    MemoryStats `json:"memory"`
+	Disk      DiskStats   `json:"disk"`
+}
+
+type CPUStats struct {
+	Host   float64 `json:"host"`
+	Broker float64 `json:"broker"`
 }
 
 type MemoryStats struct {

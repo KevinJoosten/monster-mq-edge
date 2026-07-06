@@ -75,11 +75,13 @@ func (sm *SystemMonitor) GetStats() (HostStats, error) {
 	}
 
 	return HostStats{
-		Timestamp:         time.Now().Format(time.RFC3339),
-		CPUPercent:        cpu,
-		ProcessCPUPercent: procCPU,
-		Memory:            mem,
-		Disk:              disk,
+		Timestamp: time.Now().Format(time.RFC3339),
+		CPU: CPUStats{
+			Host:   cpu,
+			Broker: procCPU,
+		},
+		Memory: mem,
+		Disk:   disk,
 	}, nil
 }
 

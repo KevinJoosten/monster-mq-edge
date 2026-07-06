@@ -67,13 +67,13 @@ func TestHostMonitoring(t *testing.T) {
 			t.Error("expected non-empty timestamp")
 		}
 
-		if stats.CPUPercent < 0 || stats.CPUPercent > 100 {
-			t.Errorf("invalid CPUPercent: %f", stats.CPUPercent)
+		if stats.CPU.Host < 0 || stats.CPU.Host > 100 {
+			t.Errorf("invalid CPU.Host: %f", stats.CPU.Host)
 		}
 
 		maxProcCPU := 100.0 * float64(runtime.NumCPU())
-		if stats.ProcessCPUPercent < 0 || stats.ProcessCPUPercent > maxProcCPU {
-			t.Errorf("invalid ProcessCPUPercent: %f (max: %f)", stats.ProcessCPUPercent, maxProcCPU)
+		if stats.CPU.Broker < 0 || stats.CPU.Broker > maxProcCPU {
+			t.Errorf("invalid CPU.Broker: %f (max: %f)", stats.CPU.Broker, maxProcCPU)
 		}
 
 		if stats.Memory.Total == 0 {

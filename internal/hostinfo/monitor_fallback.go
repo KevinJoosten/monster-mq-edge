@@ -26,9 +26,11 @@ func (sm *SystemMonitor) GetStats() (HostStats, error) {
 	}
 
 	return HostStats{
-		Timestamp:         time.Now().Format(time.RFC3339),
-		CPUPercent:        0.0, // Omitted on macOS/fallback
-		ProcessCPUPercent: procCPU,
+		Timestamp: time.Now().Format(time.RFC3339),
+		CPU: CPUStats{
+			Host:   0.0, // Omitted on macOS/fallback
+			Broker: procCPU,
+		},
 		Memory: MemoryStats{
 			Total:       16106127360, // 15 GB placeholder
 			Free:        8053063680,  // 7.5 GB placeholder

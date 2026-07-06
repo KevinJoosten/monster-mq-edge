@@ -1,0 +1,13 @@
+Release v0.1.4
+Built from commit: 9bc8eb1
+Date: 2026-07-06 20:23:20
+
+Changes since v0.1.3:
+---
+9bc8eb1 Remove mochi-mqtt-server submodule references
+19b2ee8 Restore dynamic process CPU percentage tracking on macOS fallback using non-blocking syscall.Getrusage
+f9723ef Optimize host monitoring: update default interval to 10s, decouple telemetry collection from publishing, and cache failed disk queries
+66b2d27 Optimize Windows and Linux host monitoring with disk stat caching and local drive targeting
+17583d5 Implement host monitoring feature for Windows and Linux
+1fb5b60 refactor: inline mochi-mqtt-server as internal/mqtt package and remove git submodule
+882e251 Add Docker version embedding and release automation

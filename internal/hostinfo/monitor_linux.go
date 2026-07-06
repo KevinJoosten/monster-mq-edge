@@ -236,6 +236,8 @@ func (sm *SystemMonitor) readDisk() (DiskStats, error) {
 		return sm.lastDiskStats, nil
 	}
 
+	sm.lastDiskTime = now // Prevent retry storm if we fail below
+
 	var stat syscall.Statfs_t
 	err := syscall.Statfs("/", &stat)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,6 +17,9 @@ type Collector struct {
 	publishFn func(topic string, payload []byte, retain bool, qos byte) error
 	logger    *slog.Logger
 	stopCh    chan struct{}
+
+	mu        sync.RWMutex
+	lastStats HostStats
 }
 
 func NewCollector(
@@ -48,12 +52,13 @@ func NewCollector(
 
 func (c *Collector) Start(ctx context.Context) {
 	c.logger.Info("starting host monitoring service", "topic", c.topic, "interval", c.interval)
+
+	// Worker goroutine: periodically gathers system stats
 	go func() {
+		c.updateStats()
+
 		ticker := time.NewTicker(c.interval)
 		defer ticker.Stop()
-
-		// Publish initial reading right away on start
-		c.collectAndPublish()
 
 		for {
 			select {
@@ -62,7 +67,28 @@ func (c *Collector) Start(ctx context.Context) {
 			case <-c.stopCh:
 				return
 			case <-ticker.C:
-				c.collectAndPublish()
+				c.updateStats()
+			}
+		}
+	}()
+
+	// Publisher goroutine: periodically publishes the latest cached stats
+	go func() {
+		time.Sleep(50 * time.Millisecond) // Let worker perform initial query first
+
+		ticker := time.NewTicker(c.interval)
+		defer ticker.Stop()
+
+		c.publishLatest()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.stopCh:
+				return
+			case <-ticker.C:
+				c.publishLatest()
 			}
 		}
 	}()
@@ -76,10 +102,24 @@ func (c *Collector) Stop() {
 	}
 }
 
-func (c *Collector) collectAndPublish() {
+func (c *Collector) updateStats() {
 	stats, err := c.monitor.GetStats()
 	if err != nil {
 		c.logger.Error("failed to get host stats", "err", err)
+		return
+	}
+
+	c.mu.Lock()
+	c.lastStats = stats
+	c.mu.Unlock()
+}
+
+func (c *Collector) publishLatest() {
+	c.mu.RLock()
+	stats := c.lastStats
+	c.mu.RUnlock()
+
+	if stats.Timestamp == "" {
 		return
 	}
 

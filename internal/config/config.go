@@ -190,7 +190,7 @@ func Default() *Config {
 		HostMonitoring: HostMonitoringConfig{
 			Enabled:         false,
 			BaseTopic:       "nodes/{NodeId}/host",
-			IntervalSeconds: 60,
+			IntervalSeconds: 10,
 			QoS:             0,
 		},
 		QueuedMessagesEnabled: true,

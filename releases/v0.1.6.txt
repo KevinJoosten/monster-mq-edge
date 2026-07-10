@@ -1,0 +1,9 @@
+Release v0.1.6
+Built from commit: b0f2413
+Date: 2026-07-10 12:22:57
+
+Changes since v0.1.5:
+---
+b0f2413 Organize dev plans: move implemented to dev/done and rename all to lowercase
+881d8da Create PLAN-rpi-gpio-bridge.md
+eb91a2b Renamed make.sh to build.sh

@@ -31,20 +31,36 @@ func (q *QueueStore) Enqueue(ctx context.Context, clientID string, msg stores.Br
 }
 
 func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage, clientIDs []string) error {
+	_, err := q.EnqueueMultiLimited(ctx, msg, clientIDs, 0)
+	return err
+}
+
+func (q *QueueStore) EnqueueMultiLimited(ctx context.Context, msg stores.BrokerMessage, clientIDs []string, limit int64) (stores.QueueEnqueueResult, error) {
+	if err := ctx.Err(); err != nil {
+		return stores.QueueEnqueueResult{}, err
+	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	msgCopy := msg
 	msgCopy.IsQueued = true
 
+	result := stores.QueueEnqueueResult{
+		Accepted: make([]string, 0, len(clientIDs)),
+	}
 	for _, cid := range clientIDs {
+		if limit > 0 && int64(len(q.queues[cid])) >= limit {
+			result.Rejected = append(result.Rejected, cid)
+			continue
+		}
 		item := &queueItem{
 			msg: msgCopy,
 			vt:  0, // initially visible
 		}
 		q.queues[cid] = append(q.queues[cid], item)
+		result.Accepted = append(result.Accepted, cid)
 	}
-	return nil
+	return result, nil
 }
 
 func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatchItem) error {
@@ -154,6 +170,21 @@ func (q *QueueStore) CountAll(ctx context.Context) (int64, error) {
 		total += int64(len(qSlice))
 	}
 	return total, nil
+}
+
+func (q *QueueStore) CountsByClient(ctx context.Context) (map[string]int64, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+	counts := make(map[string]int64, len(q.queues))
+	for clientID, items := range q.queues {
+		if len(items) > 0 {
+			counts[clientID] = int64(len(items))
+		}
+	}
+	return counts, nil
 }
 
 func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {

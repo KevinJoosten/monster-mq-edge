@@ -101,27 +101,6 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 		return
 	}
 
-	if h.maxQueueMessages > 0 {
-		filteredSubs := make([]string, 0, len(subs))
-		for _, cid := range subs {
-			count, err := h.store.Queue.Count(ctx, cid)
-			if err != nil {
-				h.logger.Warn("queue hook: check client queue size failed", "client", cid, "err", err)
-				filteredSubs = append(filteredSubs, cid)
-				continue
-			}
-			if count < int64(h.maxQueueMessages) {
-				filteredSubs = append(filteredSubs, cid)
-			} else {
-				h.logger.Warn("queue hook: client queue full, message dropped", "client", cid, "limit", h.maxQueueMessages, "count", count, "topic", pk.TopicName)
-			}
-		}
-		subs = filteredSubs
-		if len(subs) == 0 {
-			return
-		}
-	}
-
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
@@ -131,8 +110,13 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 		IsRetain:    pk.FixedHeader.Retain,
 		Time:        time.Now().UTC(),
 	}
-	if err := h.store.Queue.EnqueueMulti(ctx, msg, subs); err != nil {
+	result, err := h.store.Queue.EnqueueMultiLimited(ctx, msg, subs, int64(h.maxQueueMessages))
+	if err != nil {
 		h.logger.Warn("queue hook: enqueue failed", "topic", pk.TopicName, "n", len(subs), "err", err)
+		return
+	}
+	if len(result.Rejected) > 0 {
+		h.logger.Warn("queue hook: client queues full, message dropped", "topic", pk.TopicName, "clients", len(result.Rejected), "limit", h.maxQueueMessages)
 	}
 }
 
@@ -181,9 +165,9 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 //
 // Gating rule:
 //   - mochi inflight non-empty  → in-process reconnect; mochi handled it.
-//                                 Purge our DB queue so it doesn't double-fire.
+//     Purge our DB queue so it doesn't double-fire.
 //   - mochi inflight empty      → post-restart (or first attach); mochi has no
-//                                 history. Drain our DB queue and replay.
+//     history. Drain our DB queue and replay.
 func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 	persistent := !((cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryInterval == 0) || (cl.Properties.ProtocolVersion < 5 && cl.Properties.Clean))
 	h.mu.Lock()
@@ -269,4 +253,3 @@ func (h *QueueHook) OnClientExpired(cl *mqtt.Client) {
 	delete(h.offline, cl.ID)
 	h.mu.Unlock()
 }
-

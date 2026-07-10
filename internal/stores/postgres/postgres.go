@@ -745,14 +745,35 @@ func (q *QueueStore) Enqueue(ctx context.Context, clientID string, msg stores.Br
 }
 
 func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage, clientIDs []string) error {
+	_, err := q.EnqueueMultiLimited(ctx, msg, clientIDs, 0)
+	return err
+}
+
+func (q *QueueStore) EnqueueMultiLimited(ctx context.Context, msg stores.BrokerMessage, clientIDs []string, limit int64) (stores.QueueEnqueueResult, error) {
 	if len(clientIDs) == 0 {
-		return nil
+		return stores.QueueEnqueueResult{}, nil
 	}
 	tx, err := q.db.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return stores.QueueEnqueueResult{}, err
 	}
+	result := stores.QueueEnqueueResult{Accepted: make([]string, 0, len(clientIDs))}
 	for _, cid := range clientIDs {
+		if limit > 0 {
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, cid); err != nil {
+				_ = tx.Rollback(ctx)
+				return stores.QueueEnqueueResult{}, err
+			}
+			var count int64
+			if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM messagequeue WHERE client_id=$1`, cid).Scan(&count); err != nil {
+				_ = tx.Rollback(ctx)
+				return stores.QueueEnqueueResult{}, err
+			}
+			if count >= limit {
+				result.Rejected = append(result.Rejected, cid)
+				continue
+			}
+		}
 		retained := 0
 		if msg.IsRetain {
 			retained = 1
@@ -767,39 +788,43 @@ func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage,
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 			msg.MessageUUID, cid, msg.TopicName, msg.Payload, int(msg.QoS), retained, msg.ClientID, msg.Time.UnixMilli(), expiry); err != nil {
 			_ = tx.Rollback(ctx)
-			return err
+			return stores.QueueEnqueueResult{}, err
 		}
+		result.Accepted = append(result.Accepted, cid)
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return stores.QueueEnqueueResult{}, err
+	}
+	return result, nil
 }
 
 func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatchItem) error {
 	if len(batch) == 0 {
 		return nil
 	}
-	tx, err := q.db.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
+	rows := make([][]any, 0, len(batch))
 	for _, item := range batch {
 		retained := 0
 		if item.Message.IsRetain {
 			retained = 1
 		}
-		var expiry *int64
+		var expiry any
 		if item.Message.MessageExpiryInterval != nil {
-			v := int64(*item.Message.MessageExpiryInterval)
-			expiry = &v
+			expiry = int64(*item.Message.MessageExpiryInterval)
 		}
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO messagequeue (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			item.Message.MessageUUID, item.ClientID, item.Message.TopicName, item.Message.Payload, int(item.Message.QoS), retained, item.Message.ClientID, item.Message.Time.UnixMilli(), expiry); err != nil {
-			_ = tx.Rollback(ctx)
-			return err
-		}
+		rows = append(rows, []any{
+			item.Message.MessageUUID, item.ClientID, item.Message.TopicName,
+			item.Message.Payload, int(item.Message.QoS), retained,
+			item.Message.ClientID, item.Message.Time.UnixMilli(), expiry,
+		})
 	}
-	return tx.Commit(ctx)
+	_, err := q.db.pool.CopyFrom(
+		ctx,
+		pgx.Identifier{"messagequeue"},
+		[]string{"message_uuid", "client_id", "topic", "payload", "qos", "retained", "publisher_id", "creation_time", "message_expiry_interval"},
+		pgx.CopyFromRows(rows),
+	)
+	return err
 }
 
 func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int) ([]stores.BrokerMessage, error) {
@@ -878,6 +903,23 @@ func (q *QueueStore) CountAll(ctx context.Context) (int64, error) {
 	var n int64
 	err := q.db.pool.QueryRow(ctx, `SELECT COUNT(*) FROM messagequeue`).Scan(&n)
 	return n, err
+}
+func (q *QueueStore) CountsByClient(ctx context.Context) (map[string]int64, error) {
+	rows, err := q.db.pool.Query(ctx, `SELECT client_id, COUNT(*) FROM messagequeue GROUP BY client_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[string]int64)
+	for rows.Next() {
+		var clientID string
+		var count int64
+		if err := rows.Scan(&clientID, &count); err != nil {
+			return nil, err
+		}
+		counts[clientID] = count
+	}
+	return counts, rows.Err()
 }
 
 // UserStore ---------------------------------------------------------------

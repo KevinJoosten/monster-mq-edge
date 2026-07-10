@@ -2,117 +2,263 @@ package stores
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
 
+var ErrQueueStoreClosed = errors.New("queue store closed")
+
+type batchFlushRequest struct {
+	ctx    context.Context
+	result chan error
+}
+
+type batchCommand struct {
+	item  QueueBatchItem
+	flush *batchFlushRequest
+}
+
 type BatchingQueueStore struct {
 	underlying    QueueStore
-	ch            chan QueueBatchItem
-	done          chan struct{}
-	wg            sync.WaitGroup
+	ch            chan batchCommand
+	closing       chan struct{}
+	workerStop    chan struct{}
+	workerDone    chan struct{}
 	maxBatchSize  int
 	flushInterval time.Duration
 
-	// In-memory pending counts to prevent limits race condition
-	mu            sync.RWMutex
-	pendingCounts map[string]int64
+	// opsMu lets enqueues run concurrently but serializes purge and shutdown
+	// against admission. The worker never acquires it.
+	opsMu sync.RWMutex
+
+	stateMu  sync.RWMutex
+	depths   map[string]int64
+	flushErr error
+	closed   bool
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
-func NewBatchingQueueStore(underlying QueueStore, maxBatchSize int, flushInterval time.Duration) *BatchingQueueStore {
+func NewBatchingQueueStore(ctx context.Context, underlying QueueStore, maxBatchSize int, flushInterval time.Duration) (*BatchingQueueStore, error) {
+	if maxBatchSize <= 0 {
+		maxBatchSize = 1000
+	}
+	if flushInterval <= 0 {
+		flushInterval = 50 * time.Millisecond
+	}
+	depths, err := underlying.CountsByClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("hydrate queue depths: %w", err)
+	}
 	b := &BatchingQueueStore{
 		underlying:    underlying,
-		ch:            make(chan QueueBatchItem, 10000),
-		done:          make(chan struct{}),
+		ch:            make(chan batchCommand, 10000),
+		closing:       make(chan struct{}),
+		workerStop:    make(chan struct{}),
+		workerDone:    make(chan struct{}),
 		maxBatchSize:  maxBatchSize,
 		flushInterval: flushInterval,
-		pendingCounts: make(map[string]int64),
+		depths:        depths,
 	}
-	b.wg.Add(1)
 	go b.worker()
-	return b
+	return b, nil
 }
 
 func (b *BatchingQueueStore) Enqueue(ctx context.Context, clientID string, msg BrokerMessage) error {
-	select {
-	case b.ch <- QueueBatchItem{ClientID: clientID, Message: msg}:
-		b.mu.Lock()
-		b.pendingCounts[clientID]++
-		b.mu.Unlock()
-		return nil
-	case <-b.done:
-		return b.underlying.Enqueue(ctx, clientID, msg)
-	}
+	_, err := b.EnqueueMultiLimited(ctx, msg, []string{clientID}, 0)
+	return err
 }
 
 func (b *BatchingQueueStore) EnqueueMulti(ctx context.Context, msg BrokerMessage, clientIDs []string) error {
-	b.mu.Lock()
-	for _, cid := range clientIDs {
+	_, err := b.EnqueueMultiLimited(ctx, msg, clientIDs, 0)
+	return err
+}
+
+func (b *BatchingQueueStore) EnqueueMultiLimited(ctx context.Context, msg BrokerMessage, clientIDs []string, limit int64) (QueueEnqueueResult, error) {
+	if len(clientIDs) == 0 {
+		return QueueEnqueueResult{}, nil
+	}
+	b.opsMu.RLock()
+	defer b.opsMu.RUnlock()
+
+	accepted, rejected, err := b.reserve(clientIDs, limit)
+	if err != nil {
+		return QueueEnqueueResult{Rejected: append([]string(nil), clientIDs...)}, err
+	}
+	result := QueueEnqueueResult{Accepted: accepted, Rejected: rejected}
+	for i, clientID := range accepted {
 		select {
-		case b.ch <- QueueBatchItem{ClientID: cid, Message: msg}:
-			b.pendingCounts[cid]++
-		case <-b.done:
-			b.mu.Unlock()
-			return b.underlying.EnqueueMulti(ctx, msg, clientIDs)
+		case b.ch <- batchCommand{item: QueueBatchItem{ClientID: clientID, Message: msg}}:
+		case <-ctx.Done():
+			b.release(accepted[i:])
+			result.Accepted = accepted[:i]
+			result.Rejected = append(result.Rejected, accepted[i:]...)
+			return result, ctx.Err()
+		case <-b.closing:
+			b.release(accepted[i:])
+			result.Accepted = accepted[:i]
+			result.Rejected = append(result.Rejected, accepted[i:]...)
+			return result, ErrQueueStoreClosed
 		}
 	}
-	b.mu.Unlock()
-	return nil
+	return result, nil
+}
+
+func (b *BatchingQueueStore) reserve(clientIDs []string, limit int64) (accepted, rejected []string, err error) {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	if b.closed {
+		return nil, nil, ErrQueueStoreClosed
+	}
+	if b.flushErr != nil {
+		return nil, nil, fmt.Errorf("queue batch flush failed: %w", b.flushErr)
+	}
+	accepted = make([]string, 0, len(clientIDs))
+	for _, clientID := range clientIDs {
+		if limit > 0 && b.depths[clientID] >= limit {
+			rejected = append(rejected, clientID)
+			continue
+		}
+		b.depths[clientID]++
+		accepted = append(accepted, clientID)
+	}
+	return accepted, rejected, nil
+}
+
+func (b *BatchingQueueStore) release(clientIDs []string) {
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+	for _, clientID := range clientIDs {
+		b.releaseLocked(clientID, 1)
+	}
+}
+
+func (b *BatchingQueueStore) releaseLocked(clientID string, count int64) {
+	remaining := b.depths[clientID] - count
+	if remaining <= 0 {
+		delete(b.depths, clientID)
+		return
+	}
+	b.depths[clientID] = remaining
 }
 
 func (b *BatchingQueueStore) EnqueueBatch(ctx context.Context, batch []QueueBatchItem) error {
-	return b.underlying.EnqueueBatch(ctx, batch)
+	if len(batch) == 0 {
+		return nil
+	}
+	b.opsMu.RLock()
+	defer b.opsMu.RUnlock()
+	if err := b.checkAvailable(); err != nil {
+		return err
+	}
+	if err := b.underlying.EnqueueBatch(ctx, batch); err != nil {
+		return err
+	}
+	b.stateMu.Lock()
+	for _, item := range batch {
+		b.depths[item.ClientID]++
+	}
+	b.stateMu.Unlock()
+	return nil
+}
+
+func (b *BatchingQueueStore) checkAvailable() error {
+	b.stateMu.RLock()
+	defer b.stateMu.RUnlock()
+	if b.closed {
+		return ErrQueueStoreClosed
+	}
+	if b.flushErr != nil {
+		return fmt.Errorf("queue batch flush failed: %w", b.flushErr)
+	}
+	return nil
 }
 
 func (b *BatchingQueueStore) worker() {
-	defer b.wg.Done()
+	defer close(b.workerDone)
 	ticker := time.NewTicker(b.flushInterval)
 	defer ticker.Stop()
 
-	var batch []QueueBatchItem
-
-	flush := func() {
+	batch := make([]QueueBatchItem, 0, b.maxBatchSize)
+	flushFailed := false
+	flush := func(ctx context.Context) error {
 		if len(batch) == 0 {
-			return
+			flushFailed = false
+			b.setFlushError(nil)
+			return nil
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = b.underlying.EnqueueBatch(ctx, batch)
-		cancel()
-
-		b.mu.Lock()
-		for _, item := range batch {
-			b.pendingCounts[item.ClientID]--
-			if b.pendingCounts[item.ClientID] <= 0 {
-				delete(b.pendingCounts, item.ClientID)
-			}
+		err := b.underlying.EnqueueBatch(ctx, batch)
+		flushFailed = err != nil
+		b.setFlushError(err)
+		if err == nil {
+			batch = batch[:0]
 		}
-		b.mu.Unlock()
-
-		batch = nil
+		return err
 	}
 
 	for {
 		select {
-		case item := <-b.ch:
-			batch = append(batch, item)
-			if len(batch) >= b.maxBatchSize {
-				flush()
+		case cmd := <-b.ch:
+			if cmd.flush != nil {
+				cmd.flush.result <- flush(cmd.flush.ctx)
+				continue
+			}
+			batch = append(batch, cmd.item)
+			if len(batch) >= b.maxBatchSize && !flushFailed {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = flush(ctx)
+				cancel()
 			}
 		case <-ticker.C:
-			flush()
-		case <-b.done:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = flush(ctx)
+			cancel()
+		case <-b.workerStop:
 			for {
 				select {
-				case item := <-b.ch:
-					batch = append(batch, item)
+				case cmd := <-b.ch:
+					if cmd.flush != nil {
+						cmd.flush.result <- flush(cmd.flush.ctx)
+						continue
+					}
+					batch = append(batch, cmd.item)
 				default:
-					goto doneDraining
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					_ = flush(ctx)
+					cancel()
+					return
 				}
 			}
-		doneDraining:
-			flush()
-			return
 		}
+	}
+}
+
+func (b *BatchingQueueStore) setFlushError(err error) {
+	b.stateMu.Lock()
+	b.flushErr = err
+	b.stateMu.Unlock()
+}
+
+func (b *BatchingQueueStore) flush(ctx context.Context) error {
+	result := make(chan error, 1)
+	req := batchFlushRequest{ctx: ctx, result: result}
+	select {
+	case b.ch <- batchCommand{flush: &req}:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.workerDone:
+		return ErrQueueStoreClosed
+	}
+	select {
+	case err := <-result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-b.workerDone:
+		return ErrQueueStoreClosed
 	}
 }
 
@@ -121,54 +267,100 @@ func (b *BatchingQueueStore) Dequeue(ctx context.Context, clientID string, batch
 }
 
 func (b *BatchingQueueStore) Ack(ctx context.Context, clientID, messageUUID string) error {
-	return b.underlying.Ack(ctx, clientID, messageUUID)
+	b.opsMu.RLock()
+	defer b.opsMu.RUnlock()
+	if err := b.underlying.Ack(ctx, clientID, messageUUID); err != nil {
+		return err
+	}
+	b.stateMu.Lock()
+	b.releaseLocked(clientID, 1)
+	b.stateMu.Unlock()
+	return nil
 }
 
 func (b *BatchingQueueStore) PurgeForClient(ctx context.Context, clientID string) (int64, error) {
-	b.mu.Lock()
-	delete(b.pendingCounts, clientID)
-	b.mu.Unlock()
-	return b.underlying.PurgeForClient(ctx, clientID)
+	b.opsMu.Lock()
+	defer b.opsMu.Unlock()
+	if err := b.flush(ctx); err != nil {
+		return 0, err
+	}
+	n, err := b.underlying.PurgeForClient(ctx, clientID)
+	if err != nil {
+		return 0, err
+	}
+	b.stateMu.Lock()
+	delete(b.depths, clientID)
+	b.stateMu.Unlock()
+	return n, nil
 }
 
 func (b *BatchingQueueStore) PurgeAll(ctx context.Context) (int64, error) {
-	b.mu.Lock()
-	b.pendingCounts = make(map[string]int64)
-	b.mu.Unlock()
-	return b.underlying.PurgeAll(ctx)
+	b.opsMu.Lock()
+	defer b.opsMu.Unlock()
+	if err := b.flush(ctx); err != nil {
+		return 0, err
+	}
+	n, err := b.underlying.PurgeAll(ctx)
+	if err != nil {
+		return 0, err
+	}
+	b.stateMu.Lock()
+	b.depths = make(map[string]int64)
+	b.stateMu.Unlock()
+	return n, nil
 }
 
 func (b *BatchingQueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	b.opsMu.Lock()
+	defer b.opsMu.Unlock()
+	if err := b.flush(ctx); err != nil {
+		return err
+	}
 	return b.underlying.ResetVisibility(ctx, clientID)
 }
 
-func (b *BatchingQueueStore) Count(ctx context.Context, clientID string) (int64, error) {
-	underlyingCount, err := b.underlying.Count(ctx, clientID)
-	if err != nil {
-		return 0, err
-	}
-	b.mu.RLock()
-	pending := b.pendingCounts[clientID]
-	b.mu.RUnlock()
-	return underlyingCount + pending, nil
+func (b *BatchingQueueStore) Count(_ context.Context, clientID string) (int64, error) {
+	b.stateMu.RLock()
+	n := b.depths[clientID]
+	b.stateMu.RUnlock()
+	return n, nil
 }
 
-func (b *BatchingQueueStore) CountAll(ctx context.Context) (int64, error) {
-	underlyingCount, err := b.underlying.CountAll(ctx)
-	if err != nil {
-		return 0, err
+func (b *BatchingQueueStore) CountAll(_ context.Context) (int64, error) {
+	b.stateMu.RLock()
+	var total int64
+	for _, n := range b.depths {
+		total += n
 	}
-	b.mu.RLock()
-	var pending int64
-	for _, v := range b.pendingCounts {
-		pending += v
+	b.stateMu.RUnlock()
+	return total, nil
+}
+
+func (b *BatchingQueueStore) CountsByClient(_ context.Context) (map[string]int64, error) {
+	b.stateMu.RLock()
+	depths := make(map[string]int64, len(b.depths))
+	for clientID, n := range b.depths {
+		depths[clientID] = n
 	}
-	b.mu.RUnlock()
-	return underlyingCount + pending, nil
+	b.stateMu.RUnlock()
+	return depths, nil
 }
 
 func (b *BatchingQueueStore) Close() error {
-	close(b.done)
-	b.wg.Wait()
-	return b.underlying.Close()
+	b.closeOnce.Do(func() {
+		b.stateMu.Lock()
+		b.closed = true
+		close(b.closing)
+		b.stateMu.Unlock()
+
+		b.opsMu.Lock()
+		close(b.workerStop)
+		<-b.workerDone
+		b.stateMu.RLock()
+		flushErr := b.flushErr
+		b.stateMu.RUnlock()
+		b.closeErr = errors.Join(flushErr, b.underlying.Close())
+		b.opsMu.Unlock()
+	})
+	return b.closeErr
 }

@@ -242,3 +242,78 @@ reviewable and easy to validate.
 
 After implementation and verification, record benchmark results and design
 decisions in this file, then move it to `dev/done/`.
+
+## Implementation Results - 2026-07-10
+
+Implemented the queue hot-path changes across the broker and all storage
+backends:
+
+- Added `QueueStore.EnqueueMultiLimited` for atomic per-client admission.
+- Added `QueueStore.CountsByClient` for one-time depth hydration.
+- Rebuilt `BatchingQueueStore` around a hydrated total-depth map that includes
+  persisted and accepted-but-pending messages.
+- Removed publish-time `Queue.Count` calls from `QueueHook.OnPublished`.
+- Aggregated full-queue logging to one warning per publish instead of one
+  warning per rejected client.
+- Replaced the batching worker's separate item/control paths with one FIFO
+  command channel. Flush barriers now order correctly after accepted items.
+- Removed mutex ownership from blocking channel sends and storage writes.
+- Added context cancellation with reservation rollback.
+- Serialized purge, reconnect visibility reset, and shutdown against admission.
+- Made shutdown idempotent and made terminal flush failures visible from
+  subsequent admission and `Close`.
+- Prevented failed batches from retrying once per buffered item; retries happen
+  on the flush timer, an explicit barrier, or shutdown.
+- Changed PostgreSQL `EnqueueBatch` from one `tx.Exec` per item to
+  `pgx.CopyFrom`.
+- Added grouped depth queries for SQLite, PostgreSQL, and MongoDB.
+
+The FIFO flush barrier also fixes a pre-existing reconnect race: a client could
+reconnect before its accepted queue items reached storage, observe an empty
+dequeue, and leave those messages stranded until another reconnect.
+
+### Benchmark
+
+Command:
+
+```text
+go test ./internal/stores -run '^$' \
+  -bench BenchmarkBatchingQueueLimitedAdmission -benchmem -count=3
+```
+
+Apple M4, Darwin/arm64 results for admission against an already-full client:
+
+```text
+78.21 ns/op    40 B/op    3 allocs/op
+78.30 ns/op    40 B/op    3 allocs/op
+77.18 ns/op    40 B/op    3 allocs/op
+```
+
+This path performs no backend call and is independent of persisted queue
+depth. A pre-change numeric comparison was not retained, but the former path
+executed `COUNT(*)`/`CountDocuments` for each matched client and publish.
+
+### Verification
+
+Passed:
+
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
+- Queue persistence, limit, visibility, restart replay, and no-duplicate
+  integration tests
+- Linux ARM64 cross-build with `CGO_ENABLED=0`
+- Linux ARMv7 cross-build with `CGO_ENABLED=0`
+- Deterministic 12,000-recipient saturation recovery test
+- 100-publisher concurrent admission test with an exact limit of 10
+- Hydration, cancellation rollback, purge barrier, reconnect barrier, and
+  asynchronous flush failure tests
+
+PostgreSQL and MongoDB compile successfully. Live server-backed throughput
+benchmarks were not run because those services were not available in the local
+test environment; these measurements are optional follow-up validation and do
+not leave a functional implementation gap.
+
+Status: complete. The implemented queue changes satisfy the required
+acceptance criteria. Topic-matching optimization remains conditional on future
+profiling and is not part of the completed queue work.

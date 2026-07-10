@@ -18,6 +18,7 @@ import (
 	"monstermq.io/edge/internal/config"
 	gql "monstermq.io/edge/internal/graphql"
 	"monstermq.io/edge/internal/graphql/resolvers"
+	"monstermq.io/edge/internal/hostinfo"
 	mlog "monstermq.io/edge/internal/log"
 	"monstermq.io/edge/internal/metrics"
 	"monstermq.io/edge/internal/pubsub"
@@ -27,7 +28,6 @@ import (
 	storepg "monstermq.io/edge/internal/stores/postgres"
 	storesqlite "monstermq.io/edge/internal/stores/sqlite"
 	"monstermq.io/edge/internal/topic"
-	"monstermq.io/edge/internal/hostinfo"
 )
 
 // Server is the top-level lifecycle holder for the edge broker.
@@ -91,7 +91,12 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	if storage.Queue != nil && cfg.QueueStore() != config.StoreMemory {
 		batchSize := cfg.GetQueueBatchSize()
 		flushInterval := time.Duration(cfg.GetQueueFlushIntervalMs()) * time.Millisecond
-		storage.Queue = stores.NewBatchingQueueStore(storage.Queue, batchSize, flushInterval)
+		batchedQueue, err := stores.NewBatchingQueueStore(ctx, storage.Queue, batchSize, flushInterval)
+		if err != nil {
+			_ = storage.Close()
+			return nil, fmt.Errorf("queue batching init: %w", err)
+		}
+		storage.Queue = batchedQueue
 		prependStorageCloser(storage, storage.Queue.Close)
 	}
 
@@ -326,7 +331,6 @@ func hydrateSubscriptionIndex(ctx context.Context, subs *topic.SubscriptionIndex
 		return true
 	})
 }
-
 
 func (s *Server) Serve() error {
 	if s.collector != nil {

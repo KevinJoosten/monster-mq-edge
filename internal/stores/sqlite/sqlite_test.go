@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -133,6 +134,36 @@ func TestQueueStoreEnqueueDequeueAck(t *testing.T) {
 	n, _ := qs.Count(ctx, "c1")
 	if n != 0 {
 		t.Fatalf("expected count 0 after ack, got %d", n)
+	}
+}
+
+func TestQueueStoreLimitedEnqueueAndCounts(t *testing.T) {
+	db := tempDB(t)
+	qs := NewQueueStore(db, 30*time.Second)
+	ctx := context.Background()
+	if err := qs.EnsureTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	msg := stores.BrokerMessage{MessageUUID: "limited", TopicName: "x", Time: time.Now()}
+	for i := 0; i < 3; i++ {
+		msg.MessageUUID = fmt.Sprintf("limited-%d", i)
+		result, err := qs.EnqueueMultiLimited(ctx, msg, []string{"c1", "c2"}, 2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 && (len(result.Accepted) != 2 || len(result.Rejected) != 0) {
+			t.Fatalf("enqueue %d result = %+v", i, result)
+		}
+		if i == 2 && (len(result.Accepted) != 0 || len(result.Rejected) != 2) {
+			t.Fatalf("enqueue at limit result = %+v", result)
+		}
+	}
+	counts, err := qs.CountsByClient(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["c1"] != 2 || counts["c2"] != 2 {
+		t.Fatalf("counts = %+v", counts)
 	}
 }
 

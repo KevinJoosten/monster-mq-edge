@@ -1,0 +1,7 @@
+Release v0.1.7
+Built from commit: cfbee23
+Date: 2026-07-10 12:24:30
+
+Changes since v0.1.6:
+---
+cfbee23 perf: optimize offline queue admission and batching

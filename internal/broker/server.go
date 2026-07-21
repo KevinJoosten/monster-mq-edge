@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/hooks/auth"
-	"github.com/mochi-mqtt/server/v2/listeners"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/hooks/auth"
+	"monstermq.io/edge/internal/mqtt/listeners"
 
 	"monstermq.io/edge/internal/archive"
 	mauth "monstermq.io/edge/internal/auth"
@@ -19,6 +19,7 @@ import (
 	"monstermq.io/edge/internal/config"
 	gql "monstermq.io/edge/internal/graphql"
 	"monstermq.io/edge/internal/graphql/resolvers"
+	"monstermq.io/edge/internal/hostinfo"
 	mlog "monstermq.io/edge/internal/log"
 	"monstermq.io/edge/internal/metrics"
 	"monstermq.io/edge/internal/pubsub"
@@ -47,6 +48,7 @@ type Server struct {
 	gqlSrv      *gql.Server
 	renewal     *renewalAgent
 	provision   *provisionAgent
+	hostMonitor *hostinfo.Collector
 	metricsCtx  context.Context
 	metricsStop context.CancelFunc
 	tcpsDeferred bool
@@ -88,6 +90,18 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	if err := configureMetricsStore(cfg, storage); err != nil {
 		_ = storage.Close()
 		return nil, err
+	}
+
+	if storage.Queue != nil && cfg.QueueStore() != config.StoreMemory {
+		batchSize := cfg.GetQueueBatchSize()
+		flushInterval := time.Duration(cfg.GetQueueFlushIntervalMs()) * time.Millisecond
+		batchedQueue, err := stores.NewBatchingQueueStore(ctx, storage.Queue, batchSize, flushInterval)
+		if err != nil {
+			_ = storage.Close()
+			return nil, fmt.Errorf("queue batching init: %w", err)
+		}
+		storage.Queue = batchedQueue
+		prependStorageCloser(storage, storage.Queue.Close)
 	}
 
 	// 2. Auth cache
@@ -142,22 +156,23 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 	}
 
 	if cfg.QueuedMessagesEnabled {
-		if err := server.AddHook(NewQueueHook(storage, subs, server, logger), nil); err != nil {
+		logger.Info("queued messages: enabled", "store", cfg.QueueStore(), "max", cfg.GetMaxQueueMessages())
+		if err := server.AddHook(NewQueueHook(storage, subs, server, logger, cfg.GetMaxQueueMessages()), nil); err != nil {
 			return nil, fmt.Errorf("add queue hook: %w", err)
 		}
+	} else {
+		logger.Info("queued messages: disabled (relying on mochi-mqtt in-memory inflight)")
 	}
 
 	// 5. Restore retained messages from storage into mochi's in-memory retained map.
 	// Skipped when RetainedStoreType is MEMORY: nothing is persisted, so there's
 	// nothing to restore — mochi's own in-memory map is the source of truth.
+	// Also skipped when RetainedStoreType is a DB store: they are loaded on-demand
+	// via OnSelectRetainedMessages hook.
 	if retainedInMemory {
 		logger.Info("retained messages: in-memory mode (no DB persistence)")
 	} else {
-		logger.Info("loading retained messages...")
-		if err := restoreRetained(ctx, server, storage); err != nil {
-			logger.Warn("retained restore failed", "err", err)
-		}
-		logger.Info("retained messages loaded")
+		logger.Info("retained messages: database-backed on-demand mode (bypassing pre-load)")
 	}
 
 	// 6. Listeners
@@ -231,6 +246,12 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		winCCOa = winccoa.NewManager(storage.DeviceConfig, publishFn, cfg.NodeID, logger)
 	}
 
+	// 7c. Host Monitoring
+	var hostMonitor *hostinfo.Collector
+	if cfg.HostMonitoring.Enabled {
+		hostMonitor = hostinfo.NewCollector(cfg.NodeID, cfg.HostMonitoring.IntervalSeconds, cfg.HostMonitoring.BaseTopic, cfg.HostMonitoring.QoS, publishFn, logger)
+	}
+
 	// 8. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled {
@@ -243,6 +264,7 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, gqlSrv: gqlSrv,
 		tcpsDeferred: tcpsDeferred,
+		hostMonitor:  hostMonitor,
 	}, nil
 }
 
@@ -265,17 +287,7 @@ func configureVolatileStores(ctx context.Context, cfg *config.Config, storage *s
 		appendStorageCloser(storage, db.Close)
 	}
 	if cfg.QueueStore() == config.StoreMemory {
-		db, err := storesqlite.OpenMemory("monstermq-queue-" + cfg.NodeID)
-		if err != nil {
-			return err
-		}
-		queue := storesqlite.NewQueueStore(db, 30*time.Second)
-		if err := queue.EnsureTable(ctx); err != nil {
-			_ = db.Close()
-			return err
-		}
-		storage.Queue = queue
-		appendStorageCloser(storage, db.Close)
+		storage.Queue = storememory.NewQueueStore(30 * time.Second)
 	}
 	return nil
 }
@@ -289,6 +301,22 @@ func appendStorageCloser(storage *stores.Storage, closeFn func() error) {
 		}
 		if err := closeFn(); err != nil && first == nil {
 			first = err
+		}
+		return first
+	}
+}
+
+func prependStorageCloser(storage *stores.Storage, closeFn func() error) {
+	prev := storage.Closer
+	storage.Closer = func() error {
+		var first error
+		if err := closeFn(); err != nil {
+			first = err
+		}
+		if prev != nil {
+			if err := prev(); err != nil && first == nil {
+				first = err
+			}
 		}
 		return first
 	}
@@ -314,13 +342,6 @@ func configureMetricsStore(cfg *config.Config, storage *stores.Storage) error {
 func hydrateSubscriptionIndex(ctx context.Context, subs *topic.SubscriptionIndex, storage *stores.Storage) error {
 	return storage.Subscriptions.IterateSubscriptions(ctx, func(s stores.MqttSubscription) bool {
 		subs.Subscribe(s.ClientID, s.TopicFilter, s.QoS)
-		return true
-	})
-}
-
-func restoreRetained(ctx context.Context, server *mqtt.Server, storage *stores.Storage) error {
-	return storage.Retained.FindMatchingMessages(ctx, "#", func(msg stores.BrokerMessage) bool {
-		_ = server.Publish(msg.TopicName, msg.Payload, true, msg.QoS)
 		return true
 	})
 }
@@ -358,6 +379,9 @@ func (s *Server) Serve() error {
 		s.logger.Info("bridges deferred until provisioning completes")
 	} else {
 		s.startOutbound()
+	}
+	if s.hostMonitor != nil {
+		s.hostMonitor.Start(context.Background())
 	}
 	if s.gqlSrv != nil {
 		go func() {
@@ -408,6 +432,9 @@ func (s *Server) Close() error {
 	}
 	if s.winCCOa != nil {
 		s.winCCOa.Stop()
+	}
+	if s.hostMonitor != nil {
+		s.hostMonitor.Stop()
 	}
 	if s.metricsStop != nil {
 		s.metricsStop()

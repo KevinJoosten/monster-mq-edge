@@ -1,0 +1,68 @@
+TCP:  { Enabled: true,  Port: 1883, Address: "0.0.0.0" }  # use "::" for IPv6
+TCPS: { Enabled: false, Port: 8883, Address: "0.0.0.0", KeyStorePath: "data/keystore", KeyStorePassword: "" }
+WS:   { Enabled: true,  Port: 1884, Address: "0.0.0.0" }
+WSS:  { Enabled: false, Port: 8884, Address: "0.0.0.0", KeyStorePath: "data/keystore", KeyStorePassword: "" }
+MaxMessageSize: 1048576
+
+DefaultStoreType: SQLITE
+
+ConfigStoreType: SQLITE
+QueueStoreType: SQLITE
+
+SessionStoreType: MEMORY
+RetainedStoreType: MEMORY
+
+SQLite:
+  Path: /var/lib/monstermq/monstermq.db
+
+# Postgres:
+#   Url: "postgres://localhost:5432/monstermq"
+#   User: monstermq
+#   Pass: monstermq
+
+# MongoDB:
+#   Url: "mongodb://localhost:27017"
+#   Database: monstermq
+
+UserManagement:
+  Enabled: false
+  PasswordAlgorithm: BCRYPT
+  AnonymousEnabled: true
+  AclCacheEnabled: true
+
+Metrics:
+  Enabled: true
+  StoreType: MEMORY
+  CollectionIntervalSeconds: 1
+  RetentionHours: 168
+  MaxHistoryRows: 3600
+
+Logging:
+  Level: INFO
+  MqttSyslogEnabled: false
+  RingBufferSize: 1000
+
+GraphQL:
+  Enabled: true
+  Port: 4000
+
+Features:
+  MqttClient: true
+  WinCCUa: false
+  WinCCOa: false
+  DeviceImportExport: true
+
+# QueuedMessagesEnabled: true  -> use QueueStoreType for offline persistent
+# (clean=false) sessions. With QueueStoreType: MEMORY, queued messages are
+# retained only until broker restart.
+# false -> rely on mochi-mqtt's in-memory inflight buffer.
+QueuedMessagesEnabled: true
+
+# MaxQueueMessages -> limit the max number of offline messages queued per client. 0 means unlimited.
+MaxQueueMessages: 1000000
+
+# QueueBatchSize -> bulk write batch size limit before flushing to the database
+QueueBatchSize: 1000
+
+# QueueFlushIntervalMs -> flush interval in milliseconds for buffered queue writes
+QueueFlushIntervalMs: 250

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -629,8 +630,9 @@ func (s *SessionStore) PurgeSessions(ctx context.Context) error {
 // QueueStore ------------------------------------------------------------
 
 type QueueStore struct {
-	db         *DB
-	visibility time.Duration
+	db          *DB
+	visibility  time.Duration
+	admissionMu sync.Mutex
 }
 
 func (q *QueueStore) Close() error            { return nil }
@@ -648,18 +650,69 @@ func (q *QueueStore) Enqueue(ctx context.Context, clientID string, msg stores.Br
 }
 
 func (q *QueueStore) EnqueueMulti(ctx context.Context, msg stores.BrokerMessage, clientIDs []string) error {
+	_, err := q.EnqueueMultiLimited(ctx, msg, clientIDs, 0)
+	return err
+}
+
+func (q *QueueStore) EnqueueMultiLimited(ctx context.Context, msg stores.BrokerMessage, clientIDs []string, limit int64) (stores.QueueEnqueueResult, error) {
 	if len(clientIDs) == 0 {
-		return nil
+		return stores.QueueEnqueueResult{}, nil
 	}
+	q.admissionMu.Lock()
+	defer q.admissionMu.Unlock()
 	docs := make([]any, 0, len(clientIDs))
 	now := time.Now().Unix()
+	result := stores.QueueEnqueueResult{Accepted: make([]string, 0, len(clientIDs))}
+	reserved := make(map[string]int64)
 	for _, cid := range clientIDs {
+		if limit > 0 {
+			count, err := q.coll().CountDocuments(ctx, bson.M{"client_id": cid})
+			if err != nil {
+				return stores.QueueEnqueueResult{}, err
+			}
+			if count+reserved[cid] >= limit {
+				result.Rejected = append(result.Rejected, cid)
+				continue
+			}
+		}
 		docs = append(docs, bson.M{
 			"message_uuid": msg.MessageUUID, "client_id": cid, "topic": msg.TopicName,
 			"payload": bson.Binary{Data: msg.Payload}, "qos": int(msg.QoS),
 			"retained": msg.IsRetain, "publisher_id": msg.ClientID,
 			"creation_time": msg.Time.UnixMilli(),
 			"vt":            now, "read_ct": 0,
+		})
+		reserved[cid]++
+		result.Accepted = append(result.Accepted, cid)
+	}
+	if len(docs) == 0 {
+		return result, nil
+	}
+	_, err := q.coll().InsertMany(ctx, docs)
+	if err != nil {
+		return stores.QueueEnqueueResult{}, err
+	}
+	return result, nil
+}
+
+func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatchItem) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	docs := make([]any, 0, len(batch))
+	now := time.Now().Unix()
+	for _, item := range batch {
+		docs = append(docs, bson.M{
+			"message_uuid":  item.Message.MessageUUID,
+			"client_id":     item.ClientID,
+			"topic":         item.Message.TopicName,
+			"payload":       bson.Binary{Data: item.Message.Payload},
+			"qos":           int(item.Message.QoS),
+			"retained":      item.Message.IsRetain,
+			"publisher_id":  item.Message.ClientID,
+			"creation_time": item.Message.Time.UnixMilli(),
+			"vt":            now,
+			"read_ct":       0,
 		})
 	}
 	_, err := q.coll().InsertMany(ctx, docs)
@@ -712,6 +765,11 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 	return out, nil
 }
 
+func (q *QueueStore) ResetVisibility(ctx context.Context, clientID string) error {
+	_, err := q.coll().UpdateMany(ctx, bson.M{"client_id": clientID}, bson.M{"$set": bson.M{"vt": 0}})
+	return err
+}
+
 func (q *QueueStore) Ack(ctx context.Context, clientID, messageUUID string) error {
 	_, err := q.coll().DeleteOne(ctx, bson.M{"client_id": clientID, "message_uuid": messageUUID})
 	return err
@@ -735,6 +793,29 @@ func (q *QueueStore) Count(ctx context.Context, clientID string) (int64, error) 
 }
 func (q *QueueStore) CountAll(ctx context.Context) (int64, error) {
 	return q.coll().CountDocuments(ctx, bson.M{})
+}
+func (q *QueueStore) CountsByClient(ctx context.Context) (map[string]int64, error) {
+	pipeline := mongo.Pipeline{bson.D{{Key: "$group", Value: bson.D{
+		{Key: "_id", Value: "$client_id"},
+		{Key: "count", Value: bson.D{{Key: "$sum", Value: 1}}},
+	}}}}
+	cur, err := q.coll().Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	defer cur.Close(ctx)
+	counts := make(map[string]int64)
+	for cur.Next(ctx) {
+		var row struct {
+			ClientID string `bson:"_id"`
+			Count    int64  `bson:"count"`
+		}
+		if err := cur.Decode(&row); err != nil {
+			return nil, err
+		}
+		counts[row.ClientID] = row.Count
+	}
+	return counts, cur.Err()
 }
 
 // UserStore -------------------------------------------------------------

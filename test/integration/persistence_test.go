@@ -16,7 +16,7 @@ import (
 	"monstermq.io/edge/internal/stores/sqlite"
 )
 
-func startWithDB(t *testing.T, port int, dbPath string, cfgFn func(*config.Config)) *broker.Server {
+func startWithDB(t testing.TB, port int, dbPath string, cfgFn func(*config.Config)) *broker.Server {
 	t.Helper()
 	cfg := config.Default()
 	cfg.NodeID = fmt.Sprintf("p-%d", port)

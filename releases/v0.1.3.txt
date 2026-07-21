@@ -1,0 +1,14 @@
+Release v0.1.3
+Built from commit: b34995f
+Date: 2026-07-05 10:59:35
+
+Changes since v0.1.2:
+---
+b34995f Add Debian package config and refactor store defaults
+bd97478 fix: reset visibility timeout of queued messages on session establish to resolve stuck messages
+d8f7c32 log: add QueueStore type and status startup logging
+7266e52 Update config.yaml.example
+f48828b config: exclude memory queue store from batching wrapper and make batch size and flush interval configurable
+b82676c perf: implement asynchronous bulk batching for all QueueStore backends
+76250ff fix: register config.yaml in debian conffiles to prevent overwriting on upgrade
+0bdde5a perf: check client connection status in memory to avoid DB queries on publish

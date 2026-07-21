@@ -1,0 +1,11 @@
+Release v0.1.2
+Built from commit: b1ac36a
+Date: 2026-07-05 08:39:39
+
+Changes since v0.1.1:
+---
+b1ac36a fix: delete clean/expired sessions from session store on disconnect or expiry
+eb4b0ed Update version.go
+d72fe18 build: inject version from version.txt at build time and append -EDGE suffix in GraphQL version query
+279d86d fix: populate and parse ProtocolVersion from information JSON string in session overview
+f19d34d Set GraphQL port to 4000; improve release script

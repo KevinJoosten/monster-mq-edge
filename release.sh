@@ -4,9 +4,12 @@
 # This script:
 # 1. Reads version from version.txt
 # 2. Increments the patch version
-# 3. Adds git SHA for tracking
-# 4. Creates a git tag
+# 3. Checks for uncommitted changes in the repository
+# 4. Updates version.txt to the new clean version
 # 5. Writes release notes
+# 6. Commits changes
+# 7. Creates git tag on the repository
+# 8. Prints pushing instructions
 
 set -e  # Exit on error
 
@@ -28,7 +31,6 @@ fi
 CURRENT_VERSION=$(head -n 1 version.txt | tr -d '\n' | tr -d '\r')
 
 # Extract base version (without git SHA if present)
-# Format can be either "1.0.2" or "1.0.2+abc1234"
 BASE_VERSION=$(echo "$CURRENT_VERSION" | cut -d'+' -f1)
 
 # Parse version components
@@ -45,17 +47,14 @@ fi
 NEW_PATCH=$((PATCH + 1))
 NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
 
-# Get current git SHA before making any changes (this will be the base for the version)
+# Get current git SHA
 GIT_SHA=$(git rev-parse --short HEAD)
-
-# Create version string with git SHA
-VERSION_WITH_SHA="${NEW_VERSION}+${GIT_SHA}"
 
 echo -e "${YELLOW}Current version: ${BASE_VERSION}${NC}"
 echo -e "${GREEN}New version: ${NEW_VERSION}${NC}"
 echo -e "${GREEN}Git SHA: ${GIT_SHA}${NC}"
 
-# Check for uncommitted changes
+# Check for uncommitted changes in repository
 if ! git diff-index --quiet HEAD --; then
     echo -e "${YELLOW}Warning: You have uncommitted changes${NC}"
     read -p "Do you want to continue? (y/n) " -n 1 -r
@@ -73,9 +72,9 @@ if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
     exit 1
 fi
 
-# Update version.txt with the version including SHA
-echo "$VERSION_WITH_SHA" > version.txt
-echo -e "${GREEN}✓ Updated version.txt to ${VERSION_WITH_SHA}${NC}"
+# Update version.txt with the new clean version (no SHA suffix for standard semver)
+echo "$NEW_VERSION" > version.txt
+echo -e "${GREEN}✓ Updated version.txt to ${NEW_VERSION}${NC}"
 
 # Create release notes file
 RELEASE_NOTES_FILE="releases/v${NEW_VERSION}.txt"
@@ -100,26 +99,21 @@ echo -e "${GREEN}✓ Created release notes: ${RELEASE_NOTES_FILE}${NC}"
 # Add version.txt and release notes to git and commit the version bump
 git add version.txt "$RELEASE_NOTES_FILE"
 git commit -m "Bump version to ${NEW_VERSION}" || {
-    echo -e "${YELLOW}No changes to commit (files might already be staged)${NC}"
+    echo -e "${YELLOW}No changes to commit${NC}"
 }
 
-# Create git tag
-echo -e "${YELLOW}Creating git tag v${NEW_VERSION}...${NC}"
+# Create git tag on repository
+echo -e "${YELLOW}Creating tag v${NEW_VERSION}...${NC}"
 git tag -a "v${NEW_VERSION}" -m "Release version ${NEW_VERSION}"
-echo -e "${GREEN}✓ Created git tag v${NEW_VERSION}${NC}"
+echo -e "${GREEN}✓ Created tag v${NEW_VERSION}${NC}"
 
 echo ""
 echo -e "${GREEN}=== Release Complete ===${NC}"
-echo -e "${GREEN}Version ${NEW_VERSION} has been tagged${NC}"
+echo -e "${GREEN}Version ${NEW_VERSION} has been tagged.${NC}"
 echo ""
-echo -e "${YELLOW}Next steps:${NC}"
-echo "  1. Build and publish the multi-arch Docker image:"
-echo "     ./docker/build.sh -y"
-echo "  2. Push the tag to remote: git push origin v${NEW_VERSION}"
-echo "  3. Push the commits: git push"
-echo "  4. Create a GitHub release if desired"
+echo -e "${YELLOW}Next steps to push commits and tags to remote:${NC}"
+echo "  1. Push commits and tag:"
+PARENT_BRANCH=$(git branch --show-current)
+echo "     git push origin ${PARENT_BRANCH}"
+echo "     git push origin v${NEW_VERSION}"
 echo ""
-echo -e "${YELLOW}To undo this release:${NC}"
-echo "  git tag -d v${NEW_VERSION}"
-echo "  git reset HEAD~1"
-echo "  Edit version.txt back to ${CURRENT_VERSION}"

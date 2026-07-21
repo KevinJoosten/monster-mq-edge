@@ -1,0 +1,21 @@
+#!/bin/sh
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Clean up directories
+    rm -rf /var/lib/monstermq
+    rm -rf /etc/monstermq
+
+    # Remove system user and group
+    if getent passwd monstermq >/dev/null; then
+        userdel monstermq || true
+    fi
+    if getent group monstermq >/dev/null; then
+        groupdel monstermq || true
+    fi
+fi
+
+# Reload systemd configuration daemon
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload || true
+fi

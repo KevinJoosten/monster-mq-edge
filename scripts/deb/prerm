@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+# Stop and disable systemd service before removal
+if [ -d /run/systemd/system ]; then
+    if systemctl is-active --quiet monstermq-edge.service; then
+        systemctl stop monstermq-edge.service || true
+    fi
+    systemctl disable monstermq-edge.service || true
+fi

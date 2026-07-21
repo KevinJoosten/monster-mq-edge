@@ -1,8 +1,9 @@
 package version
 
 // Version is the build version. It can be overridden at build time via:
-//   go build -ldflags "-X monstermq.io/edge/internal/version.Version=1.2.3+abcdef"
-var Version = "0.1.0-edge"
+//
+//	go build -ldflags "-X monstermq.io/edge/internal/version.Version=1.2.3+abcdef"
+var Version = "0.0.0-EDGE"
 
 const Name = "monstermq-edge"
 

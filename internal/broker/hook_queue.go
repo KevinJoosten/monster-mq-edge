@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/packets"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/packets"
 
 	"monstermq.io/edge/internal/stores"
 	"monstermq.io/edge/internal/topic"
@@ -24,14 +25,48 @@ import (
 // reconnect the rows are dequeued and written directly to the now-online client.
 type QueueHook struct {
 	mqtt.HookBase
-	store  *stores.Storage
-	subs   *topic.SubscriptionIndex
-	server *mqtt.Server
-	logger *slog.Logger
+	store            *stores.Storage
+	subs             *topic.SubscriptionIndex
+	server           *mqtt.Server
+	logger           *slog.Logger
+	maxQueueMessages int
+	mu               sync.RWMutex
+	persistent       map[string]bool
+	// offline is the subset of persistent clients that are currently
+	// disconnected — the only ones OnPublished ever enqueues for. Kept
+	// separately so the publish hot path can bail out with a single
+	// length check instead of resolving subscribers on every message.
+	offline map[string]struct{}
 }
 
-func NewQueueHook(s *stores.Storage, subs *topic.SubscriptionIndex, server *mqtt.Server, logger *slog.Logger) *QueueHook {
-	return &QueueHook{store: s, subs: subs, server: server, logger: logger}
+func NewQueueHook(s *stores.Storage, subs *topic.SubscriptionIndex, server *mqtt.Server, logger *slog.Logger, maxQueue int) *QueueHook {
+	h := &QueueHook{
+		store:            s,
+		subs:             subs,
+		server:           server,
+		logger:           logger,
+		maxQueueMessages: maxQueue,
+		persistent:       make(map[string]bool),
+		offline:          make(map[string]struct{}),
+	}
+	h.hydratePersistentClients()
+	return h
+}
+
+func (h *QueueHook) hydratePersistentClients() {
+	ctx := context.Background()
+	err := h.store.Sessions.IterateSessions(ctx, func(info stores.SessionInfo) bool {
+		if !info.CleanSession {
+			h.mu.Lock()
+			h.persistent[info.ClientID] = true
+			h.offline[info.ClientID] = struct{}{} // nobody is connected yet at hydrate time
+			h.mu.Unlock()
+		}
+		return true
+	})
+	if err != nil {
+		h.logger.Error("queue hook: failed to hydrate persistent clients", "err", err)
+	}
 }
 
 func (h *QueueHook) ID() string { return "monstermq-queue" }
@@ -40,6 +75,8 @@ func (h *QueueHook) Provides(b byte) bool {
 	return bytes.Contains([]byte{
 		mqtt.OnPublished,
 		mqtt.OnSessionEstablished,
+		mqtt.OnDisconnect,
+		mqtt.OnClientExpired,
 	}, []byte{b})
 }
 
@@ -47,6 +84,13 @@ func (h *QueueHook) Provides(b byte) bool {
 // index, filters for persistent (clean=false) sessions that are currently
 // disconnected, and enqueues a copy of the message for each.
 func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
+	h.mu.RLock()
+	noneOffline := len(h.offline) == 0
+	h.mu.RUnlock()
+	if noneOffline {
+		return
+	}
+
 	ctx := context.Background()
 	subs, err := h.collectOfflineSubscribers(ctx, pk.TopicName)
 	if err != nil {
@@ -56,6 +100,7 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 	if len(subs) == 0 {
 		return
 	}
+
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
@@ -65,8 +110,13 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 		IsRetain:    pk.FixedHeader.Retain,
 		Time:        time.Now().UTC(),
 	}
-	if err := h.store.Queue.EnqueueMulti(ctx, msg, subs); err != nil {
+	result, err := h.store.Queue.EnqueueMultiLimited(ctx, msg, subs, int64(h.maxQueueMessages))
+	if err != nil {
 		h.logger.Warn("queue hook: enqueue failed", "topic", pk.TopicName, "n", len(subs), "err", err)
+		return
+	}
+	if len(result.Rejected) > 0 {
+		h.logger.Warn("queue hook: client queues full, message dropped", "topic", pk.TopicName, "clients", len(result.Rejected), "limit", h.maxQueueMessages)
 	}
 }
 
@@ -83,17 +133,24 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 		return nil, nil
 	}
 	out := make([]string, 0, len(candidates))
+	h.mu.RLock()
 	for _, c := range candidates {
-		info, err := h.store.Sessions.GetSession(ctx, c.ClientID)
-		if err != nil || info == nil {
-			continue
-		}
-		if info.CleanSession || info.Connected {
+		if _, off := h.offline[c.ClientID]; !off {
 			continue
 		}
 		out = append(out, c.ClientID)
 	}
-	return out, nil
+	h.mu.RUnlock()
+	// Confirm against live connection state: the offline set is maintained by
+	// session hooks and can briefly lag a reconnect.
+	live := out[:0]
+	for _, cid := range out {
+		if cl, ok := h.server.Clients.Get(cid); ok && !cl.Closed() {
+			continue
+		}
+		live = append(live, cid)
+	}
+	return live, nil
 }
 
 // OnSessionEstablished dequeues any stored messages for the (re)connecting
@@ -108,10 +165,20 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 //
 // Gating rule:
 //   - mochi inflight non-empty  → in-process reconnect; mochi handled it.
-//                                 Purge our DB queue so it doesn't double-fire.
+//     Purge our DB queue so it doesn't double-fire.
 //   - mochi inflight empty      → post-restart (or first attach); mochi has no
-//                                 history. Drain our DB queue and replay.
+//     history. Drain our DB queue and replay.
 func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
+	persistent := !((cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryInterval == 0) || (cl.Properties.ProtocolVersion < 5 && cl.Properties.Clean))
+	h.mu.Lock()
+	if persistent {
+		h.persistent[cl.ID] = true
+	} else {
+		delete(h.persistent, cl.ID)
+	}
+	delete(h.offline, cl.ID)
+	h.mu.Unlock()
+
 	if cl.Properties.Clean {
 		return
 	}
@@ -123,6 +190,10 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 			h.logger.Warn("queue hook: purge after mochi inflight resend failed", "client", cl.ID, "err", err)
 		}
 		return
+	}
+
+	if err := h.store.Queue.ResetVisibility(ctx, cl.ID); err != nil {
+		h.logger.Warn("queue hook: reset visibility failed", "client", cl.ID, "err", err)
 	}
 
 	for {
@@ -165,3 +236,20 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 	}
 }
 
+func (h *QueueHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	h.mu.Lock()
+	if expire {
+		delete(h.persistent, cl.ID)
+		delete(h.offline, cl.ID)
+	} else if h.persistent[cl.ID] {
+		h.offline[cl.ID] = struct{}{}
+	}
+	h.mu.Unlock()
+}
+
+func (h *QueueHook) OnClientExpired(cl *mqtt.Client) {
+	h.mu.Lock()
+	delete(h.persistent, cl.ID)
+	delete(h.offline, cl.ID)
+	h.mu.Unlock()
+}

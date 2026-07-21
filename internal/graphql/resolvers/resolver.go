@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/packets"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/packets"
 
 	"monstermq.io/edge/internal/archive"
 	"monstermq.io/edge/internal/auth"
@@ -69,7 +69,7 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 		LogBus:    logBus,
 		Logger:    logger,
 		NodeID:    cfg.NodeID,
-		Version:   version.Version,
+		Version:   formatEdgeVersion(version.Version),
 		Mochi:     mochi,
 		Publish:   publish,
 	}
@@ -631,6 +631,13 @@ func (r *Resolver) brokerObj() *generated.Broker {
 	}
 }
 
+func formatEdgeVersion(v string) string {
+	if strings.HasSuffix(strings.ToUpper(v), "-EDGE") {
+		return strings.TrimSuffix(strings.ToLower(v), "-edge") + "-EDGE"
+	}
+	return v + "-EDGE"
+}
+
 func wildcardMatch(s, pattern string) bool {
 	if pattern == "" {
 		return true
@@ -674,6 +681,14 @@ func sessionToGraphQL(info stores.SessionInfo) *generated.Session {
 	addr := info.ClientAddress
 	infoStr := info.Information
 	pv := info.ProtocolVersion
+	if pv == 0 && infoStr != "" {
+		var meta struct {
+			ProtocolVersion int `json:"ProtocolVersion"`
+		}
+		if json.Unmarshal([]byte(infoStr), &meta) == nil && meta.ProtocolVersion != 0 {
+			pv = meta.ProtocolVersion
+		}
+	}
 	rm := info.ReceiveMaximum
 	mps := info.MaximumPacketSize
 	tam := info.TopicAliasMaximum

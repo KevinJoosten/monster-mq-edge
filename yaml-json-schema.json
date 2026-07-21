@@ -112,6 +112,31 @@
         "DeviceImportExport": { "type": "boolean", "description": "Enable generic device configuration export/import GraphQL operations." }
       }
     },
+    "HostMonitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "description": "Enable host monitoring to periodically publish CPU, memory, and disk stats to MQTT."
+        },
+        "BaseTopic": {
+          "type": "string",
+          "description": "The topic format to publish metrics to. Replaces {NodeId} or {node_id}."
+        },
+        "IntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The frequency in seconds to collect and publish stats."
+        },
+        "QoS": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "The MQTT QoS level to publish messages with (0, 1, or 2)."
+        }
+      }
+    },
     "QueuedMessagesEnabled": {
       "type": "boolean",
       "description": "true: store messages for offline persistent (clean=false) sessions in the QueueStore so they survive broker restart. false: rely on mochi-mqtt's in-memory inflight buffer (lost on restart).",
@@ -138,6 +163,21 @@
         "BootstrapPort":  { "type": "integer", "minimum": 1, "maximum": 65535, "description": "HTTP port for the bootstrap/provisioning listener.", "default": 9443 },
         "ChallengeBytes": { "type": "integer", "minimum": 8, "maximum": 64, "description": "Number of random bytes in the bootstrap challenge token.", "default": 32 }
       }
+    },
+    "MaxQueueMessages": {
+      "type": "integer",
+      "description": "Max offline messages queued per client. 0 means unlimited.",
+      "default": 1000
+    },
+    "QueueBatchSize": {
+      "type": "integer",
+      "description": "The maximum number of queued messages to buffer before flushing to the database.",
+      "default": 1000
+    },
+    "QueueFlushIntervalMs": {
+      "type": "integer",
+      "description": "The interval in milliseconds to wait before flushing buffered queued messages to the database.",
+      "default": 50
     }
   },
   "$defs": {

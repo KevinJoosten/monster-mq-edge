@@ -78,15 +78,29 @@ type SessionStore interface {
 	Close() error
 }
 
+type QueueBatchItem struct {
+	ClientID string
+	Message  BrokerMessage
+}
+
+type QueueEnqueueResult struct {
+	Accepted []string
+	Rejected []string
+}
+
 type QueueStore interface {
 	Enqueue(ctx context.Context, clientID string, msg BrokerMessage) error
 	EnqueueMulti(ctx context.Context, msg BrokerMessage, clientIDs []string) error
+	EnqueueMultiLimited(ctx context.Context, msg BrokerMessage, clientIDs []string, limit int64) (QueueEnqueueResult, error)
+	EnqueueBatch(ctx context.Context, batch []QueueBatchItem) error
 	Dequeue(ctx context.Context, clientID string, batchSize int) ([]BrokerMessage, error)
 	Ack(ctx context.Context, clientID string, messageUUID string) error
 	PurgeForClient(ctx context.Context, clientID string) (int64, error)
 	PurgeAll(ctx context.Context) (int64, error)
+	ResetVisibility(ctx context.Context, clientID string) error
 	Count(ctx context.Context, clientID string) (int64, error)
 	CountAll(ctx context.Context) (int64, error)
+	CountsByClient(ctx context.Context) (map[string]int64, error)
 	Close() error
 }
 

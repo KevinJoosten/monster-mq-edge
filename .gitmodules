@@ -1,3 +1,0 @@
-[submodule "mochi-mqtt-server"]
-	path = mochi-mqtt-server
-	url = https://github.com/vogler75/mochi-mqtt-server

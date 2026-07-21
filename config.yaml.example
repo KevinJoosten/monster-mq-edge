@@ -8,10 +8,12 @@ WSS:  { Enabled: false, Port: 8884, Address: "0.0.0.0", KeyStorePath: "cert.pem:
 MaxMessageSize: 1048576
 
 DefaultStoreType: SQLITE
+
+ConfigStoreType: SQLITE
+QueueStoreType: SQLITE
+
 SessionStoreType: MEMORY
 RetainedStoreType: MEMORY
-ConfigStoreType: SQLITE
-QueueStoreType: MEMORY
 
 SQLite:
   Path: ./data/monstermq.db
@@ -53,13 +55,19 @@ Logging:
 
 GraphQL:
   Enabled: true
-  Port: 8080
+  Port: 4000
 
 Features:
   MqttClient: true
   WinCCUa: false
   WinCCOa: false
   DeviceImportExport: true
+
+HostMonitoring:
+  Enabled: false
+  BaseTopic: "nodes/{NodeId}/host"
+  IntervalSeconds: 10
+  QoS: 0
 
 # QueuedMessagesEnabled: true  -> use QueueStoreType for offline persistent
 # (clean=false) sessions. With QueueStoreType: MEMORY, queued messages are
@@ -84,3 +92,12 @@ QueuedMessagesEnabled: true
 #   Enabled: true
 #   BootstrapPort: 9443
 #   ChallengeBytes: 32
+
+# MaxQueueMessages -> limit the max number of offline messages queued per client. 0 means unlimited.
+MaxQueueMessages: 1000000
+
+# QueueBatchSize -> bulk write batch size limit before flushing to the database
+QueueBatchSize: 1000
+
+# QueueFlushIntervalMs -> flush interval in milliseconds for buffered queue writes
+QueueFlushIntervalMs: 250

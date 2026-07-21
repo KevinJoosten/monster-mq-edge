@@ -1,0 +1,7 @@
+Release v0.1.1
+Built from commit: 9941670
+Date: 2026-07-05 08:10:23
+
+Changes since v0.1.0:
+---
+Initial release

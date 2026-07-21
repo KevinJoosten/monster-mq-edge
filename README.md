@@ -7,7 +7,7 @@ on devices like the Raspberry Pi 4/5.
 ## Highlights
 
 - **Single static binary** (~25 MB), zero CGO. Pure-Go SQLite via `modernc.org/sqlite`.
-- **MQTT 3.1 / 3.1.1 / 5.0** via [mochi-mqtt/server](https://github.com/mochi-mqtt/server) (locally vendored fork at [vogler75/mochi-mqtt-server](https://github.com/vogler75/mochi-mqtt-server)) — TCP, WebSocket, TLS, WSS.
+- **MQTT 3.1 / 3.1.1 / 5.0** via [mochi-mqtt/server](https://github.com/mochi-mqtt/server) (locally vendored fork in [internal/mqtt/](file:///Users/vogler/Workspace/monster/edge/internal/mqtt)) — TCP, WebSocket, TLS, WSS.
 - **Storage**: SQLite (default), PostgreSQL, MongoDB. Schemas are byte-compatible with the Kotlin broker, so the same DB can be opened by either implementation.
 - **Archive groups** (last-value + history fanout, retention purging) — same model as the Kotlin broker.
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
@@ -20,17 +20,10 @@ on devices like the Raspberry Pi 4/5.
 
 ## Getting Started
 
-The mochi-mqtt fork is included as a git submodule. You must initialise it before compiling.
-
-**Clone (first time):**
+**Clone:**
 ```bash
-git clone --recurse-submodules https://github.com/vogler75/monster-mq-edge
+git clone https://github.com/vogler75/monster-mq-edge
 cd monster-mq-edge
-```
-
-**If you already cloned without `--recurse-submodules`:**
-```bash
-git submodule update --init
 ```
 
 **Install Go** (1.22+): https://go.dev/dl/
@@ -72,10 +65,20 @@ make build-amd64    # Linux x86_64
 
 ## Docker
 
+To build the Docker image, you can run the build script under `docker/` which automatically tags the image and embeds the version from `version.txt`:
+
+```bash
+./docker/build.sh -n
+```
+
+Or you can build manually with `docker buildx` from the repository root:
+
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t monstermq-edge:latest .
 docker run --rm -p 1883:1883 -p 8080:8080 monstermq-edge:latest
 ```
+
+The version is automatically read from `version.txt` at the root of the repository and embedded in the binary's version metadata. To override the version during manual builds, pass `--build-arg VERSION=1.2.3`.
 
 ## Storage backends
 
@@ -249,4 +252,4 @@ PostgreSQL/MongoDB backends compile but require a live DB to integration test.
 GNU General Public License v3.0.
 
 The vendored `mochi-mqtt-server` subtree remains under its original MIT license;
-see `mochi-mqtt-server/LICENSE.md`.
+see [internal/mqtt/LICENSE.md](file:///Users/vogler/Workspace/monster/edge/internal/mqtt/LICENSE.md).

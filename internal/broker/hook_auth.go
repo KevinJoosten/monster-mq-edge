@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"crypto/tls"
 
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/packets"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/packets"
 
 	"monstermq.io/edge/internal/auth"
 	"monstermq.io/edge/internal/config"

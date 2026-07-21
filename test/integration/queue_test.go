@@ -340,3 +340,164 @@ func TestQueueStoreMemoryDoesNotUseSQLiteFile(t *testing.T) {
 		t.Fatal("expected no file-backed messagequeue table")
 	}
 }
+
+func TestQueuedMessagesLimit(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "queuelimit.db")
+	port := 25002
+	limit := 2
+
+	// Start broker with MaxQueueMessages = 2
+	srv := startWithDB(t, port, dbPath, func(c *config.Config) {
+		c.MaxQueueMessages = &limit
+	})
+
+	// 1) Subscribe with persistent session
+	sub := mqtt.NewClient(persistentOpts(port, "persistent-limit-sub"))
+	if tok := sub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := sub.Subscribe("queuelimit/+", 1, nil); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	sub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let session row update to connected=false
+
+	// 2) Publish 3 messages while subscriber is offline
+	pub := mqtt.NewClient(mqttOpts(port, "publisher"))
+	if tok := pub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	for _, payload := range []string{"m1", "m2", "m3"} {
+		if tok := pub.Publish("queuelimit/topic", 1, false, payload); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+			t.Fatal(tok.Error())
+		}
+	}
+	pub.Disconnect(100)
+	time.Sleep(200 * time.Millisecond) // let queue hook flush
+
+	// 3) Verify only 2 rows are enqueued (since limit is 2)
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var rows int
+	if err := conn.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM messagequeue WHERE client_id = ?`, "persistent-limit-sub").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 2 {
+		t.Fatalf("expected exactly 2 enqueued rows due to limit, got %d", rows)
+	}
+
+	// 4) Reconnect and verify only 2 messages are received
+	srv.Close()
+	time.Sleep(150 * time.Millisecond)
+	srv2 := startWithDB(t, port, dbPath, func(c *config.Config) {
+		c.MaxQueueMessages = &limit
+	})
+	defer srv2.Close()
+
+	sub2 := mqtt.NewClient(persistentOpts(port, "persistent-limit-sub"))
+	if tok := sub2.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	defer sub2.Disconnect(100)
+
+	got := make(chan string, 3)
+	if tok := sub2.Subscribe("queuelimit/+", 1, func(_ mqtt.Client, m mqtt.Message) {
+		got <- string(m.Payload())
+	}); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+
+	// We expect exactly 2 messages (m1 and m2, as m3 was dropped)
+	received := []string{}
+	for i := 0; i < 2; i++ {
+		select {
+		case payload := <-got:
+			received = append(received, payload)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for message %d, received so far: %v", i+1, received)
+		}
+	}
+
+	// Verify no third message arrives
+	select {
+	case payload := <-got:
+		t.Fatalf("received unexpected third message: %s", payload)
+	case <-time.After(500 * time.Millisecond):
+		// Success: no third message received
+	}
+
+	if received[0] != "m1" || received[1] != "m2" {
+		t.Fatalf("expected payloads [m1, m2], got %v", received)
+	}
+}
+
+func TestQueueVisibilityResetOnReconnect(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "vis.db")
+	port := 25003
+
+	// 1) Start broker and establish a persistent subscriber
+	srv := startWithDB(t, port, dbPath, nil)
+	sub := mqtt.NewClient(persistentOpts(port, "persistent-vis-sub"))
+	if tok := sub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := sub.Subscribe("vis/+", 1, nil); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	sub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let session go offline
+
+	// 2) Publish a message to queue it
+	pub := mqtt.NewClient(mqttOpts(port, "publisher"))
+	if tok := pub.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	if tok := pub.Publish("vis/topic", 1, false, "vis-msg"); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	pub.Disconnect(100)
+	time.Sleep(150 * time.Millisecond) // let it queue
+
+	// 3) Access SQLite database to set visibility timeout to a future timestamp (simulate failed write)
+	conn, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	futureVT := time.Now().Add(10 * time.Minute).Unix()
+	if _, err := conn.Exec(`UPDATE messagequeue SET vt = ? WHERE client_id = ?`, futureVT, "persistent-vis-sub"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Restart the broker on the same DB file so we test session establishment
+	srv.Close()
+	time.Sleep(150 * time.Millisecond)
+	srv2 := startWithDB(t, port, dbPath, nil)
+	defer srv2.Close()
+
+	// 4) Reconnect immediately (before 10 min visibility expires) and verify message is still delivered
+	// (ResetVisibility should reset vt to 0 and allow immediate delivery)
+	opts := persistentOpts(port, "persistent-vis-sub")
+	got := make(chan string, 1)
+	opts.SetDefaultPublishHandler(func(_ mqtt.Client, m mqtt.Message) {
+		got <- string(m.Payload())
+	})
+	sub2 := mqtt.NewClient(opts)
+	if tok := sub2.Connect(); tok.WaitTimeout(2*time.Second) && tok.Error() != nil {
+		t.Fatal(tok.Error())
+	}
+	defer sub2.Disconnect(100)
+
+	select {
+	case payload := <-got:
+		if payload != "vis-msg" {
+			t.Fatalf("expected payload vis-msg, got %s", payload)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout: queued message got stuck due to future visibility timeout")
+	}
+}

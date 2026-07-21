@@ -3,12 +3,13 @@ package broker
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
-	mqtt "github.com/mochi-mqtt/server/v2"
-	"github.com/mochi-mqtt/server/v2/packets"
+	mqtt "monstermq.io/edge/internal/mqtt"
+	"monstermq.io/edge/internal/mqtt/packets"
 
 	"monstermq.io/edge/internal/pubsub"
 	"monstermq.io/edge/internal/stores"
@@ -36,6 +37,9 @@ type StorageHook struct {
 // Implemented by archive.Manager. Kept as an interface here to avoid an import cycle.
 type ArchiveDispatcher interface {
 	Dispatch(msg stores.BrokerMessage)
+	// HasGroups reports whether any archive group is active; when false the
+	// publish hot path skips building the BrokerMessage for dispatch.
+	HasGroups() bool
 }
 
 // MetricsCounter is implemented by metrics.Collector.
@@ -59,10 +63,13 @@ func (h *StorageHook) Provides(b byte) bool {
 		mqtt.OnPublished,
 		mqtt.OnRetainMessage,
 		mqtt.OnPacketSent,
+		mqtt.OnSelectRetainedMessages,
+		mqtt.OnClientExpired,
 	}, []byte{b})
 }
 
 func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
+	pv := int(cl.Properties.ProtocolVersion)
 	info := stores.SessionInfo{
 		ClientID:        cl.ID,
 		NodeID:          h.nodeID,
@@ -70,16 +77,29 @@ func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 		Connected:       true,
 		UpdateTime:      time.Now(),
 		ClientAddress:   cl.Net.Remote,
-		ProtocolVersion: int(cl.Properties.ProtocolVersion),
+		ProtocolVersion: pv,
+		Information:     fmt.Sprintf(`{"ProtocolVersion":%d}`, pv),
 	}
 	if err := h.store.Sessions.SetClient(context.Background(), info); err != nil {
 		h.logger.Warn("session persist failed", "client", cl.ID, "err", err)
 	}
 }
 
-func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, _ bool) {
-	if err := h.store.Sessions.SetConnected(context.Background(), cl.ID, false); err != nil {
-		h.logger.Warn("session disconnect persist failed", "client", cl.ID, "err", err)
+func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	if expire {
+		if err := h.store.Sessions.DelClient(context.Background(), cl.ID); err != nil {
+			h.logger.Warn("session delete failed on disconnect", "client", cl.ID, "err", err)
+		}
+	} else {
+		if err := h.store.Sessions.SetConnected(context.Background(), cl.ID, false); err != nil {
+			h.logger.Warn("session disconnect persist failed", "client", cl.ID, "err", err)
+		}
+	}
+}
+
+func (h *StorageHook) OnClientExpired(cl *mqtt.Client) {
+	if err := h.store.Sessions.DelClient(context.Background(), cl.ID); err != nil {
+		h.logger.Warn("session delete failed on client expiry", "client", cl.ID, "err", err)
 	}
 }
 
@@ -126,6 +146,11 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 	if h.metrics != nil {
 		h.metrics.IncIn()
 	}
+	hasBus := h.bus != nil && h.bus.HasSubscribers()
+	hasArchive := h.archives != nil && h.archives.HasGroups()
+	if !hasBus && !hasArchive {
+		return // nobody consumes the message; skip uuid/copy/dispatch entirely
+	}
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
@@ -141,8 +166,10 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		v := pk.Properties.MessageExpiryInterval
 		msg.MessageExpiryInterval = &v
 	}
-	h.bus.Publish(msg)
-	if h.archives != nil {
+	if hasBus {
+		h.bus.Publish(msg)
+	}
+	if hasArchive {
 		h.archives.Dispatch(msg)
 	}
 }
@@ -169,4 +196,33 @@ func (h *StorageHook) OnRetainMessage(cl *mqtt.Client, pk packets.Packet, r int6
 	if err := h.store.Retained.AddAll(ctx, []stores.BrokerMessage{msg}); err != nil {
 		h.logger.Warn("retained persist failed", "topic", pk.TopicName, "err", err)
 	}
+}
+
+// OnSelectRetainedMessages returns matching retained messages from the store.
+func (h *StorageHook) OnSelectRetainedMessages(filter string) ([]packets.Packet, error) {
+	if h.retainedInMemory {
+		return nil, nil
+	}
+	ctx := context.Background()
+	var pks []packets.Packet
+	err := h.store.Retained.FindMatchingMessages(ctx, filter, func(msg stores.BrokerMessage) bool {
+		pk := packets.Packet{
+			FixedHeader: packets.FixedHeader{
+				Type:   packets.Publish,
+				Qos:    msg.QoS,
+				Retain: true,
+			},
+			TopicName: msg.TopicName,
+			Payload:   msg.Payload,
+		}
+		if msg.MessageExpiryInterval != nil {
+			pk.Properties.MessageExpiryInterval = *msg.MessageExpiryInterval
+		}
+		pks = append(pks, pk)
+		return true
+	})
+	if err != nil {
+		return nil, err
+	}
+	return pks, nil
 }

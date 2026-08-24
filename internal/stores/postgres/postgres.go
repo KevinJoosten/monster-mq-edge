@@ -26,6 +26,7 @@ type DB struct {
 }
 
 func Open(ctx context.Context, dsn string) (*DB, error) {
+	dsn = strings.TrimPrefix(dsn, "jdbc:")
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("parse pg dsn: %w", err)
@@ -209,7 +210,7 @@ func (s *MessageStore) FindMatchingMessages(ctx context.Context, pattern string,
 		if !matchTopic(pattern, topic) {
 			continue
 		}
-		if expiry != nil && *expiry >= 0 && creat != nil && (now-*creat)/1000 >= *expiry {
+		if expiry != nil && *expiry > 0 && creat != nil && *creat > 0 && (now-*creat)/1000 >= *expiry {
 			continue
 		}
 		msg := stores.BrokerMessage{TopicName: topic, Payload: payload, QoS: byte(qos), IsRetain: true}
@@ -298,24 +299,43 @@ func (a *MessageArchive) EnsureTable(ctx context.Context) error {
 	return nil
 }
 
+func isProbablyJSON(b []byte) bool {
+	for _, c := range b {
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			continue
+		}
+		return c == '{' || c == '[' || c == '"' || (c >= '0' && c <= '9') || c == '-' || c == 't' || c == 'f' || c == 'n'
+	}
+	return false
+}
+
 func (a *MessageArchive) AddHistory(ctx context.Context, msgs []stores.BrokerMessage) error {
 	if len(msgs) == 0 {
 		return nil
 	}
 	t := a.tableName()
-	q := fmt.Sprintf(`INSERT INTO %s (topic, time, payload_blob, qos, retained, client_id, message_uuid)
-        VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (topic, time) DO NOTHING`, t)
-	tx, err := a.db.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
+	q := fmt.Sprintf(`INSERT INTO %s (topic, time, payload_blob, payload_json, qos, retained, client_id, message_uuid)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (topic, time) DO NOTHING`, t)
+	b := &pgx.Batch{}
 	for _, m := range msgs {
-		if _, err := tx.Exec(ctx, q, m.TopicName, m.Time.UTC(), m.Payload, int(m.QoS), m.IsRetain, m.ClientID, m.MessageUUID); err != nil {
-			_ = tx.Rollback(ctx)
+		var payloadBlob []byte
+		var payloadJSON *string
+		if a.fmt == stores.PayloadJSON && len(m.Payload) > 0 && json.Valid(m.Payload) {
+			s := string(m.Payload)
+			payloadJSON = &s
+		} else {
+			payloadBlob = m.Payload
+		}
+		b.Queue(q, m.TopicName, m.Time.UTC(), payloadBlob, payloadJSON, int(m.QoS), m.IsRetain, m.ClientID, m.MessageUUID)
+	}
+	br := a.db.pool.SendBatch(ctx, b)
+	defer br.Close()
+	for i := 0; i < len(msgs); i++ {
+		if _, err := br.Exec(); err != nil {
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return nil
 }
 
 func (a *MessageArchive) GetHistory(ctx context.Context, topic string, from, to *time.Time, limit int) ([]stores.ArchivedMessage, error) {
@@ -323,7 +343,7 @@ func (a *MessageArchive) GetHistory(ctx context.Context, topic string, from, to 
 		limit = 100
 	}
 	pattern := strings.ReplaceAll(strings.ReplaceAll(topic, "#", "%"), "+", "%")
-	q := fmt.Sprintf(`SELECT topic, time, payload_blob, qos, client_id FROM %s WHERE topic LIKE $1`, a.tableName())
+	q := fmt.Sprintf(`SELECT topic, time, payload_blob, payload_json, qos, client_id FROM %s WHERE topic LIKE $1`, a.tableName())
 	args := []any{pattern}
 	if from != nil {
 		q += fmt.Sprintf(` AND time >= $%d`, len(args)+1)
@@ -343,14 +363,19 @@ func (a *MessageArchive) GetHistory(ctx context.Context, topic string, from, to 
 	out := []stores.ArchivedMessage{}
 	for rows.Next() {
 		var (
-			topic   string
-			ts      time.Time
-			payload []byte
-			qos     int
-			cid     *string
+			topic       string
+			ts          time.Time
+			payloadBlob []byte
+			payloadJSON *string
+			qos         int
+			cid         *string
 		)
-		if err := rows.Scan(&topic, &ts, &payload, &qos, &cid); err != nil {
+		if err := rows.Scan(&topic, &ts, &payloadBlob, &payloadJSON, &qos, &cid); err != nil {
 			return nil, err
+		}
+		payload := payloadBlob
+		if len(payload) == 0 && payloadJSON != nil {
+			payload = []byte(*payloadJSON)
 		}
 		am := stores.ArchivedMessage{Topic: topic, Timestamp: ts, Payload: payload, QoS: byte(qos)}
 		if cid != nil {
@@ -422,6 +447,178 @@ func (a *MessageArchive) PurgeOlderThan(ctx context.Context, t time.Time) (store
 		return stores.PurgeResult{Err: err}, err
 	}
 	return stores.PurgeResult{DeletedRows: res.RowsAffected()}, nil
+}
+
+func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []string, startTime, endTime time.Time, intervalMinutes int, functions []string, fields []string) (*stores.AggregatedResult, error) {
+	if len(topics) == 0 {
+		return &stores.AggregatedResult{
+			Columns:    []string{"timestamp"},
+			Rows:       [][]any{},
+			Interval:   fmt.Sprintf("%d", intervalMinutes),
+			StartTime:  startTime.UTC().Format(time.RFC3339),
+			EndTime:    endTime.UTC().Format(time.RFC3339),
+			TopicCount: 0,
+			RowCount:   0,
+		}, nil
+	}
+
+	if intervalMinutes <= 0 {
+		intervalMinutes = 5
+	}
+	if len(functions) == 0 {
+		functions = []string{"AVG"}
+	}
+
+	var bucketExpr string
+	switch intervalMinutes {
+	case 1:
+		bucketExpr = "to_char(date_trunc('minute', time), 'YYYY-MM-DD\"T\"HH24:MI:00\"Z\"')"
+	case 60:
+		bucketExpr = "to_char(date_trunc('hour', time), 'YYYY-MM-DD\"T\"HH24:00:00\"Z\"')"
+	case 1440:
+		bucketExpr = "to_char(date_trunc('day', time), 'YYYY-MM-DD\"T\"00:00:00\"Z\"')"
+	default:
+		bucketExpr = fmt.Sprintf("to_char(date_trunc('hour', time) + (EXTRACT(minute FROM time)::int / %d * %d) * interval '1 minute', 'YYYY-MM-DD\"T\"HH24:MI:00\"Z\"')", intervalMinutes, intervalMinutes)
+	}
+
+	columns := []string{"timestamp"}
+	selectClauses := make([]string, 0)
+	columnNames := make([]string, 0)
+	var args []any
+	paramIndex := 1
+
+	effectiveFields := fields
+	if len(effectiveFields) == 0 {
+		effectiveFields = []string{""}
+	}
+
+	for _, topic := range topics {
+		for _, field := range effectiveFields {
+			fieldAlias := ""
+			if field != "" {
+				fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
+			}
+
+			var valExpr string
+			if field == "" {
+				valExpr = "COALESCE((payload_json)::NUMERIC, (convert_from(payload_blob, 'UTF8'))::NUMERIC)"
+			} else {
+				jsonDocExpr := "COALESCE(payload_json, (convert_from(payload_blob, 'UTF8'))::jsonb)"
+				pathParts := strings.Split(field, ".")
+				if len(pathParts) == 1 {
+					valExpr = fmt.Sprintf("(%s->>'%s')::NUMERIC", jsonDocExpr, field)
+				} else {
+					jsonPath := strings.Join(pathParts[:len(pathParts)-1], "->")
+					lastField := pathParts[len(pathParts)-1]
+					valExpr = fmt.Sprintf("(%s->%s->>'%s')::NUMERIC", jsonDocExpr, jsonPath, lastField)
+				}
+			}
+
+			for _, fn := range functions {
+				fnUpper := strings.ToUpper(fn)
+				fnLower := strings.ToLower(fn)
+				colName := fmt.Sprintf("%s%s_%s", topic, fieldAlias, fnLower)
+				columnNames = append(columnNames, colName)
+				columns = append(columns, colName)
+
+				sqlFunc := "AVG"
+				switch fnUpper {
+				case "AVG":
+					sqlFunc = "AVG"
+				case "MIN":
+					sqlFunc = "MIN"
+				case "MAX":
+					sqlFunc = "MAX"
+				case "COUNT":
+					sqlFunc = "COUNT"
+				case "SUM":
+					sqlFunc = "SUM"
+				default:
+					sqlFunc = "AVG"
+				}
+
+				selectClauses = append(selectClauses, fmt.Sprintf("%s(CASE WHEN topic = $%d THEN %s END)", sqlFunc, paramIndex, valExpr))
+				args = append(args, topic)
+				paramIndex++
+			}
+		}
+	}
+
+	topicPlaceholders := make([]string, len(topics))
+	for i, t := range topics {
+		topicPlaceholders[i] = fmt.Sprintf("$%d", paramIndex)
+		args = append(args, t)
+		paramIndex++
+	}
+
+	startTimeParamIdx := paramIndex
+	args = append(args, startTime.UTC())
+	paramIndex++
+
+	endTimeParamIdx := paramIndex
+	args = append(args, endTime.UTC())
+
+	q := fmt.Sprintf(`SELECT
+		%s AS bucket,
+		%s
+	FROM %s
+	WHERE topic IN (%s) AND time >= $%d AND time <= $%d
+	GROUP BY bucket
+	ORDER BY bucket ASC`,
+		bucketExpr,
+		strings.Join(selectClauses, ",\n"),
+		a.tableName(),
+		strings.Join(topicPlaceholders, ", "),
+		startTimeParamIdx,
+		endTimeParamIdx,
+	)
+
+	dbRows, err := a.db.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer dbRows.Close()
+
+	rows := make([][]any, 0)
+	for dbRows.Next() {
+		scanTargets := make([]any, len(columnNames)+1)
+		var bucket string
+		scanTargets[0] = &bucket
+		for i := range columnNames {
+			var val *float64
+			scanTargets[i+1] = &val
+		}
+
+		if err := dbRows.Scan(scanTargets...); err != nil {
+			return nil, err
+		}
+
+		row := make([]any, len(columnNames)+1)
+		row[0] = bucket
+		for i := range columnNames {
+			val := scanTargets[i+1].(**float64)
+			if *val != nil {
+				row[i+1] = **val
+			} else {
+				row[i+1] = nil
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	if err := dbRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return &stores.AggregatedResult{
+		Columns:    columns,
+		Rows:       rows,
+		Interval:   fmt.Sprintf("%d", intervalMinutes),
+		StartTime:  startTime.UTC().Format(time.RFC3339),
+		EndTime:    endTime.UTC().Format(time.RFC3339),
+		TopicCount: len(topics),
+		RowCount:   len(rows),
+	}, nil
 }
 
 // SessionStore -------------------------------------------------------------
@@ -1102,11 +1299,39 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
         purge_interval TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW(),
-        payload_format TEXT DEFAULT 'DEFAULT'
+        payload_format TEXT DEFAULT 'DEFAULT',
+        queue_type TEXT DEFAULT 'NONE',
+        queue_size INTEGER DEFAULT 100000,
+        bulk_size INTEGER DEFAULT 4000,
+        bulk_timeout_ms INTEGER DEFAULT 250,
+        queue_disk_path TEXT DEFAULT 'data/queue',
+        last_val_read_only INTEGER NOT NULL DEFAULT 0,
+        archive_read_only INTEGER NOT NULL DEFAULT 0
     )`); err != nil {
 		return err
 	}
 	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS database_connection_name TEXT`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS queue_type TEXT DEFAULT 'NONE'`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS queue_size INTEGER DEFAULT 100000`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS bulk_size INTEGER DEFAULT 4000`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS bulk_timeout_ms INTEGER DEFAULT 250`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS queue_disk_path TEXT DEFAULT 'data/queue'`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS last_val_read_only INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS archive_read_only INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
 	_, err := a.db.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS databaseconnections (
@@ -1125,7 +1350,7 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
 }
 func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupConfig, error) {
 	rows, err := a.db.pool.Query(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format FROM archiveconfigs ORDER BY name`)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -1144,7 +1369,7 @@ func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupC
 }
 func (a *ArchiveConfigStore) Get(ctx context.Context, name string) (*stores.ArchiveGroupConfig, error) {
 	row := a.db.pool.QueryRow(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format FROM archiveconfigs WHERE name=$1`, name)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs WHERE name=$1`, name)
 	return scanArchiveCfg(row)
 }
 func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
@@ -1154,8 +1379,15 @@ func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
 		topicFilter, lvType, arType    string
 		dbConn, lvRet, arRet, purgeInt *string
 		payloadFormat                  *string
+		qType                          *string
+		qSize                          *int
+		bSize                          *int
+		bTimeout                       *int64
+		qDiskPath                      *string
+		lvReadOnly                     *int
+		arReadOnly                     *int
 	)
-	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &lvRet, &arRet, &purgeInt, &payloadFormat); err != nil {
+	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &lvRet, &arRet, &purgeInt, &payloadFormat, &qType, &qSize, &bSize, &bTimeout, &qDiskPath, &lvReadOnly, &arReadOnly); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -1182,6 +1414,31 @@ func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
 	if payloadFormat != nil {
 		cfg.PayloadFormat = stores.PayloadFormat(*payloadFormat)
 	}
+	if qType != nil && *qType != "" {
+		cfg.QueueType = *qType
+	} else {
+		cfg.QueueType = "NONE"
+	}
+	if qSize != nil {
+		cfg.QueueSize = *qSize
+	}
+	if bSize != nil {
+		cfg.BulkSize = *bSize
+	}
+	if bTimeout != nil && *bTimeout > 0 {
+		cfg.BulkTimeoutMs = *bTimeout
+	} else {
+		cfg.BulkTimeoutMs = 250
+	}
+	if qDiskPath != nil {
+		cfg.QueueDiskPath = *qDiskPath
+	}
+	if lvReadOnly != nil {
+		cfg.LastValReadOnly = *lvReadOnly == 1
+	}
+	if arReadOnly != nil {
+		cfg.ArchiveReadOnly = *arReadOnly == 1
+	}
 	return &cfg, nil
 }
 func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupConfig) error {
@@ -1193,19 +1450,33 @@ func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupCo
 	if cfg.RetainedOnly {
 		retainedOnly = 1
 	}
-	_, err := a.db.pool.Exec(ctx, `INSERT INTO archiveconfigs (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	lvReadOnly := 0
+	if cfg.LastValReadOnly {
+		lvReadOnly = 1
+	}
+	arReadOnly := 0
+	if cfg.ArchiveReadOnly {
+		arReadOnly = 1
+	}
+	_, err := a.db.pool.Exec(ctx, `INSERT INTO archiveconfigs (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
         ON CONFLICT (name) DO UPDATE SET
             enabled=EXCLUDED.enabled, topic_filter=EXCLUDED.topic_filter, retained_only=EXCLUDED.retained_only,
             last_val_type=EXCLUDED.last_val_type, archive_type=EXCLUDED.archive_type,
             database_connection_name=EXCLUDED.database_connection_name,
             last_val_retention=EXCLUDED.last_val_retention, archive_retention=EXCLUDED.archive_retention,
             purge_interval=EXCLUDED.purge_interval, payload_format=EXCLUDED.payload_format,
+            queue_type=EXCLUDED.queue_type, queue_size=EXCLUDED.queue_size,
+            bulk_size=EXCLUDED.bulk_size, bulk_timeout_ms=EXCLUDED.bulk_timeout_ms,
+            queue_disk_path=EXCLUDED.queue_disk_path,
+            last_val_read_only=EXCLUDED.last_val_read_only,
+            archive_read_only=EXCLUDED.archive_read_only,
             updated_at=NOW()`,
 		cfg.Name, enabled, strings.Join(cfg.TopicFilters, ","), retainedOnly,
 		string(cfg.LastValType), string(cfg.ArchiveType),
 		nullStr(cfg.DatabaseConnectionName), nullStr(cfg.LastValRetention), nullStr(cfg.ArchiveRetention), nullStr(cfg.PurgeInterval),
-		string(cfg.PayloadFormat))
+		string(cfg.PayloadFormat), nullStr(cfg.QueueType), cfg.QueueSize, cfg.BulkSize, cfg.BulkTimeoutMs, nullStr(cfg.QueueDiskPath),
+		lvReadOnly, arReadOnly)
 	return err
 }
 func nullStr(s string) any {
@@ -1311,7 +1582,7 @@ func (d *DeviceConfigStore) EnsureTable(ctx context.Context) error {
             node_id TEXT NOT NULL,
             config TEXT NOT NULL,
             enabled INTEGER DEFAULT 1,
-            type TEXT DEFAULT 'MQTT_CLIENT',
+            type TEXT,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW()
         )`,
@@ -1328,11 +1599,14 @@ func (d *DeviceConfigStore) EnsureTable(ctx context.Context) error {
 func (d *DeviceConfigStore) GetAll(ctx context.Context) ([]stores.DeviceConfig, error) {
 	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs ORDER BY name`)
 }
+func (d *DeviceConfigStore) GetByType(ctx context.Context, deviceType string) ([]stores.DeviceConfig, error) {
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs WHERE type=$1 ORDER BY name`, deviceType)
+}
 func (d *DeviceConfigStore) GetByNode(ctx context.Context, nodeID string) ([]stores.DeviceConfig, error) {
-	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs WHERE node_id=$1 ORDER BY name`, nodeID)
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs WHERE node_id=$1 OR node_id='local' OR node_id='*' ORDER BY name`, nodeID)
 }
 func (d *DeviceConfigStore) GetEnabledByNode(ctx context.Context, nodeID string) ([]stores.DeviceConfig, error) {
-	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs WHERE node_id=$1 AND enabled=1 ORDER BY name`, nodeID)
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM deviceconfigs WHERE (node_id=$1 OR node_id='local' OR node_id='*') AND enabled=1 ORDER BY name`, nodeID)
 }
 func (d *DeviceConfigStore) query(ctx context.Context, q string, args ...any) ([]stores.DeviceConfig, error) {
 	rows, err := d.db.pool.Query(ctx, q, args...)

@@ -76,6 +76,12 @@ type PostgresConfig struct {
 	Pass string `yaml:"Pass"`
 }
 
+type QuestDBConfig struct {
+	URL  string `yaml:"Url"`
+	User string `yaml:"User"`
+	Pass string `yaml:"Pass"`
+}
+
 type MongoDBConfig struct {
 	URL      string `yaml:"Url"`
 	Database string `yaml:"Database"`
@@ -159,11 +165,32 @@ type ProvisionConfig struct {
 	ChallengeExposure string `yaml:"ChallengeExposure"`
 }
 
+type MCPConfig struct {
+	Enabled bool `yaml:"Enabled"`
+	Port    int  `yaml:"Port"`
+}
+
 type HostMonitoringConfig struct {
 	Enabled         bool   `yaml:"Enabled"`
 	BaseTopic       string `yaml:"BaseTopic"`
 	IntervalSeconds int    `yaml:"IntervalSeconds"`
 	QoS             int    `yaml:"QoS"`
+}
+
+type HMIConfig struct {
+	Enabled   bool   `yaml:"Enabled"`
+	Path      string `yaml:"Path"`
+	MountPath string `yaml:"MountPath"`
+}
+
+type RedfishConfig struct {
+	Enabled          bool   `yaml:"Enabled"`
+	Port             int    `yaml:"Port"`
+	MountPath        string `yaml:"MountPath"`
+	DefaultChassisId string `yaml:"DefaultChassisId"`
+	DefaultSystemId  string `yaml:"DefaultSystemId"`
+	DefaultManagerId string `yaml:"DefaultManagerId"`
+	AnonymousEnabled bool   `yaml:"AnonymousEnabled"`
 }
 
 // FeaturesConfig is a flat set of feature toggles, mirroring the Features
@@ -174,6 +201,9 @@ type FeaturesConfig struct {
 	WinCCUa            bool `yaml:"WinCCUa"`
 	WinCCOa            bool `yaml:"WinCCOa"`
 	DeviceImportExport bool `yaml:"DeviceImportExport"`
+	Mcp                bool `yaml:"Mcp"`
+	Hmi                bool `yaml:"Hmi"`
+	Redfish            bool `yaml:"Redfish"`
 }
 
 type Config struct {
@@ -192,6 +222,7 @@ type Config struct {
 
 	SQLite   SQLiteConfig   `yaml:"SQLite"`
 	Postgres PostgresConfig `yaml:"Postgres"`
+	QuestDB  QuestDBConfig  `yaml:"QuestDB"`
 	MongoDB  MongoDBConfig  `yaml:"MongoDB"`
 
 	UserManagement UserManagementConfig `yaml:"UserManagement"`
@@ -199,10 +230,13 @@ type Config struct {
 	Metrics        MetricsConfig        `yaml:"Metrics"`
 	Logging        LoggingConfig        `yaml:"Logging"`
 	GraphQL        GraphQLConfig        `yaml:"GraphQL"`
+	MCP            MCPConfig            `yaml:"MCP"`
 	Features       FeaturesConfig       `yaml:"Features"`
 	CertRenewal    CertRenewalConfig    `yaml:"CertRenewal"`
 	Provision      ProvisionConfig      `yaml:"Provision"`
 	HostMonitoring HostMonitoringConfig `yaml:"HostMonitoring"`
+	HMI            HMIConfig            `yaml:"HMI"`
+	Redfish        RedfishConfig        `yaml:"Redfish"`
 
 	// QueuedMessagesEnabled selects how messages for offline persistent (clean=false)
 	// sessions are held until the client reconnects.
@@ -234,13 +268,28 @@ func Default() *Config {
 		UserManagement:        UserManagementConfig{Enabled: false, PasswordAlgorithm: "BCRYPT", AnonymousEnabled: true, AclCacheEnabled: true},
 		Metrics:               MetricsConfig{Enabled: true, CollectionIntervalSeconds: 1, RetentionHours: 168, MaxHistoryRows: 3600},
 		Logging:               LoggingConfig{Level: "INFO", MqttSyslogEnabled: false, RingBufferSize: 1000},
-		GraphQL:               GraphQLConfig{Enabled: true, Port: 8080},
-		Features:              FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false}, // Note: actually features default to false, we don't have to change features list but keep default format clean
+		GraphQL:               GraphQLConfig{Enabled: true, Port: 4000},
+		MCP:                   MCPConfig{Enabled: false, Port: 3000},
+		Features:              FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false, Mcp: false, Hmi: false, Redfish: false},
 		HostMonitoring: HostMonitoringConfig{
 			Enabled:         false,
 			BaseTopic:       "nodes/{NodeId}/host",
 			IntervalSeconds: 10,
 			QoS:             0,
+		},
+		HMI: HMIConfig{
+			Enabled:   false,
+			Path:      "./data/hmi",
+			MountPath: "/hmi",
+		},
+		Redfish: RedfishConfig{
+			Enabled:          false,
+			Port:             8000,
+			MountPath:        "/redfish/v1",
+			DefaultChassisId: "EdgeNode",
+			DefaultSystemId:  "edge-node",
+			DefaultManagerId: "monstermq-edge",
+			AnonymousEnabled: true,
 		},
 		QueuedMessagesEnabled: true,
 		MaxQueueMessages:      nil,

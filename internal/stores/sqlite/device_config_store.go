@@ -26,7 +26,7 @@ func (d *DeviceConfigStore) EnsureTable(ctx context.Context) error {
             node_id TEXT NOT NULL,
             config TEXT NOT NULL,
             enabled INTEGER DEFAULT 1,
-            type TEXT DEFAULT 'MQTT_CLIENT',
+            type TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now'))
         )`,
@@ -65,12 +65,16 @@ func (d *DeviceConfigStore) GetAll(ctx context.Context) ([]stores.DeviceConfig, 
 	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` ORDER BY name`)
 }
 
+func (d *DeviceConfigStore) GetByType(ctx context.Context, deviceType string) ([]stores.DeviceConfig, error) {
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` WHERE type = ? ORDER BY name`, deviceType)
+}
+
 func (d *DeviceConfigStore) GetByNode(ctx context.Context, nodeID string) ([]stores.DeviceConfig, error) {
-	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` WHERE node_id = ? ORDER BY name`, nodeID)
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` WHERE node_id = ? OR node_id = 'local' OR node_id = '*' ORDER BY name`, nodeID)
 }
 
 func (d *DeviceConfigStore) GetEnabledByNode(ctx context.Context, nodeID string) ([]stores.DeviceConfig, error) {
-	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` WHERE node_id = ? AND enabled = 1 ORDER BY name`, nodeID)
+	return d.query(ctx, `SELECT name, namespace, node_id, config, enabled, type, created_at, updated_at FROM `+deviceConfigTable+` WHERE (node_id = ? OR node_id = 'local' OR node_id = '*') AND enabled = 1 ORDER BY name`, nodeID)
 }
 
 func (d *DeviceConfigStore) query(ctx context.Context, q string, args ...any) ([]stores.DeviceConfig, error) {

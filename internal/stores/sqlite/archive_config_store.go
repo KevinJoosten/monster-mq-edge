@@ -35,11 +35,39 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
         purge_interval TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-        payload_format TEXT DEFAULT 'DEFAULT'
+        payload_format TEXT DEFAULT 'DEFAULT',
+        queue_type TEXT DEFAULT 'NONE',
+        queue_size INTEGER DEFAULT 100000,
+        bulk_size INTEGER DEFAULT 4000,
+        bulk_timeout_ms INTEGER DEFAULT 250,
+        queue_disk_path TEXT DEFAULT 'data/queue',
+        last_val_read_only INTEGER NOT NULL DEFAULT 0,
+        archive_read_only INTEGER NOT NULL DEFAULT 0
     )`); err != nil {
 		return err
 	}
 	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN database_connection_name TEXT`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN queue_type TEXT DEFAULT 'NONE'`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN queue_size INTEGER DEFAULT 100000`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN bulk_size INTEGER DEFAULT 4000`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN bulk_timeout_ms INTEGER DEFAULT 250`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN queue_disk_path TEXT DEFAULT 'data/queue'`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN last_val_read_only INTEGER NOT NULL DEFAULT 0`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
+	if _, err := a.db.Exec(`ALTER TABLE ` + archiveConfigTable + ` ADD COLUMN archive_read_only INTEGER NOT NULL DEFAULT 0`); err != nil && !isDuplicateColumnErr(err) {
 		return err
 	}
 	_, err := a.db.Exec(`CREATE TABLE IF NOT EXISTS ` + databaseConnectionsTable + ` (
@@ -74,8 +102,15 @@ func rowToArchive(scanner interface{ Scan(...any) error }) (*stores.ArchiveGroup
 		arRet         sql.NullString
 		purgeInt      sql.NullString
 		payloadFormat sql.NullString
+		qType         sql.NullString
+		qSize         sql.NullInt64
+		bSize         sql.NullInt64
+		bTimeout      sql.NullInt64
+		qDiskPath     sql.NullString
+		lvReadOnly    sql.NullInt64
+		arReadOnly    sql.NullInt64
 	)
-	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &lvRet, &arRet, &purgeInt, &payloadFormat); err != nil {
+	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &lvRet, &arRet, &purgeInt, &payloadFormat, &qType, &qSize, &bSize, &bTimeout, &qDiskPath, &lvReadOnly, &arReadOnly); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -95,6 +130,31 @@ func rowToArchive(scanner interface{ Scan(...any) error }) (*stores.ArchiveGroup
 	} else {
 		cfg.PayloadFormat = stores.PayloadDefault
 	}
+	if qType.Valid && qType.String != "" {
+		cfg.QueueType = qType.String
+	} else {
+		cfg.QueueType = "NONE"
+	}
+	if qSize.Valid {
+		cfg.QueueSize = int(qSize.Int64)
+	}
+	if bSize.Valid {
+		cfg.BulkSize = int(bSize.Int64)
+	}
+	if bTimeout.Valid && bTimeout.Int64 > 0 {
+		cfg.BulkTimeoutMs = bTimeout.Int64
+	} else {
+		cfg.BulkTimeoutMs = 250
+	}
+	if qDiskPath.Valid {
+		cfg.QueueDiskPath = qDiskPath.String
+	}
+	if lvReadOnly.Valid {
+		cfg.LastValReadOnly = lvReadOnly.Int64 == 1
+	}
+	if arReadOnly.Valid {
+		cfg.ArchiveReadOnly = arReadOnly.Int64 == 1
+	}
 	return &cfg, nil
 }
 
@@ -113,7 +173,7 @@ func joinFilter(s []string) string { return strings.Join(s, ",") }
 
 func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupConfig, error) {
 	rows, err := a.db.Conn().QueryContext(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format FROM `+archiveConfigTable+` ORDER BY name`)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM `+archiveConfigTable+` ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -133,13 +193,13 @@ func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupC
 
 func (a *ArchiveConfigStore) Get(ctx context.Context, name string) (*stores.ArchiveGroupConfig, error) {
 	row := a.db.Conn().QueryRowContext(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format FROM `+archiveConfigTable+` WHERE name = ?`, name)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM `+archiveConfigTable+` WHERE name = ?`, name)
 	return rowToArchive(row)
 }
 
 func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupConfig) error {
-	_, err := a.db.Exec(`INSERT INTO `+archiveConfigTable+` (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	_, err := a.db.Exec(`INSERT INTO `+archiveConfigTable+` (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (name) DO UPDATE SET
             enabled = excluded.enabled,
             topic_filter = excluded.topic_filter,
@@ -151,9 +211,18 @@ func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupCo
             archive_retention = excluded.archive_retention,
             purge_interval = excluded.purge_interval,
             payload_format = excluded.payload_format,
+            queue_type = excluded.queue_type,
+            queue_size = excluded.queue_size,
+            bulk_size = excluded.bulk_size,
+            bulk_timeout_ms = excluded.bulk_timeout_ms,
+            queue_disk_path = excluded.queue_disk_path,
+            last_val_read_only = excluded.last_val_read_only,
+            archive_read_only = excluded.archive_read_only,
             updated_at = CURRENT_TIMESTAMP`,
 		cfg.Name, boolToInt(cfg.Enabled), joinFilter(cfg.TopicFilters), boolToInt(cfg.RetainedOnly),
-		string(cfg.LastValType), string(cfg.ArchiveType), nullStr(cfg.DatabaseConnectionName), nullStr(cfg.LastValRetention), nullStr(cfg.ArchiveRetention), nullStr(cfg.PurgeInterval), string(cfg.PayloadFormat))
+		string(cfg.LastValType), string(cfg.ArchiveType), nullStr(cfg.DatabaseConnectionName), nullStr(cfg.LastValRetention), nullStr(cfg.ArchiveRetention), nullStr(cfg.PurgeInterval), string(cfg.PayloadFormat),
+		nullStr(cfg.QueueType), cfg.QueueSize, cfg.BulkSize, cfg.BulkTimeoutMs, nullStr(cfg.QueueDiskPath),
+		boolToInt(cfg.LastValReadOnly), boolToInt(cfg.ArchiveReadOnly))
 	return err
 }
 

@@ -18,6 +18,5 @@ services:
       - '8883'
       - '9000'
       - '9001'
-    mem_limit: 256mb
+    mem_limit: 512mb
     cpu_count: 2
-

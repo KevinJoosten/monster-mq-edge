@@ -6,14 +6,14 @@ scalar JSON
 # unchanged. Bridge-specific shapes (OPC UA, Kafka, NATS, Redis, WinCC, PLC4X,
 # Neo4j, GenAI, flows, MCP) are intentionally omitted.
 
-enum DataFormat { JSON BINARY }
+enum DataFormat { JSON TEXT BINARY }
 enum OrderDirection { ASC DESC }
 enum AggregationInterval { ONE_MINUTE FIVE_MINUTES FIFTEEN_MINUTES ONE_HOUR ONE_DAY }
 enum AggregationFunction { AVG MIN MAX COUNT }
-enum DatabaseConnectionType { POSTGRES MONGODB }
+enum DatabaseConnectionType { POSTGRES MONGODB SQLITE CRATEDB QUESTDB }
 
 enum MessageStoreType { NONE MEMORY HAZELCAST POSTGRES CRATEDB MONGODB SQLITE }
-enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB SQLITE }
+enum MessageArchiveType { NONE POSTGRES CRATEDB QUESTDB MONGODB SQLITE }
 enum PayloadFormat { DEFAULT JSON }
 
 # -----------------------------------------------------------------------------
@@ -87,22 +87,12 @@ type BrokerConfig {
     configStoreType: String!
     userManagementEnabled: Boolean!
     anonymousEnabled: Boolean!
-    mcpEnabled: Boolean!
-    mcpPort: Int!
-    prometheusEnabled: Boolean!
-    prometheusPort: Int!
-    i3xEnabled: Boolean!
-    i3xPort: Int!
-    graphqlEnabled: Boolean!
-    graphqlPort: Int!
-    metricsEnabled: Boolean!
-    genAiEnabled: Boolean!
-    genAiProvider: String!
-    genAiModel: String!
     postgresUrl: String!
     postgresUser: String!
     crateDbUrl: String!
     crateDbUser: String!
+    questDbUrl: String!
+    questDbUser: String!
     mongoDbUrl: String!
     mongoDbDatabase: String!
     sqlitePath: String!
@@ -247,8 +237,15 @@ type ArchiveGroupInfo {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String
+    queueSize: Int
+    bulkSize: Int
+    bulkTimeoutMs: Long
+    queueDiskPath: String
     createdAt: String
     updatedAt: String
+    lastValReadOnly: Boolean!
+    archiveReadOnly: Boolean!
     connectionStatus: [NodeConnectionStatus!]!
     metrics: [ArchiveGroupMetrics!]!
     metricsHistory(from: String, to: String, lastMinutes: Int): [ArchiveGroupMetrics!]!
@@ -265,6 +262,13 @@ input CreateArchiveGroupInput {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String = "MEMORY"
+    queueSize: Int = 100000
+    bulkSize: Int = 4000
+    bulkTimeoutMs: Long = 1000
+    queueDiskPath: String = "data/queue"
+    lastValReadOnly: Boolean = false
+    archiveReadOnly: Boolean = false
 }
 
 input UpdateArchiveGroupInput {
@@ -278,6 +282,13 @@ input UpdateArchiveGroupInput {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String
+    queueSize: Int
+    bulkSize: Int
+    bulkTimeoutMs: Long
+    queueDiskPath: String
+    lastValReadOnly: Boolean
+    archiveReadOnly: Boolean
 }
 
 type ArchiveGroupResult {
@@ -381,8 +392,8 @@ input CreateAclRuleInput {
 
 input UpdateAclRuleInput {
     id: String!
-    username: String!
-    topicPattern: String!
+    username: String
+    topicPattern: String
     canSubscribe: Boolean
     canPublish: Boolean
     priority: Int
@@ -558,23 +569,23 @@ type MqttClientResult {
 
 input PublishInput {
     topic: String!
-    payload: String
-    payloadBase64: String
-    payloadJson: JSON
-    qos: Int
-    retain: Boolean
-    format: DataFormat
+    payload: String!
+    format: DataFormat = JSON
+    qos: Int = 0
+    retained: Boolean = false
 }
 
 type PublishResult {
     success: Boolean!
-    message: String
     topic: String!
+    timestamp: Long!
+    error: String
 }
 
 type PurgeResult {
     success: Boolean!
     message: String
+    deletedCount: Long!
     purgedCount: Long!
 }
 
@@ -738,6 +749,67 @@ type Query {
     databaseConnection(name: String!): DatabaseConnectionInfo
     getDevices(names: [String!]): [Device!]!
     mqttClients(name: String, node: String): [MqttClient!]!
+    hmis(name: String, nodeId: String): [Hmi!]!
+    hmi(name: String!): Hmi
+    hmiFiles(name: String!): [DashboardFile!]!
+    exportHmiZip(name: String!): String!
+}
+
+type HmiConfig {
+    urlPath: String!
+    isMain: Boolean!
+    title: String
+    description: String
+    entryPoint: String
+}
+
+type Hmi {
+    name: String!
+    nodeId: String!
+    enabled: Boolean!
+    config: HmiConfig!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    fileCount: Int
+    sizeBytes: Long
+}
+
+type HmiResult {
+    hmi: Hmi
+    success: Boolean!
+    message: String
+}
+
+type DashboardFile {
+    path: String!
+    sizeBytes: Long!
+}
+
+input HmiConfigInput {
+    urlPath: String
+    isMain: Boolean
+    title: String
+    description: String
+    entryPoint: String
+}
+
+input HmiInput {
+    name: String!
+    nodeId: String
+    enabled: Boolean
+    config: HmiConfigInput!
+}
+
+type HmiMutations {
+    create(input: HmiInput!): HmiResult!
+    update(name: String!, input: HmiInput!): HmiResult!
+    delete(name: String!): HmiResult!
+    start(name: String!): HmiResult!
+    stop(name: String!): HmiResult!
+    toggle(name: String!, enabled: Boolean!): HmiResult!
+    reassign(name: String!, nodeId: String!): HmiResult!
+    uploadZip(name: String!, zipBase64: String!, setAsMain: Boolean): HmiResult!
 }
 
 type Mutation {
@@ -750,6 +822,7 @@ type Mutation {
     session: SessionMutations!
     archiveGroup: ArchiveGroupMutations!
     mqttClient: MqttClientMutations!
+    hmi: HmiMutations!
 }
 
 type Subscription {

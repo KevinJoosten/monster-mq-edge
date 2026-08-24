@@ -27,6 +27,8 @@ models:
     model:
       - github.com/99designs/gqlgen/graphql.Map
       - github.com/99designs/gqlgen/graphql.Any
+  AggregatedResult:
+    model: monstermq.io/edge/internal/graphql/generated.AggregatedResult
   ArchiveGroupMutations:
     fields:
       create:    { resolver: true }
@@ -119,3 +121,14 @@ models:
   UserInfo:
     fields:
       aclRules: { resolver: true }
+  HmiMutations:
+    fields:
+      create:    { resolver: true }
+      update:    { resolver: true }
+      delete:    { resolver: true }
+      start:     { resolver: true }
+      stop:      { resolver: true }
+      toggle:    { resolver: true }
+      reassign:  { resolver: true }
+      uploadZip: { resolver: true }
+

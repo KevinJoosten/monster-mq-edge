@@ -29,6 +29,7 @@ type ResolverRoot interface {
 	ArchiveGroupInfo() ArchiveGroupInfoResolver
 	ArchiveGroupMutations() ArchiveGroupMutationsResolver
 	Broker() BrokerResolver
+	HmiMutations() HmiMutationsResolver
 	MqttClient() MqttClientResolver
 	MqttClientMutations() MqttClientMutationsResolver
 	Mutation() MutationResolver
@@ -71,6 +72,16 @@ type BrokerResolver interface {
 	MetricsHistory(ctx context.Context, obj *Broker, from *string, to *string, lastMinutes *int) ([]*BrokerMetrics, error)
 	Sessions(ctx context.Context, obj *Broker, cleanSession *bool, connected *bool, clientID *string) ([]*Session, error)
 }
+type HmiMutationsResolver interface {
+	Create(ctx context.Context, obj *HmiMutations, input HmiInput) (*HmiResult, error)
+	Update(ctx context.Context, obj *HmiMutations, name string, input HmiInput) (*HmiResult, error)
+	Delete(ctx context.Context, obj *HmiMutations, name string) (*HmiResult, error)
+	Start(ctx context.Context, obj *HmiMutations, name string) (*HmiResult, error)
+	Stop(ctx context.Context, obj *HmiMutations, name string) (*HmiResult, error)
+	Toggle(ctx context.Context, obj *HmiMutations, name string, enabled bool) (*HmiResult, error)
+	Reassign(ctx context.Context, obj *HmiMutations, name string, nodeID string) (*HmiResult, error)
+	UploadZip(ctx context.Context, obj *HmiMutations, name string, zipBase64 string, setAsMain *bool) (*HmiResult, error)
+}
 type MqttClientResolver interface {
 	Metrics(ctx context.Context, obj *MqttClient) ([]*MqttClientMetrics, error)
 	MetricsHistory(ctx context.Context, obj *MqttClient, from *string, to *string, lastMinutes *int) ([]*MqttClientMetrics, error)
@@ -97,6 +108,10 @@ type MutationResolver interface {
 	Session(ctx context.Context) (*SessionMutations, error)
 	ArchiveGroup(ctx context.Context) (*ArchiveGroupMutations, error)
 	MqttClient(ctx context.Context) (*MqttClientMutations, error)
+	Hmi(ctx context.Context) (*HmiMutations, error)
+	SaveRedfishMapping(ctx context.Context, name string, config RedfishMappingConfigInput, enabled *bool) (*RedfishResult, error)
+	DeleteRedfishMapping(ctx context.Context, name string) (bool, error)
+	ToggleRedfishMapping(ctx context.Context, name string, enabled bool) (*RedfishResult, error)
 	WinCCOaDevice(ctx context.Context) (*WinCCOaDeviceMutations, error)
 	WinCCUaDevice(ctx context.Context) (*WinCCUaDeviceMutations, error)
 }
@@ -125,6 +140,13 @@ type QueryResolver interface {
 	DatabaseConnection(ctx context.Context, name string) (*DatabaseConnectionInfo, error)
 	GetDevices(ctx context.Context, names []string) ([]*Device, error)
 	MqttClients(ctx context.Context, name *string, node *string) ([]*MqttClient, error)
+	Hmis(ctx context.Context, name *string, nodeID *string) ([]*Hmi, error)
+	Hmi(ctx context.Context, name string) (*Hmi, error)
+	HmiFiles(ctx context.Context, name string) ([]*DashboardFile, error)
+	ExportHmiZip(ctx context.Context, name string) (string, error)
+	RedfishMappings(ctx context.Context) ([]*RedfishMapping, error)
+	RedfishMapping(ctx context.Context, name string) (*RedfishMapping, error)
+	RedfishLiveSensors(ctx context.Context, chassisID *string) ([]*RedfishSensorStatus, error)
 	WinCCOaClients(ctx context.Context, name *string, node *string) ([]*WinCCOaClient, error)
 	WinCCUaClients(ctx context.Context, name *string, node *string) ([]*WinCCUaClient, error)
 }
@@ -216,10 +238,14 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateDatabaseConnectionInput,
 		ec.unmarshalInputCreateUserInput,
 		ec.unmarshalInputDeviceInput,
+		ec.unmarshalInputHmiConfigInput,
+		ec.unmarshalInputHmiInput,
 		ec.unmarshalInputMqttClientAddressInput,
 		ec.unmarshalInputMqttClientConnectionConfigInput,
 		ec.unmarshalInputMqttClientInput,
 		ec.unmarshalInputPublishInput,
+		ec.unmarshalInputRedfishMappingConfigInput,
+		ec.unmarshalInputRedfishThresholdsInput,
 		ec.unmarshalInputSetPasswordInput,
 		ec.unmarshalInputUpdateAclRuleInput,
 		ec.unmarshalInputUpdateArchiveGroupInput,
@@ -326,6 +352,83 @@ func newExecutionContext(
 }
 
 var sources = []*ast.Source{
+	{Name: "../schema/redfish.graphqls", Input: `# Redfish API Gateway Configuration & Status Schema
+
+type RedfishThresholds {
+    upperCaution: Float
+    upperCritical: Float
+    lowerCaution: Float
+    lowerCritical: Float
+}
+
+type RedfishMappingConfig {
+    topicPrefix: String!
+    topicFilters: [String!]!
+    chassisId: String
+    defaultReadingType: String
+    defaultReadingUnits: String
+    thresholds: RedfishThresholds
+    jsonSchema: JSON!
+}
+
+type RedfishMapping {
+    name: String!
+    nodeId: String!
+    enabled: Boolean!
+    config: RedfishMappingConfig!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+}
+
+type RedfishSensorStatus {
+    id: String!
+    name: String!
+    chassisId: String!
+    topic: String!
+    reading: Float!
+    readingType: String!
+    readingUnits: String!
+    health: String!
+    state: String!
+    lastUpdated: String!
+}
+
+type RedfishResult {
+    redfish: RedfishMapping
+    success: Boolean!
+    message: String
+}
+
+input RedfishThresholdsInput {
+    upperCaution: Float
+    upperCritical: Float
+    lowerCaution: Float
+    lowerCritical: Float
+}
+
+input RedfishMappingConfigInput {
+    topicPrefix: String
+    topicFilters: [String!]!
+    chassisId: String
+    defaultReadingType: String
+    defaultReadingUnits: String
+    thresholds: RedfishThresholdsInput
+    jsonSchema: JSON!
+}
+
+extend type Query {
+    redfishMappings: [RedfishMapping!]!
+    redfishMapping(name: String!): RedfishMapping
+    redfishLiveSensors(chassisId: String): [RedfishSensorStatus!]!
+}
+
+extend type Mutation {
+    saveRedfishMapping(name: String!, config: RedfishMappingConfigInput!, enabled: Boolean): RedfishResult!
+    deleteRedfishMapping(name: String!): Boolean!
+    toggleRedfishMapping(name: String!, enabled: Boolean!): RedfishResult!
+}
+`, BuiltIn: false},
 	{Name: "../schema/schema.graphqls", Input: `scalar Long
 scalar JSON
 
@@ -334,14 +437,14 @@ scalar JSON
 # unchanged. Bridge-specific shapes (OPC UA, Kafka, NATS, Redis, WinCC, PLC4X,
 # Neo4j, GenAI, flows, MCP) are intentionally omitted.
 
-enum DataFormat { JSON BINARY }
+enum DataFormat { JSON TEXT BINARY }
 enum OrderDirection { ASC DESC }
 enum AggregationInterval { ONE_MINUTE FIVE_MINUTES FIFTEEN_MINUTES ONE_HOUR ONE_DAY }
 enum AggregationFunction { AVG MIN MAX COUNT }
-enum DatabaseConnectionType { POSTGRES MONGODB }
+enum DatabaseConnectionType { POSTGRES MONGODB SQLITE CRATEDB QUESTDB }
 
 enum MessageStoreType { NONE MEMORY HAZELCAST POSTGRES CRATEDB MONGODB SQLITE }
-enum MessageArchiveType { NONE POSTGRES CRATEDB MONGODB SQLITE }
+enum MessageArchiveType { NONE POSTGRES CRATEDB QUESTDB MONGODB SQLITE }
 enum PayloadFormat { DEFAULT JSON }
 
 # -----------------------------------------------------------------------------
@@ -415,22 +518,12 @@ type BrokerConfig {
     configStoreType: String!
     userManagementEnabled: Boolean!
     anonymousEnabled: Boolean!
-    mcpEnabled: Boolean!
-    mcpPort: Int!
-    prometheusEnabled: Boolean!
-    prometheusPort: Int!
-    i3xEnabled: Boolean!
-    i3xPort: Int!
-    graphqlEnabled: Boolean!
-    graphqlPort: Int!
-    metricsEnabled: Boolean!
-    genAiEnabled: Boolean!
-    genAiProvider: String!
-    genAiModel: String!
     postgresUrl: String!
     postgresUser: String!
     crateDbUrl: String!
     crateDbUser: String!
+    questDbUrl: String!
+    questDbUser: String!
     mongoDbUrl: String!
     mongoDbDatabase: String!
     sqlitePath: String!
@@ -575,8 +668,15 @@ type ArchiveGroupInfo {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String
+    queueSize: Int
+    bulkSize: Int
+    bulkTimeoutMs: Long
+    queueDiskPath: String
     createdAt: String
     updatedAt: String
+    lastValReadOnly: Boolean!
+    archiveReadOnly: Boolean!
     connectionStatus: [NodeConnectionStatus!]!
     metrics: [ArchiveGroupMetrics!]!
     metricsHistory(from: String, to: String, lastMinutes: Int): [ArchiveGroupMetrics!]!
@@ -593,6 +693,13 @@ input CreateArchiveGroupInput {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String = "MEMORY"
+    queueSize: Int = 100000
+    bulkSize: Int = 4000
+    bulkTimeoutMs: Long = 1000
+    queueDiskPath: String = "data/queue"
+    lastValReadOnly: Boolean = false
+    archiveReadOnly: Boolean = false
 }
 
 input UpdateArchiveGroupInput {
@@ -606,6 +713,13 @@ input UpdateArchiveGroupInput {
     lastValRetention: String
     archiveRetention: String
     purgeInterval: String
+    queueType: String
+    queueSize: Int
+    bulkSize: Int
+    bulkTimeoutMs: Long
+    queueDiskPath: String
+    lastValReadOnly: Boolean
+    archiveReadOnly: Boolean
 }
 
 type ArchiveGroupResult {
@@ -709,8 +823,8 @@ input CreateAclRuleInput {
 
 input UpdateAclRuleInput {
     id: String!
-    username: String!
-    topicPattern: String!
+    username: String
+    topicPattern: String
     canSubscribe: Boolean
     canPublish: Boolean
     priority: Int
@@ -886,23 +1000,23 @@ type MqttClientResult {
 
 input PublishInput {
     topic: String!
-    payload: String
-    payloadBase64: String
-    payloadJson: JSON
-    qos: Int
-    retain: Boolean
-    format: DataFormat
+    payload: String!
+    format: DataFormat = JSON
+    qos: Int = 0
+    retained: Boolean = false
 }
 
 type PublishResult {
     success: Boolean!
-    message: String
     topic: String!
+    timestamp: Long!
+    error: String
 }
 
 type PurgeResult {
     success: Boolean!
     message: String
+    deletedCount: Long!
     purgedCount: Long!
 }
 
@@ -1066,6 +1180,67 @@ type Query {
     databaseConnection(name: String!): DatabaseConnectionInfo
     getDevices(names: [String!]): [Device!]!
     mqttClients(name: String, node: String): [MqttClient!]!
+    hmis(name: String, nodeId: String): [Hmi!]!
+    hmi(name: String!): Hmi
+    hmiFiles(name: String!): [DashboardFile!]!
+    exportHmiZip(name: String!): String!
+}
+
+type HmiConfig {
+    urlPath: String!
+    isMain: Boolean!
+    title: String
+    description: String
+    entryPoint: String
+}
+
+type Hmi {
+    name: String!
+    nodeId: String!
+    enabled: Boolean!
+    config: HmiConfig!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    fileCount: Int
+    sizeBytes: Long
+}
+
+type HmiResult {
+    hmi: Hmi
+    success: Boolean!
+    message: String
+}
+
+type DashboardFile {
+    path: String!
+    sizeBytes: Long!
+}
+
+input HmiConfigInput {
+    urlPath: String
+    isMain: Boolean
+    title: String
+    description: String
+    entryPoint: String
+}
+
+input HmiInput {
+    name: String!
+    nodeId: String
+    enabled: Boolean
+    config: HmiConfigInput!
+}
+
+type HmiMutations {
+    create(input: HmiInput!): HmiResult!
+    update(name: String!, input: HmiInput!): HmiResult!
+    delete(name: String!): HmiResult!
+    start(name: String!): HmiResult!
+    stop(name: String!): HmiResult!
+    toggle(name: String!, enabled: Boolean!): HmiResult!
+    reassign(name: String!, nodeId: String!): HmiResult!
+    uploadZip(name: String!, zipBase64: String!, setAsMain: Boolean): HmiResult!
 }
 
 type Mutation {
@@ -1078,6 +1253,7 @@ type Mutation {
     session: SessionMutations!
     archiveGroup: ArchiveGroupMutations!
     mqttClient: MqttClientMutations!
+    hmi: HmiMutations!
 }
 
 type Subscription {
@@ -1238,6 +1414,7 @@ enum WinCCUaMessageFormat {
     JSON_ISO
     JSON_MS
     RAW_VALUE
+    RAW_JSON
 }
 
 enum WinCCUaDataAccessMode {
@@ -1522,6 +1699,119 @@ func (ec *executionContext) field_Broker_sessions_args(ctx context.Context, rawA
 	return args, nil
 }
 
+func (ec *executionContext) field_HmiMutations_create_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNHmiInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_delete_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_reassign_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "nodeId", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["nodeId"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_start_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_stop_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_toggle_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "enabled", ec.unmarshalNBoolean2bool)
+	if err != nil {
+		return nil, err
+	}
+	args["enabled"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_update_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNHmiInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_HmiMutations_uploadZip_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "zipBase64", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["zipBase64"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "setAsMain", ec.unmarshalOBoolean2ᚖbool)
+	if err != nil {
+		return nil, err
+	}
+	args["setAsMain"] = arg2
+	return args, nil
+}
+
 func (ec *executionContext) field_MqttClientMutations_addAddress_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1688,6 +1978,17 @@ func (ec *executionContext) field_MqttClient_metricsHistory_args(ctx context.Con
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_deleteRedfishMapping_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_importDevices_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -1745,6 +2046,43 @@ func (ec *executionContext) field_Mutation_purgeQueuedMessages_args(ctx context.
 		return nil, err
 	}
 	args["clientId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_saveRedfishMapping_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "config", ec.unmarshalNRedfishMappingConfigInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingConfigInput)
+	if err != nil {
+		return nil, err
+	}
+	args["config"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "enabled", ec.unmarshalOBoolean2ᚖbool)
+	if err != nil {
+		return nil, err
+	}
+	args["enabled"] = arg2
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_toggleRedfishMapping_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "enabled", ec.unmarshalNBoolean2bool)
+	if err != nil {
+		return nil, err
+	}
+	args["enabled"] = arg1
 	return args, nil
 }
 
@@ -2001,6 +2339,17 @@ func (ec *executionContext) field_Query_databaseConnections_args(ctx context.Con
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_exportHmiZip_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_getDevices_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -2009,6 +2358,44 @@ func (ec *executionContext) field_Query_getDevices_args(ctx context.Context, raw
 		return nil, err
 	}
 	args["names"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_hmiFiles_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_hmi_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_hmis_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "nodeId", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["nodeId"] = arg1
 	return args, nil
 }
 
@@ -2025,6 +2412,28 @@ func (ec *executionContext) field_Query_mqttClients_args(ctx context.Context, ra
 		return nil, err
 	}
 	args["node"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_redfishLiveSensors_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "chassisId", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["chassisId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_redfishMapping_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
 	return args, nil
 }
 
@@ -3061,7 +3470,7 @@ func (ec *executionContext) _AggregatedResult_rows(ctx context.Context, field gr
 			return obj.Rows, nil
 		},
 		nil,
-		ec.marshalNJSON2ᚕᚕmapᚄ,
+		ec.marshalNJSON2ᚕᚕinterfaceᚄ,
 		true,
 		true,
 	)
@@ -3602,6 +4011,151 @@ func (ec *executionContext) fieldContext_ArchiveGroupInfo_purgeInterval(_ contex
 	return fc, nil
 }
 
+func (ec *executionContext) _ArchiveGroupInfo_queueType(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_queueType,
+		func(ctx context.Context) (any, error) {
+			return obj.QueueType, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_queueType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_queueSize(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_queueSize,
+		func(ctx context.Context) (any, error) {
+			return obj.QueueSize, nil
+		},
+		nil,
+		ec.marshalOInt2ᚖint,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_queueSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_bulkSize(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_bulkSize,
+		func(ctx context.Context) (any, error) {
+			return obj.BulkSize, nil
+		},
+		nil,
+		ec.marshalOInt2ᚖint,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_bulkSize(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_bulkTimeoutMs(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_bulkTimeoutMs,
+		func(ctx context.Context) (any, error) {
+			return obj.BulkTimeoutMs, nil
+		},
+		nil,
+		ec.marshalOLong2ᚖint64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_bulkTimeoutMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_queueDiskPath(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_queueDiskPath,
+		func(ctx context.Context) (any, error) {
+			return obj.QueueDiskPath, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_queueDiskPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _ArchiveGroupInfo_createdAt(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -3655,6 +4209,64 @@ func (ec *executionContext) fieldContext_ArchiveGroupInfo_updatedAt(_ context.Co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_lastValReadOnly(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_lastValReadOnly,
+		func(ctx context.Context) (any, error) {
+			return obj.LastValReadOnly, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_lastValReadOnly(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_archiveReadOnly(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ArchiveGroupInfo_archiveReadOnly,
+		func(ctx context.Context) (any, error) {
+			return obj.ArchiveReadOnly, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_archiveReadOnly(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ArchiveGroupInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -4374,10 +4986,24 @@ func (ec *executionContext) fieldContext_ArchiveGroupResult_archiveGroup(_ conte
 				return ec.fieldContext_ArchiveGroupInfo_archiveRetention(ctx, field)
 			case "purgeInterval":
 				return ec.fieldContext_ArchiveGroupInfo_purgeInterval(ctx, field)
+			case "queueType":
+				return ec.fieldContext_ArchiveGroupInfo_queueType(ctx, field)
+			case "queueSize":
+				return ec.fieldContext_ArchiveGroupInfo_queueSize(ctx, field)
+			case "bulkSize":
+				return ec.fieldContext_ArchiveGroupInfo_bulkSize(ctx, field)
+			case "bulkTimeoutMs":
+				return ec.fieldContext_ArchiveGroupInfo_bulkTimeoutMs(ctx, field)
+			case "queueDiskPath":
+				return ec.fieldContext_ArchiveGroupInfo_queueDiskPath(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_ArchiveGroupInfo_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_ArchiveGroupInfo_updatedAt(ctx, field)
+			case "lastValReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_lastValReadOnly(ctx, field)
+			case "archiveReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_archiveReadOnly(ctx, field)
 			case "connectionStatus":
 				return ec.fieldContext_ArchiveGroupInfo_connectionStatus(ctx, field)
 			case "metrics":
@@ -5603,354 +6229,6 @@ func (ec *executionContext) fieldContext_BrokerConfig_anonymousEnabled(_ context
 	return fc, nil
 }
 
-func (ec *executionContext) _BrokerConfig_mcpEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_mcpEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.McpEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_mcpEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_mcpPort(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_mcpPort,
-		func(ctx context.Context) (any, error) {
-			return obj.McpPort, nil
-		},
-		nil,
-		ec.marshalNInt2int,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_mcpPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_prometheusEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_prometheusEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.PrometheusEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_prometheusEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_prometheusPort(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_prometheusPort,
-		func(ctx context.Context) (any, error) {
-			return obj.PrometheusPort, nil
-		},
-		nil,
-		ec.marshalNInt2int,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_prometheusPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_i3xEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_i3xEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.I3xEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_i3xEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_i3xPort(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_i3xPort,
-		func(ctx context.Context) (any, error) {
-			return obj.I3xPort, nil
-		},
-		nil,
-		ec.marshalNInt2int,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_i3xPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_graphqlEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_graphqlEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.GraphqlEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_graphqlEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_graphqlPort(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_graphqlPort,
-		func(ctx context.Context) (any, error) {
-			return obj.GraphqlPort, nil
-		},
-		nil,
-		ec.marshalNInt2int,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_graphqlPort(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Int does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_metricsEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_metricsEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.MetricsEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_metricsEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_genAiEnabled(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_genAiEnabled,
-		func(ctx context.Context) (any, error) {
-			return obj.GenAiEnabled, nil
-		},
-		nil,
-		ec.marshalNBoolean2bool,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_genAiEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type Boolean does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_genAiProvider(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_genAiProvider,
-		func(ctx context.Context) (any, error) {
-			return obj.GenAiProvider, nil
-		},
-		nil,
-		ec.marshalNString2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_genAiProvider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
-func (ec *executionContext) _BrokerConfig_genAiModel(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_BrokerConfig_genAiModel,
-		func(ctx context.Context) (any, error) {
-			return obj.GenAiModel, nil
-		},
-		nil,
-		ec.marshalNString2string,
-		true,
-		true,
-	)
-}
-
-func (ec *executionContext) fieldContext_BrokerConfig_genAiModel(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "BrokerConfig",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _BrokerConfig_postgresUrl(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -6055,6 +6333,64 @@ func (ec *executionContext) _BrokerConfig_crateDbUser(ctx context.Context, field
 }
 
 func (ec *executionContext) fieldContext_BrokerConfig_crateDbUser(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BrokerConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BrokerConfig_questDbUrl(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BrokerConfig_questDbUrl,
+		func(ctx context.Context) (any, error) {
+			return obj.QuestDbURL, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BrokerConfig_questDbUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BrokerConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BrokerConfig_questDbUser(ctx context.Context, field graphql.CollectedField, obj *BrokerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_BrokerConfig_questDbUser,
+		func(ctx context.Context) (any, error) {
+			return obj.QuestDbUser, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_BrokerConfig_questDbUser(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "BrokerConfig",
 		Field:      field,
@@ -6995,6 +7331,64 @@ func (ec *executionContext) fieldContext_DailyCount_count(_ context.Context, fie
 	return fc, nil
 }
 
+func (ec *executionContext) _DashboardFile_path(ctx context.Context, field graphql.CollectedField, obj *DashboardFile) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DashboardFile_path,
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DashboardFile_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DashboardFile",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _DashboardFile_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *DashboardFile) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_DashboardFile_sizeBytes,
+		func(ctx context.Context) (any, error) {
+			return obj.SizeBytes, nil
+		},
+		nil,
+		ec.marshalNLong2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_DashboardFile_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "DashboardFile",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _DatabaseConnectionInfo_name(ctx context.Context, field graphql.CollectedField, obj *DatabaseConnectionInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -7672,6 +8066,923 @@ func (ec *executionContext) _ExceptionInfo_stackTrace(ctx context.Context, field
 func (ec *executionContext) fieldContext_ExceptionInfo_stackTrace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "ExceptionInfo",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_name(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_nodeId(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_nodeId,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_enabled(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_enabled,
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_config(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_config,
+		func(ctx context.Context) (any, error) {
+			return obj.Config, nil
+		},
+		nil,
+		ec.marshalNHmiConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiConfig,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_config(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "urlPath":
+				return ec.fieldContext_HmiConfig_urlPath(ctx, field)
+			case "isMain":
+				return ec.fieldContext_HmiConfig_isMain(ctx, field)
+			case "title":
+				return ec.fieldContext_HmiConfig_title(ctx, field)
+			case "description":
+				return ec.fieldContext_HmiConfig_description(ctx, field)
+			case "entryPoint":
+				return ec.fieldContext_HmiConfig_entryPoint(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiConfig", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_createdAt(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_updatedAt(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_isOnCurrentNode(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_isOnCurrentNode,
+		func(ctx context.Context) (any, error) {
+			return obj.IsOnCurrentNode, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_isOnCurrentNode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_fileCount(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_fileCount,
+		func(ctx context.Context) (any, error) {
+			return obj.FileCount, nil
+		},
+		nil,
+		ec.marshalOInt2ᚖint,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_fileCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Hmi_sizeBytes(ctx context.Context, field graphql.CollectedField, obj *Hmi) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Hmi_sizeBytes,
+		func(ctx context.Context) (any, error) {
+			return obj.SizeBytes, nil
+		},
+		nil,
+		ec.marshalOLong2ᚖint64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Hmi_sizeBytes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Hmi",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiConfig_urlPath(ctx context.Context, field graphql.CollectedField, obj *HmiConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiConfig_urlPath,
+		func(ctx context.Context) (any, error) {
+			return obj.URLPath, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiConfig_urlPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiConfig_isMain(ctx context.Context, field graphql.CollectedField, obj *HmiConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiConfig_isMain,
+		func(ctx context.Context) (any, error) {
+			return obj.IsMain, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiConfig_isMain(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiConfig_title(ctx context.Context, field graphql.CollectedField, obj *HmiConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiConfig_title,
+		func(ctx context.Context) (any, error) {
+			return obj.Title, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiConfig_title(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiConfig_description(ctx context.Context, field graphql.CollectedField, obj *HmiConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiConfig_description,
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiConfig_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiConfig_entryPoint(ctx context.Context, field graphql.CollectedField, obj *HmiConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiConfig_entryPoint,
+		func(ctx context.Context) (any, error) {
+			return obj.EntryPoint, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiConfig_entryPoint(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_create(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_create,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Create(ctx, obj, fc.Args["input"].(HmiInput))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_create(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_create_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_update(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_update,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Update(ctx, obj, fc.Args["name"].(string), fc.Args["input"].(HmiInput))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_update(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_update_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_delete(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_delete,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Delete(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_delete(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_delete_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_start(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_start,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Start(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_start(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_start_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_stop(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_stop,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Stop(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_stop(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_stop_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_toggle(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_toggle,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Toggle(ctx, obj, fc.Args["name"].(string), fc.Args["enabled"].(bool))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_toggle(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_toggle_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_reassign(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_reassign,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().Reassign(ctx, obj, fc.Args["name"].(string), fc.Args["nodeId"].(string))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_reassign(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_reassign_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiMutations_uploadZip(ctx context.Context, field graphql.CollectedField, obj *HmiMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiMutations_uploadZip,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.HmiMutations().UploadZip(ctx, obj, fc.Args["name"].(string), fc.Args["zipBase64"].(string), fc.Args["setAsMain"].(*bool))
+		},
+		nil,
+		ec.marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiMutations_uploadZip(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "hmi":
+				return ec.fieldContext_HmiResult_hmi(ctx, field)
+			case "success":
+				return ec.fieldContext_HmiResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_HmiResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_HmiMutations_uploadZip_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiResult_hmi(ctx context.Context, field graphql.CollectedField, obj *HmiResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiResult_hmi,
+		func(ctx context.Context) (any, error) {
+			return obj.Hmi, nil
+		},
+		nil,
+		ec.marshalOHmi2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmi,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiResult_hmi(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_Hmi_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_Hmi_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_Hmi_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_Hmi_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Hmi_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Hmi_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_Hmi_isOnCurrentNode(ctx, field)
+			case "fileCount":
+				return ec.fieldContext_Hmi_fileCount(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_Hmi_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Hmi", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiResult_success(ctx context.Context, field graphql.CollectedField, obj *HmiResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiResult_success,
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HmiResult_message(ctx context.Context, field graphql.CollectedField, obj *HmiResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_HmiResult_message,
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_HmiResult_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HmiResult",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
@@ -10195,10 +11506,12 @@ func (ec *executionContext) fieldContext_Mutation_publish(ctx context.Context, f
 			switch field.Name {
 			case "success":
 				return ec.fieldContext_PublishResult_success(ctx, field)
-			case "message":
-				return ec.fieldContext_PublishResult_message(ctx, field)
 			case "topic":
 				return ec.fieldContext_PublishResult_topic(ctx, field)
+			case "timestamp":
+				return ec.fieldContext_PublishResult_timestamp(ctx, field)
+			case "error":
+				return ec.fieldContext_PublishResult_error(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PublishResult", field.Name)
 		},
@@ -10244,10 +11557,12 @@ func (ec *executionContext) fieldContext_Mutation_publishBatch(ctx context.Conte
 			switch field.Name {
 			case "success":
 				return ec.fieldContext_PublishResult_success(ctx, field)
-			case "message":
-				return ec.fieldContext_PublishResult_message(ctx, field)
 			case "topic":
 				return ec.fieldContext_PublishResult_topic(ctx, field)
+			case "timestamp":
+				return ec.fieldContext_PublishResult_timestamp(ctx, field)
+			case "error":
+				return ec.fieldContext_PublishResult_error(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PublishResult", field.Name)
 		},
@@ -10295,6 +11610,8 @@ func (ec *executionContext) fieldContext_Mutation_purgeQueuedMessages(ctx contex
 				return ec.fieldContext_PurgeResult_success(ctx, field)
 			case "message":
 				return ec.fieldContext_PurgeResult_message(ctx, field)
+			case "deletedCount":
+				return ec.fieldContext_PurgeResult_deletedCount(ctx, field)
 			case "purgedCount":
 				return ec.fieldContext_PurgeResult_purgedCount(ctx, field)
 			}
@@ -10540,6 +11857,192 @@ func (ec *executionContext) fieldContext_Mutation_mqttClient(_ context.Context, 
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MqttClientMutations", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_hmi(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_hmi,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().Hmi(ctx)
+		},
+		nil,
+		ec.marshalNHmiMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiMutations,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_hmi(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "create":
+				return ec.fieldContext_HmiMutations_create(ctx, field)
+			case "update":
+				return ec.fieldContext_HmiMutations_update(ctx, field)
+			case "delete":
+				return ec.fieldContext_HmiMutations_delete(ctx, field)
+			case "start":
+				return ec.fieldContext_HmiMutations_start(ctx, field)
+			case "stop":
+				return ec.fieldContext_HmiMutations_stop(ctx, field)
+			case "toggle":
+				return ec.fieldContext_HmiMutations_toggle(ctx, field)
+			case "reassign":
+				return ec.fieldContext_HmiMutations_reassign(ctx, field)
+			case "uploadZip":
+				return ec.fieldContext_HmiMutations_uploadZip(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type HmiMutations", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_saveRedfishMapping(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_saveRedfishMapping,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().SaveRedfishMapping(ctx, fc.Args["name"].(string), fc.Args["config"].(RedfishMappingConfigInput), fc.Args["enabled"].(*bool))
+		},
+		nil,
+		ec.marshalNRedfishResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_saveRedfishMapping(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "redfish":
+				return ec.fieldContext_RedfishResult_redfish(ctx, field)
+			case "success":
+				return ec.fieldContext_RedfishResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_RedfishResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_saveRedfishMapping_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_deleteRedfishMapping(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_deleteRedfishMapping,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().DeleteRedfishMapping(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_deleteRedfishMapping(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_deleteRedfishMapping_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_toggleRedfishMapping(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_toggleRedfishMapping,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ToggleRedfishMapping(ctx, fc.Args["name"].(string), fc.Args["enabled"].(bool))
+		},
+		nil,
+		ec.marshalNRedfishResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_toggleRedfishMapping(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "redfish":
+				return ec.fieldContext_RedfishResult_redfish(ctx, field)
+			case "success":
+				return ec.fieldContext_RedfishResult_success(ctx, field)
+			case "message":
+				return ec.fieldContext_RedfishResult_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishResult", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_toggleRedfishMapping_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -10820,35 +12323,6 @@ func (ec *executionContext) fieldContext_PublishResult_success(_ context.Context
 	return fc, nil
 }
 
-func (ec *executionContext) _PublishResult_message(ctx context.Context, field graphql.CollectedField, obj *PublishResult) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		ec.fieldContext_PublishResult_message,
-		func(ctx context.Context) (any, error) {
-			return obj.Message, nil
-		},
-		nil,
-		ec.marshalOString2ᚖstring,
-		true,
-		false,
-	)
-}
-
-func (ec *executionContext) fieldContext_PublishResult_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	fc = &graphql.FieldContext{
-		Object:     "PublishResult",
-		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
-		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
-		},
-	}
-	return fc, nil
-}
-
 func (ec *executionContext) _PublishResult_topic(ctx context.Context, field graphql.CollectedField, obj *PublishResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -10866,6 +12340,64 @@ func (ec *executionContext) _PublishResult_topic(ctx context.Context, field grap
 }
 
 func (ec *executionContext) fieldContext_PublishResult_topic(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PublishResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PublishResult_timestamp(ctx context.Context, field graphql.CollectedField, obj *PublishResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PublishResult_timestamp,
+		func(ctx context.Context) (any, error) {
+			return obj.Timestamp, nil
+		},
+		nil,
+		ec.marshalNLong2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PublishResult_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PublishResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PublishResult_error(ctx context.Context, field graphql.CollectedField, obj *PublishResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PublishResult_error,
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PublishResult_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "PublishResult",
 		Field:      field,
@@ -10931,6 +12463,35 @@ func (ec *executionContext) fieldContext_PurgeResult_message(_ context.Context, 
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _PurgeResult_deletedCount(ctx context.Context, field graphql.CollectedField, obj *PurgeResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PurgeResult_deletedCount,
+		func(ctx context.Context) (any, error) {
+			return obj.DeletedCount, nil
+		},
+		nil,
+		ec.marshalNLong2int64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_PurgeResult_deletedCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PurgeResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Long does not have child fields")
 		},
 	}
 	return fc, nil
@@ -11624,30 +13185,6 @@ func (ec *executionContext) fieldContext_Query_brokerConfig(_ context.Context, f
 				return ec.fieldContext_BrokerConfig_userManagementEnabled(ctx, field)
 			case "anonymousEnabled":
 				return ec.fieldContext_BrokerConfig_anonymousEnabled(ctx, field)
-			case "mcpEnabled":
-				return ec.fieldContext_BrokerConfig_mcpEnabled(ctx, field)
-			case "mcpPort":
-				return ec.fieldContext_BrokerConfig_mcpPort(ctx, field)
-			case "prometheusEnabled":
-				return ec.fieldContext_BrokerConfig_prometheusEnabled(ctx, field)
-			case "prometheusPort":
-				return ec.fieldContext_BrokerConfig_prometheusPort(ctx, field)
-			case "i3xEnabled":
-				return ec.fieldContext_BrokerConfig_i3xEnabled(ctx, field)
-			case "i3xPort":
-				return ec.fieldContext_BrokerConfig_i3xPort(ctx, field)
-			case "graphqlEnabled":
-				return ec.fieldContext_BrokerConfig_graphqlEnabled(ctx, field)
-			case "graphqlPort":
-				return ec.fieldContext_BrokerConfig_graphqlPort(ctx, field)
-			case "metricsEnabled":
-				return ec.fieldContext_BrokerConfig_metricsEnabled(ctx, field)
-			case "genAiEnabled":
-				return ec.fieldContext_BrokerConfig_genAiEnabled(ctx, field)
-			case "genAiProvider":
-				return ec.fieldContext_BrokerConfig_genAiProvider(ctx, field)
-			case "genAiModel":
-				return ec.fieldContext_BrokerConfig_genAiModel(ctx, field)
 			case "postgresUrl":
 				return ec.fieldContext_BrokerConfig_postgresUrl(ctx, field)
 			case "postgresUser":
@@ -11656,6 +13193,10 @@ func (ec *executionContext) fieldContext_Query_brokerConfig(_ context.Context, f
 				return ec.fieldContext_BrokerConfig_crateDbUrl(ctx, field)
 			case "crateDbUser":
 				return ec.fieldContext_BrokerConfig_crateDbUser(ctx, field)
+			case "questDbUrl":
+				return ec.fieldContext_BrokerConfig_questDbUrl(ctx, field)
+			case "questDbUser":
+				return ec.fieldContext_BrokerConfig_questDbUser(ctx, field)
 			case "mongoDbUrl":
 				return ec.fieldContext_BrokerConfig_mongoDbUrl(ctx, field)
 			case "mongoDbDatabase":
@@ -12041,10 +13582,24 @@ func (ec *executionContext) fieldContext_Query_archiveGroups(ctx context.Context
 				return ec.fieldContext_ArchiveGroupInfo_archiveRetention(ctx, field)
 			case "purgeInterval":
 				return ec.fieldContext_ArchiveGroupInfo_purgeInterval(ctx, field)
+			case "queueType":
+				return ec.fieldContext_ArchiveGroupInfo_queueType(ctx, field)
+			case "queueSize":
+				return ec.fieldContext_ArchiveGroupInfo_queueSize(ctx, field)
+			case "bulkSize":
+				return ec.fieldContext_ArchiveGroupInfo_bulkSize(ctx, field)
+			case "bulkTimeoutMs":
+				return ec.fieldContext_ArchiveGroupInfo_bulkTimeoutMs(ctx, field)
+			case "queueDiskPath":
+				return ec.fieldContext_ArchiveGroupInfo_queueDiskPath(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_ArchiveGroupInfo_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_ArchiveGroupInfo_updatedAt(ctx, field)
+			case "lastValReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_lastValReadOnly(ctx, field)
+			case "archiveReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_archiveReadOnly(ctx, field)
 			case "connectionStatus":
 				return ec.fieldContext_ArchiveGroupInfo_connectionStatus(ctx, field)
 			case "metrics":
@@ -12120,10 +13675,24 @@ func (ec *executionContext) fieldContext_Query_archiveGroup(ctx context.Context,
 				return ec.fieldContext_ArchiveGroupInfo_archiveRetention(ctx, field)
 			case "purgeInterval":
 				return ec.fieldContext_ArchiveGroupInfo_purgeInterval(ctx, field)
+			case "queueType":
+				return ec.fieldContext_ArchiveGroupInfo_queueType(ctx, field)
+			case "queueSize":
+				return ec.fieldContext_ArchiveGroupInfo_queueSize(ctx, field)
+			case "bulkSize":
+				return ec.fieldContext_ArchiveGroupInfo_bulkSize(ctx, field)
+			case "bulkTimeoutMs":
+				return ec.fieldContext_ArchiveGroupInfo_bulkTimeoutMs(ctx, field)
+			case "queueDiskPath":
+				return ec.fieldContext_ArchiveGroupInfo_queueDiskPath(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_ArchiveGroupInfo_createdAt(ctx, field)
 			case "updatedAt":
 				return ec.fieldContext_ArchiveGroupInfo_updatedAt(ctx, field)
+			case "lastValReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_lastValReadOnly(ctx, field)
+			case "archiveReadOnly":
+				return ec.fieldContext_ArchiveGroupInfo_archiveReadOnly(ctx, field)
 			case "connectionStatus":
 				return ec.fieldContext_ArchiveGroupInfo_connectionStatus(ctx, field)
 			case "metrics":
@@ -12433,6 +14002,381 @@ func (ec *executionContext) fieldContext_Query_mqttClients(ctx context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_hmis(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_hmis,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Hmis(ctx, fc.Args["name"].(*string), fc.Args["nodeId"].(*string))
+		},
+		nil,
+		ec.marshalNHmi2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_hmis(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_Hmi_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_Hmi_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_Hmi_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_Hmi_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Hmi_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Hmi_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_Hmi_isOnCurrentNode(ctx, field)
+			case "fileCount":
+				return ec.fieldContext_Hmi_fileCount(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_Hmi_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Hmi", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_hmis_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_hmi(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_hmi,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().Hmi(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalOHmi2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmi,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_hmi(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_Hmi_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_Hmi_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_Hmi_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_Hmi_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_Hmi_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_Hmi_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_Hmi_isOnCurrentNode(ctx, field)
+			case "fileCount":
+				return ec.fieldContext_Hmi_fileCount(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_Hmi_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Hmi", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_hmi_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_hmiFiles(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_hmiFiles,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().HmiFiles(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNDashboardFile2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDashboardFileᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_hmiFiles(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "path":
+				return ec.fieldContext_DashboardFile_path(ctx, field)
+			case "sizeBytes":
+				return ec.fieldContext_DashboardFile_sizeBytes(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type DashboardFile", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_hmiFiles_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_exportHmiZip(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_exportHmiZip,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ExportHmiZip(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_exportHmiZip(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_exportHmiZip_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_redfishMappings(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_redfishMappings,
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().RedfishMappings(ctx)
+		},
+		nil,
+		ec.marshalNRedfishMapping2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_redfishMappings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_RedfishMapping_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_RedfishMapping_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_RedfishMapping_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_RedfishMapping_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_RedfishMapping_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_RedfishMapping_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_RedfishMapping_isOnCurrentNode(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishMapping", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_redfishMapping(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_redfishMapping,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().RedfishMapping(ctx, fc.Args["name"].(string))
+		},
+		nil,
+		ec.marshalORedfishMapping2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMapping,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_redfishMapping(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_RedfishMapping_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_RedfishMapping_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_RedfishMapping_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_RedfishMapping_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_RedfishMapping_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_RedfishMapping_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_RedfishMapping_isOnCurrentNode(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishMapping", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_redfishMapping_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_redfishLiveSensors(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_redfishLiveSensors,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().RedfishLiveSensors(ctx, fc.Args["chassisId"].(*string))
+		},
+		nil,
+		ec.marshalNRedfishSensorStatus2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishSensorStatusᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_redfishLiveSensors(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_RedfishSensorStatus_id(ctx, field)
+			case "name":
+				return ec.fieldContext_RedfishSensorStatus_name(ctx, field)
+			case "chassisId":
+				return ec.fieldContext_RedfishSensorStatus_chassisId(ctx, field)
+			case "topic":
+				return ec.fieldContext_RedfishSensorStatus_topic(ctx, field)
+			case "reading":
+				return ec.fieldContext_RedfishSensorStatus_reading(ctx, field)
+			case "readingType":
+				return ec.fieldContext_RedfishSensorStatus_readingType(ctx, field)
+			case "readingUnits":
+				return ec.fieldContext_RedfishSensorStatus_readingUnits(ctx, field)
+			case "health":
+				return ec.fieldContext_RedfishSensorStatus_health(ctx, field)
+			case "state":
+				return ec.fieldContext_RedfishSensorStatus_state(ctx, field)
+			case "lastUpdated":
+				return ec.fieldContext_RedfishSensorStatus_lastUpdated(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishSensorStatus", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_redfishLiveSensors_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_winCCOaClients(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -12662,6 +14606,947 @@ func (ec *executionContext) fieldContext_Query___schema(_ context.Context, field
 				return ec.fieldContext___Schema_directives(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type __Schema", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_name(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_nodeId(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_nodeId,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_enabled(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_enabled,
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_config(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_config,
+		func(ctx context.Context) (any, error) {
+			return obj.Config, nil
+		},
+		nil,
+		ec.marshalNRedfishMappingConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingConfig,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_config(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "topicPrefix":
+				return ec.fieldContext_RedfishMappingConfig_topicPrefix(ctx, field)
+			case "topicFilters":
+				return ec.fieldContext_RedfishMappingConfig_topicFilters(ctx, field)
+			case "chassisId":
+				return ec.fieldContext_RedfishMappingConfig_chassisId(ctx, field)
+			case "defaultReadingType":
+				return ec.fieldContext_RedfishMappingConfig_defaultReadingType(ctx, field)
+			case "defaultReadingUnits":
+				return ec.fieldContext_RedfishMappingConfig_defaultReadingUnits(ctx, field)
+			case "thresholds":
+				return ec.fieldContext_RedfishMappingConfig_thresholds(ctx, field)
+			case "jsonSchema":
+				return ec.fieldContext_RedfishMappingConfig_jsonSchema(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishMappingConfig", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_createdAt(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_updatedAt(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMapping_isOnCurrentNode(ctx context.Context, field graphql.CollectedField, obj *RedfishMapping) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMapping_isOnCurrentNode,
+		func(ctx context.Context) (any, error) {
+			return obj.IsOnCurrentNode, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMapping_isOnCurrentNode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMapping",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_topicPrefix(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_topicPrefix,
+		func(ctx context.Context) (any, error) {
+			return obj.TopicPrefix, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_topicPrefix(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_topicFilters(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_topicFilters,
+		func(ctx context.Context) (any, error) {
+			return obj.TopicFilters, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_topicFilters(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_chassisId(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_chassisId,
+		func(ctx context.Context) (any, error) {
+			return obj.ChassisID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_chassisId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_defaultReadingType(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_defaultReadingType,
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultReadingType, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_defaultReadingType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_defaultReadingUnits(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_defaultReadingUnits,
+		func(ctx context.Context) (any, error) {
+			return obj.DefaultReadingUnits, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_defaultReadingUnits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_thresholds(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_thresholds,
+		func(ctx context.Context) (any, error) {
+			return obj.Thresholds, nil
+		},
+		nil,
+		ec.marshalORedfishThresholds2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishThresholds,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_thresholds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "upperCaution":
+				return ec.fieldContext_RedfishThresholds_upperCaution(ctx, field)
+			case "upperCritical":
+				return ec.fieldContext_RedfishThresholds_upperCritical(ctx, field)
+			case "lowerCaution":
+				return ec.fieldContext_RedfishThresholds_lowerCaution(ctx, field)
+			case "lowerCritical":
+				return ec.fieldContext_RedfishThresholds_lowerCritical(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishThresholds", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishMappingConfig_jsonSchema(ctx context.Context, field graphql.CollectedField, obj *RedfishMappingConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishMappingConfig_jsonSchema,
+		func(ctx context.Context) (any, error) {
+			return obj.JSONSchema, nil
+		},
+		nil,
+		ec.marshalNJSON2map,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishMappingConfig_jsonSchema(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishMappingConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type JSON does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishResult_redfish(ctx context.Context, field graphql.CollectedField, obj *RedfishResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishResult_redfish,
+		func(ctx context.Context) (any, error) {
+			return obj.Redfish, nil
+		},
+		nil,
+		ec.marshalORedfishMapping2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMapping,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishResult_redfish(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_RedfishMapping_name(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_RedfishMapping_nodeId(ctx, field)
+			case "enabled":
+				return ec.fieldContext_RedfishMapping_enabled(ctx, field)
+			case "config":
+				return ec.fieldContext_RedfishMapping_config(ctx, field)
+			case "createdAt":
+				return ec.fieldContext_RedfishMapping_createdAt(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_RedfishMapping_updatedAt(ctx, field)
+			case "isOnCurrentNode":
+				return ec.fieldContext_RedfishMapping_isOnCurrentNode(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RedfishMapping", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishResult_success(ctx context.Context, field graphql.CollectedField, obj *RedfishResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishResult_success,
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishResult_message(ctx context.Context, field graphql.CollectedField, obj *RedfishResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishResult_message,
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishResult_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_id(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_name(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_chassisId(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_chassisId,
+		func(ctx context.Context) (any, error) {
+			return obj.ChassisID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_chassisId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_topic(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_topic,
+		func(ctx context.Context) (any, error) {
+			return obj.Topic, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_topic(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_reading(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_reading,
+		func(ctx context.Context) (any, error) {
+			return obj.Reading, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_reading(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_readingType(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_readingType,
+		func(ctx context.Context) (any, error) {
+			return obj.ReadingType, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_readingType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_readingUnits(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_readingUnits,
+		func(ctx context.Context) (any, error) {
+			return obj.ReadingUnits, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_readingUnits(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_health(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_health,
+		func(ctx context.Context) (any, error) {
+			return obj.Health, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_health(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_state(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_state,
+		func(ctx context.Context) (any, error) {
+			return obj.State, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_state(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishSensorStatus_lastUpdated(ctx context.Context, field graphql.CollectedField, obj *RedfishSensorStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishSensorStatus_lastUpdated,
+		func(ctx context.Context) (any, error) {
+			return obj.LastUpdated, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishSensorStatus_lastUpdated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishSensorStatus",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishThresholds_upperCaution(ctx context.Context, field graphql.CollectedField, obj *RedfishThresholds) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishThresholds_upperCaution,
+		func(ctx context.Context) (any, error) {
+			return obj.UpperCaution, nil
+		},
+		nil,
+		ec.marshalOFloat2ᚖfloat64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishThresholds_upperCaution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishThresholds",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishThresholds_upperCritical(ctx context.Context, field graphql.CollectedField, obj *RedfishThresholds) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishThresholds_upperCritical,
+		func(ctx context.Context) (any, error) {
+			return obj.UpperCritical, nil
+		},
+		nil,
+		ec.marshalOFloat2ᚖfloat64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishThresholds_upperCritical(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishThresholds",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishThresholds_lowerCaution(ctx context.Context, field graphql.CollectedField, obj *RedfishThresholds) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishThresholds_lowerCaution,
+		func(ctx context.Context) (any, error) {
+			return obj.LowerCaution, nil
+		},
+		nil,
+		ec.marshalOFloat2ᚖfloat64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishThresholds_lowerCaution(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishThresholds",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RedfishThresholds_lowerCritical(ctx context.Context, field graphql.CollectedField, obj *RedfishThresholds) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_RedfishThresholds_lowerCritical,
+		func(ctx context.Context) (any, error) {
+			return obj.LowerCritical, nil
+		},
+		nil,
+		ec.marshalOFloat2ᚖfloat64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_RedfishThresholds_lowerCritical(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RedfishThresholds",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -20811,8 +23696,29 @@ func (ec *executionContext) unmarshalInputCreateArchiveGroupInput(ctx context.Co
 	if _, present := asMap["payloadFormat"]; !present {
 		asMap["payloadFormat"] = "DEFAULT"
 	}
+	if _, present := asMap["queueType"]; !present {
+		asMap["queueType"] = "MEMORY"
+	}
+	if _, present := asMap["queueSize"]; !present {
+		asMap["queueSize"] = 100000
+	}
+	if _, present := asMap["bulkSize"]; !present {
+		asMap["bulkSize"] = 4000
+	}
+	if _, present := asMap["bulkTimeoutMs"]; !present {
+		asMap["bulkTimeoutMs"] = 1000
+	}
+	if _, present := asMap["queueDiskPath"]; !present {
+		asMap["queueDiskPath"] = "data/queue"
+	}
+	if _, present := asMap["lastValReadOnly"]; !present {
+		asMap["lastValReadOnly"] = false
+	}
+	if _, present := asMap["archiveReadOnly"]; !present {
+		asMap["archiveReadOnly"] = false
+	}
 
-	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval"}
+	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -20889,6 +23795,55 @@ func (ec *executionContext) unmarshalInputCreateArchiveGroupInput(ctx context.Co
 				return it, err
 			}
 			it.PurgeInterval = data
+		case "queueType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueType = data
+		case "queueSize":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueSize"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueSize = data
+		case "bulkSize":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bulkSize"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BulkSize = data
+		case "bulkTimeoutMs":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bulkTimeoutMs"))
+			data, err := ec.unmarshalOLong2ᚖint64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BulkTimeoutMs = data
+		case "queueDiskPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueDiskPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueDiskPath = data
+		case "lastValReadOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lastValReadOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LastValReadOnly = data
+		case "archiveReadOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("archiveReadOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ArchiveReadOnly = data
 		}
 	}
 	return it, nil
@@ -21105,6 +24060,115 @@ func (ec *executionContext) unmarshalInputDeviceInput(ctx context.Context, obj a
 				return it, err
 			}
 			it.UpdatedAt = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputHmiConfigInput(ctx context.Context, obj any) (HmiConfigInput, error) {
+	var it HmiConfigInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"urlPath", "isMain", "title", "description", "entryPoint"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "urlPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("urlPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.URLPath = data
+		case "isMain":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("isMain"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IsMain = data
+		case "title":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("title"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Title = data
+		case "description":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("description"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Description = data
+		case "entryPoint":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("entryPoint"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EntryPoint = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputHmiInput(ctx context.Context, obj any) (HmiInput, error) {
+	var it HmiInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"name", "nodeId", "enabled", "config"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "nodeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeID = data
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "config":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("config"))
+			data, err := ec.unmarshalNHmiConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiConfigInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Config = data
 		}
 	}
 	return it, nil
@@ -21516,7 +24580,17 @@ func (ec *executionContext) unmarshalInputPublishInput(ctx context.Context, obj 
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"topic", "payload", "payloadBase64", "payloadJson", "qos", "retain", "format"}
+	if _, present := asMap["format"]; !present {
+		asMap["format"] = "JSON"
+	}
+	if _, present := asMap["qos"]; !present {
+		asMap["qos"] = 0
+	}
+	if _, present := asMap["retained"]; !present {
+		asMap["retained"] = false
+	}
+
+	fieldsInOrder := [...]string{"topic", "payload", "format", "qos", "retained"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -21532,39 +24606,11 @@ func (ec *executionContext) unmarshalInputPublishInput(ctx context.Context, obj 
 			it.Topic = data
 		case "payload":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payload"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			data, err := ec.unmarshalNString2string(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Payload = data
-		case "payloadBase64":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadBase64"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.PayloadBase64 = data
-		case "payloadJson":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadJson"))
-			data, err := ec.unmarshalOJSON2map(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.PayloadJSON = data
-		case "qos":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("qos"))
-			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Qos = data
-		case "retain":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("retain"))
-			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.Retain = data
 		case "format":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("format"))
 			data, err := ec.unmarshalODataFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDataFormat(ctx, v)
@@ -21572,6 +24618,143 @@ func (ec *executionContext) unmarshalInputPublishInput(ctx context.Context, obj 
 				return it, err
 			}
 			it.Format = data
+		case "qos":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("qos"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Qos = data
+		case "retained":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("retained"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Retained = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRedfishMappingConfigInput(ctx context.Context, obj any) (RedfishMappingConfigInput, error) {
+	var it RedfishMappingConfigInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"topicPrefix", "topicFilters", "chassisId", "defaultReadingType", "defaultReadingUnits", "thresholds", "jsonSchema"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "topicPrefix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicPrefix"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicPrefix = data
+		case "topicFilters":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicFilters"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicFilters = data
+		case "chassisId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("chassisId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ChassisID = data
+		case "defaultReadingType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("defaultReadingType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DefaultReadingType = data
+		case "defaultReadingUnits":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("defaultReadingUnits"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DefaultReadingUnits = data
+		case "thresholds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("thresholds"))
+			data, err := ec.unmarshalORedfishThresholdsInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishThresholdsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Thresholds = data
+		case "jsonSchema":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("jsonSchema"))
+			data, err := ec.unmarshalNJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.JSONSchema = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputRedfishThresholdsInput(ctx context.Context, obj any) (RedfishThresholdsInput, error) {
+	var it RedfishThresholdsInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"upperCaution", "upperCritical", "lowerCaution", "lowerCritical"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "upperCaution":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("upperCaution"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UpperCaution = data
+		case "upperCritical":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("upperCritical"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UpperCritical = data
+		case "lowerCaution":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lowerCaution"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LowerCaution = data
+		case "lowerCritical":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lowerCritical"))
+			data, err := ec.unmarshalOFloat2ᚖfloat64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LowerCritical = data
 		}
 	}
 	return it, nil
@@ -21641,14 +24824,14 @@ func (ec *executionContext) unmarshalInputUpdateAclRuleInput(ctx context.Context
 			it.ID = data
 		case "username":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("username"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
 			it.Username = data
 		case "topicPattern":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicPattern"))
-			data, err := ec.unmarshalNString2string(ctx, v)
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -21690,7 +24873,7 @@ func (ec *executionContext) unmarshalInputUpdateArchiveGroupInput(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval"}
+	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -21767,6 +24950,55 @@ func (ec *executionContext) unmarshalInputUpdateArchiveGroupInput(ctx context.Co
 				return it, err
 			}
 			it.PurgeInterval = data
+		case "queueType":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueType"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueType = data
+		case "queueSize":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueSize"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueSize = data
+		case "bulkSize":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bulkSize"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BulkSize = data
+		case "bulkTimeoutMs":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bulkTimeoutMs"))
+			data, err := ec.unmarshalOLong2ᚖint64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BulkTimeoutMs = data
+		case "queueDiskPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("queueDiskPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.QueueDiskPath = data
+		case "lastValReadOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("lastValReadOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LastValReadOnly = data
+		case "archiveReadOnly":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("archiveReadOnly"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ArchiveReadOnly = data
 		}
 	}
 	return it, nil
@@ -22763,10 +25995,30 @@ func (ec *executionContext) _ArchiveGroupInfo(ctx context.Context, sel ast.Selec
 			out.Values[i] = ec._ArchiveGroupInfo_archiveRetention(ctx, field, obj)
 		case "purgeInterval":
 			out.Values[i] = ec._ArchiveGroupInfo_purgeInterval(ctx, field, obj)
+		case "queueType":
+			out.Values[i] = ec._ArchiveGroupInfo_queueType(ctx, field, obj)
+		case "queueSize":
+			out.Values[i] = ec._ArchiveGroupInfo_queueSize(ctx, field, obj)
+		case "bulkSize":
+			out.Values[i] = ec._ArchiveGroupInfo_bulkSize(ctx, field, obj)
+		case "bulkTimeoutMs":
+			out.Values[i] = ec._ArchiveGroupInfo_bulkTimeoutMs(ctx, field, obj)
+		case "queueDiskPath":
+			out.Values[i] = ec._ArchiveGroupInfo_queueDiskPath(ctx, field, obj)
 		case "createdAt":
 			out.Values[i] = ec._ArchiveGroupInfo_createdAt(ctx, field, obj)
 		case "updatedAt":
 			out.Values[i] = ec._ArchiveGroupInfo_updatedAt(ctx, field, obj)
+		case "lastValReadOnly":
+			out.Values[i] = ec._ArchiveGroupInfo_lastValReadOnly(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "archiveReadOnly":
+			out.Values[i] = ec._ArchiveGroupInfo_archiveReadOnly(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
 		case "connectionStatus":
 			field := field
 
@@ -23677,66 +26929,6 @@ func (ec *executionContext) _BrokerConfig(ctx context.Context, sel ast.Selection
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "mcpEnabled":
-			out.Values[i] = ec._BrokerConfig_mcpEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "mcpPort":
-			out.Values[i] = ec._BrokerConfig_mcpPort(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "prometheusEnabled":
-			out.Values[i] = ec._BrokerConfig_prometheusEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "prometheusPort":
-			out.Values[i] = ec._BrokerConfig_prometheusPort(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "i3xEnabled":
-			out.Values[i] = ec._BrokerConfig_i3xEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "i3xPort":
-			out.Values[i] = ec._BrokerConfig_i3xPort(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "graphqlEnabled":
-			out.Values[i] = ec._BrokerConfig_graphqlEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "graphqlPort":
-			out.Values[i] = ec._BrokerConfig_graphqlPort(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "metricsEnabled":
-			out.Values[i] = ec._BrokerConfig_metricsEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "genAiEnabled":
-			out.Values[i] = ec._BrokerConfig_genAiEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "genAiProvider":
-			out.Values[i] = ec._BrokerConfig_genAiProvider(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "genAiModel":
-			out.Values[i] = ec._BrokerConfig_genAiModel(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "postgresUrl":
 			out.Values[i] = ec._BrokerConfig_postgresUrl(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -23754,6 +26946,16 @@ func (ec *executionContext) _BrokerConfig(ctx context.Context, sel ast.Selection
 			}
 		case "crateDbUser":
 			out.Values[i] = ec._BrokerConfig_crateDbUser(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "questDbUrl":
+			out.Values[i] = ec._BrokerConfig_questDbUrl(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "questDbUser":
+			out.Values[i] = ec._BrokerConfig_questDbUser(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -24042,6 +27244,50 @@ func (ec *executionContext) _DailyCount(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var dashboardFileImplementors = []string{"DashboardFile"}
+
+func (ec *executionContext) _DashboardFile(ctx context.Context, sel ast.SelectionSet, obj *DashboardFile) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, dashboardFileImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("DashboardFile")
+		case "path":
+			out.Values[i] = ec._DashboardFile_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sizeBytes":
+			out.Values[i] = ec._DashboardFile_sizeBytes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var databaseConnectionInfoImplementors = []string{"DatabaseConnectionInfo"}
 
 func (ec *executionContext) _DatabaseConnectionInfo(ctx context.Context, sel ast.SelectionSet, obj *DatabaseConnectionInfo) graphql.Marshaler {
@@ -24237,6 +27483,494 @@ func (ec *executionContext) _ExceptionInfo(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hmiImplementors = []string{"Hmi"}
+
+func (ec *executionContext) _Hmi(ctx context.Context, sel ast.SelectionSet, obj *Hmi) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hmiImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("Hmi")
+		case "name":
+			out.Values[i] = ec._Hmi_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._Hmi_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "enabled":
+			out.Values[i] = ec._Hmi_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "config":
+			out.Values[i] = ec._Hmi_config(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._Hmi_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._Hmi_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isOnCurrentNode":
+			out.Values[i] = ec._Hmi_isOnCurrentNode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fileCount":
+			out.Values[i] = ec._Hmi_fileCount(ctx, field, obj)
+		case "sizeBytes":
+			out.Values[i] = ec._Hmi_sizeBytes(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hmiConfigImplementors = []string{"HmiConfig"}
+
+func (ec *executionContext) _HmiConfig(ctx context.Context, sel ast.SelectionSet, obj *HmiConfig) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hmiConfigImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HmiConfig")
+		case "urlPath":
+			out.Values[i] = ec._HmiConfig_urlPath(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isMain":
+			out.Values[i] = ec._HmiConfig_isMain(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "title":
+			out.Values[i] = ec._HmiConfig_title(ctx, field, obj)
+		case "description":
+			out.Values[i] = ec._HmiConfig_description(ctx, field, obj)
+		case "entryPoint":
+			out.Values[i] = ec._HmiConfig_entryPoint(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hmiMutationsImplementors = []string{"HmiMutations"}
+
+func (ec *executionContext) _HmiMutations(ctx context.Context, sel ast.SelectionSet, obj *HmiMutations) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hmiMutationsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HmiMutations")
+		case "create":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_create(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "update":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_update(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "delete":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_delete(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "start":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_start(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "stop":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_stop(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "toggle":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_toggle(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "reassign":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_reassign(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "uploadZip":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._HmiMutations_uploadZip(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var hmiResultImplementors = []string{"HmiResult"}
+
+func (ec *executionContext) _HmiResult(ctx context.Context, sel ast.SelectionSet, obj *HmiResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, hmiResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("HmiResult")
+		case "hmi":
+			out.Values[i] = ec._HmiResult_hmi(ctx, field, obj)
+		case "success":
+			out.Values[i] = ec._HmiResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._HmiResult_message(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -25316,6 +29050,34 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "hmi":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_hmi(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "saveRedfishMapping":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_saveRedfishMapping(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "deleteRedfishMapping":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_deleteRedfishMapping(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "toggleRedfishMapping":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_toggleRedfishMapping(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "winCCOaDevice":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_winCCOaDevice(ctx, field)
@@ -25419,13 +29181,18 @@ func (ec *executionContext) _PublishResult(ctx context.Context, sel ast.Selectio
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
-		case "message":
-			out.Values[i] = ec._PublishResult_message(ctx, field, obj)
 		case "topic":
 			out.Values[i] = ec._PublishResult_topic(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "timestamp":
+			out.Values[i] = ec._PublishResult_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._PublishResult_error(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -25467,6 +29234,11 @@ func (ec *executionContext) _PurgeResult(ctx context.Context, sel ast.SelectionS
 			}
 		case "message":
 			out.Values[i] = ec._PurgeResult_message(ctx, field, obj)
+		case "deletedCount":
+			out.Values[i] = ec._PurgeResult_deletedCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "purgedCount":
 			out.Values[i] = ec._PurgeResult_purgedCount(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -26018,6 +29790,154 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "hmis":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_hmis(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "hmi":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_hmi(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "hmiFiles":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_hmiFiles(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "exportHmiZip":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_exportHmiZip(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "redfishMappings":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_redfishMappings(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "redfishMapping":
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_redfishMapping(ctx, field)
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "redfishLiveSensors":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_redfishLiveSensors(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "winCCOaClients":
 			field := field
 
@@ -26070,6 +29990,301 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Query___schema(ctx, field)
 			})
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var redfishMappingImplementors = []string{"RedfishMapping"}
+
+func (ec *executionContext) _RedfishMapping(ctx context.Context, sel ast.SelectionSet, obj *RedfishMapping) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, redfishMappingImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RedfishMapping")
+		case "name":
+			out.Values[i] = ec._RedfishMapping_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "nodeId":
+			out.Values[i] = ec._RedfishMapping_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "enabled":
+			out.Values[i] = ec._RedfishMapping_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "config":
+			out.Values[i] = ec._RedfishMapping_config(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._RedfishMapping_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._RedfishMapping_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "isOnCurrentNode":
+			out.Values[i] = ec._RedfishMapping_isOnCurrentNode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var redfishMappingConfigImplementors = []string{"RedfishMappingConfig"}
+
+func (ec *executionContext) _RedfishMappingConfig(ctx context.Context, sel ast.SelectionSet, obj *RedfishMappingConfig) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, redfishMappingConfigImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RedfishMappingConfig")
+		case "topicPrefix":
+			out.Values[i] = ec._RedfishMappingConfig_topicPrefix(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topicFilters":
+			out.Values[i] = ec._RedfishMappingConfig_topicFilters(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "chassisId":
+			out.Values[i] = ec._RedfishMappingConfig_chassisId(ctx, field, obj)
+		case "defaultReadingType":
+			out.Values[i] = ec._RedfishMappingConfig_defaultReadingType(ctx, field, obj)
+		case "defaultReadingUnits":
+			out.Values[i] = ec._RedfishMappingConfig_defaultReadingUnits(ctx, field, obj)
+		case "thresholds":
+			out.Values[i] = ec._RedfishMappingConfig_thresholds(ctx, field, obj)
+		case "jsonSchema":
+			out.Values[i] = ec._RedfishMappingConfig_jsonSchema(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var redfishResultImplementors = []string{"RedfishResult"}
+
+func (ec *executionContext) _RedfishResult(ctx context.Context, sel ast.SelectionSet, obj *RedfishResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, redfishResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RedfishResult")
+		case "redfish":
+			out.Values[i] = ec._RedfishResult_redfish(ctx, field, obj)
+		case "success":
+			out.Values[i] = ec._RedfishResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._RedfishResult_message(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var redfishSensorStatusImplementors = []string{"RedfishSensorStatus"}
+
+func (ec *executionContext) _RedfishSensorStatus(ctx context.Context, sel ast.SelectionSet, obj *RedfishSensorStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, redfishSensorStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RedfishSensorStatus")
+		case "id":
+			out.Values[i] = ec._RedfishSensorStatus_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._RedfishSensorStatus_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "chassisId":
+			out.Values[i] = ec._RedfishSensorStatus_chassisId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topic":
+			out.Values[i] = ec._RedfishSensorStatus_topic(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reading":
+			out.Values[i] = ec._RedfishSensorStatus_reading(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "readingType":
+			out.Values[i] = ec._RedfishSensorStatus_readingType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "readingUnits":
+			out.Values[i] = ec._RedfishSensorStatus_readingUnits(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "health":
+			out.Values[i] = ec._RedfishSensorStatus_health(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "state":
+			out.Values[i] = ec._RedfishSensorStatus_state(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastUpdated":
+			out.Values[i] = ec._RedfishSensorStatus_lastUpdated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var redfishThresholdsImplementors = []string{"RedfishThresholds"}
+
+func (ec *executionContext) _RedfishThresholds(ctx context.Context, sel ast.SelectionSet, obj *RedfishThresholds) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, redfishThresholdsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RedfishThresholds")
+		case "upperCaution":
+			out.Values[i] = ec._RedfishThresholds_upperCaution(ctx, field, obj)
+		case "upperCritical":
+			out.Values[i] = ec._RedfishThresholds_upperCritical(ctx, field, obj)
+		case "lowerCaution":
+			out.Values[i] = ec._RedfishThresholds_lowerCaution(ctx, field, obj)
+		case "lowerCritical":
+			out.Values[i] = ec._RedfishThresholds_lowerCritical(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -29698,6 +33913,32 @@ func (ec *executionContext) marshalNDailyCount2ᚖmonstermqᚗioᚋedgeᚋintern
 	return ec._DailyCount(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNDashboardFile2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDashboardFileᚄ(ctx context.Context, sel ast.SelectionSet, v []*DashboardFile) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNDashboardFile2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDashboardFile(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNDashboardFile2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDashboardFile(ctx context.Context, sel ast.SelectionSet, v *DashboardFile) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._DashboardFile(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNDataFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐDataFormat(ctx context.Context, v any) (DataFormat, error) {
 	var res DataFormat
 	err := res.UnmarshalGQL(v)
@@ -29820,6 +34061,80 @@ func (ec *executionContext) marshalNFloat2float64(ctx context.Context, sel ast.S
 	return graphql.WrapContextMarshaler(ctx, res)
 }
 
+func (ec *executionContext) marshalNHmi2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiᚄ(ctx context.Context, sel ast.SelectionSet, v []*Hmi) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNHmi2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmi(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNHmi2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmi(ctx context.Context, sel ast.SelectionSet, v *Hmi) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._Hmi(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHmiConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiConfig(ctx context.Context, sel ast.SelectionSet, v *HmiConfig) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HmiConfig(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNHmiConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiConfigInput(ctx context.Context, v any) (*HmiConfigInput, error) {
+	res, err := ec.unmarshalInputHmiConfigInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNHmiInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiInput(ctx context.Context, v any) (HmiInput, error) {
+	res, err := ec.unmarshalInputHmiInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNHmiMutations2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiMutations(ctx context.Context, sel ast.SelectionSet, v HmiMutations) graphql.Marshaler {
+	return ec._HmiMutations(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNHmiMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiMutations(ctx context.Context, sel ast.SelectionSet, v *HmiMutations) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HmiMutations(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNHmiResult2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult(ctx context.Context, sel ast.SelectionSet, v HmiResult) graphql.Marshaler {
+	return ec._HmiResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNHmiResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmiResult(ctx context.Context, sel ast.SelectionSet, v *HmiResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._HmiResult(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNImportDeviceConfigResult2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐImportDeviceConfigResult(ctx context.Context, sel ast.SelectionSet, v ImportDeviceConfigResult) graphql.Marshaler {
 	return ec._ImportDeviceConfigResult(ctx, sel, &v)
 }
@@ -29850,14 +34165,36 @@ func (ec *executionContext) marshalNInt2int(ctx context.Context, sel ast.Selecti
 	return res
 }
 
-func (ec *executionContext) unmarshalNJSON2ᚕmap(ctx context.Context, v any) ([]map[string]any, error) {
+func (ec *executionContext) unmarshalNJSON2map(ctx context.Context, v any) (map[string]any, error) {
+	res, err := graphql.UnmarshalMap(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNJSON2map(ctx context.Context, sel ast.SelectionSet, v map[string]any) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	_ = sel
+	res := graphql.MarshalMap(v)
+	if res == graphql.Null {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+	}
+	return res
+}
+
+func (ec *executionContext) unmarshalNJSON2ᚕinterface(ctx context.Context, v any) ([]any, error) {
 	var vSlice []any
 	vSlice = graphql.CoerceList(v)
 	var err error
-	res := make([]map[string]any, len(vSlice))
+	res := make([]any, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalOJSON2map(ctx, vSlice[i])
+		res[i], err = ec.unmarshalOJSON2interface(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -29865,23 +34202,23 @@ func (ec *executionContext) unmarshalNJSON2ᚕmap(ctx context.Context, v any) ([
 	return res, nil
 }
 
-func (ec *executionContext) marshalNJSON2ᚕmap(ctx context.Context, sel ast.SelectionSet, v []map[string]any) graphql.Marshaler {
+func (ec *executionContext) marshalNJSON2ᚕinterface(ctx context.Context, sel ast.SelectionSet, v []any) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	for i := range v {
-		ret[i] = ec.marshalOJSON2map(ctx, sel, v[i])
+		ret[i] = ec.marshalOJSON2interface(ctx, sel, v[i])
 	}
 
 	return ret
 }
 
-func (ec *executionContext) unmarshalNJSON2ᚕᚕmapᚄ(ctx context.Context, v any) ([][]map[string]any, error) {
+func (ec *executionContext) unmarshalNJSON2ᚕᚕinterfaceᚄ(ctx context.Context, v any) ([][]any, error) {
 	var vSlice []any
 	vSlice = graphql.CoerceList(v)
 	var err error
-	res := make([][]map[string]any, len(vSlice))
+	res := make([][]any, len(vSlice))
 	for i := range vSlice {
 		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
-		res[i], err = ec.unmarshalNJSON2ᚕmap(ctx, vSlice[i])
+		res[i], err = ec.unmarshalNJSON2ᚕinterface(ctx, vSlice[i])
 		if err != nil {
 			return nil, err
 		}
@@ -29889,10 +34226,10 @@ func (ec *executionContext) unmarshalNJSON2ᚕᚕmapᚄ(ctx context.Context, v a
 	return res, nil
 }
 
-func (ec *executionContext) marshalNJSON2ᚕᚕmapᚄ(ctx context.Context, sel ast.SelectionSet, v [][]map[string]any) graphql.Marshaler {
+func (ec *executionContext) marshalNJSON2ᚕᚕinterfaceᚄ(ctx context.Context, sel ast.SelectionSet, v [][]any) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	for i := range v {
-		ret[i] = ec.marshalNJSON2ᚕmap(ctx, sel, v[i])
+		ret[i] = ec.marshalNJSON2ᚕinterface(ctx, sel, v[i])
 	}
 
 	for _, e := range ret {
@@ -30205,6 +34542,87 @@ func (ec *executionContext) marshalNPurgeResult2ᚖmonstermqᚗioᚋedgeᚋinter
 		return graphql.Null
 	}
 	return ec._PurgeResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRedfishMapping2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingᚄ(ctx context.Context, sel ast.SelectionSet, v []*RedfishMapping) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNRedfishMapping2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMapping(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNRedfishMapping2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMapping(ctx context.Context, sel ast.SelectionSet, v *RedfishMapping) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RedfishMapping(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRedfishMappingConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingConfig(ctx context.Context, sel ast.SelectionSet, v *RedfishMappingConfig) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RedfishMappingConfig(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNRedfishMappingConfigInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMappingConfigInput(ctx context.Context, v any) (RedfishMappingConfigInput, error) {
+	res, err := ec.unmarshalInputRedfishMappingConfigInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNRedfishResult2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishResult(ctx context.Context, sel ast.SelectionSet, v RedfishResult) graphql.Marshaler {
+	return ec._RedfishResult(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRedfishResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishResult(ctx context.Context, sel ast.SelectionSet, v *RedfishResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RedfishResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNRedfishSensorStatus2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishSensorStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []*RedfishSensorStatus) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNRedfishSensorStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishSensorStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNRedfishSensorStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishSensorStatus(ctx context.Context, sel ast.SelectionSet, v *RedfishSensorStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._RedfishSensorStatus(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNRetainedMessage2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRetainedMessageᚄ(ctx context.Context, sel ast.SelectionSet, v []*RetainedMessage) graphql.Marshaler {
@@ -31221,6 +35639,30 @@ func (ec *executionContext) marshalOExceptionInfo2ᚖmonstermqᚗioᚋedgeᚋint
 	return ec._ExceptionInfo(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalOFloat2ᚖfloat64(ctx context.Context, v any) (*float64, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalFloatContext(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOFloat2ᚖfloat64(ctx context.Context, sel ast.SelectionSet, v *float64) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	res := graphql.MarshalFloatContext(*v)
+	return graphql.WrapContextMarshaler(ctx, res)
+}
+
+func (ec *executionContext) marshalOHmi2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐHmi(ctx context.Context, sel ast.SelectionSet, v *Hmi) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._Hmi(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalOInt2ᚖint(ctx context.Context, v any) (*int, error) {
 	if v == nil {
 		return nil, nil
@@ -31236,6 +35678,24 @@ func (ec *executionContext) marshalOInt2ᚖint(ctx context.Context, sel ast.Sele
 	_ = sel
 	_ = ctx
 	res := graphql.MarshalInt(*v)
+	return res
+}
+
+func (ec *executionContext) unmarshalOJSON2interface(ctx context.Context, v any) (any, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := graphql.UnmarshalAny(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOJSON2interface(ctx context.Context, sel ast.SelectionSet, v any) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	_ = sel
+	_ = ctx
+	res := graphql.MarshalAny(v)
 	return res
 }
 
@@ -31369,6 +35829,28 @@ func (ec *executionContext) marshalOPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋint
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) marshalORedfishMapping2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishMapping(ctx context.Context, sel ast.SelectionSet, v *RedfishMapping) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._RedfishMapping(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalORedfishThresholds2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishThresholds(ctx context.Context, sel ast.SelectionSet, v *RedfishThresholds) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._RedfishThresholds(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalORedfishThresholdsInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRedfishThresholdsInput(ctx context.Context, v any) (*RedfishThresholdsInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputRedfishThresholdsInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalORetainedMessage2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐRetainedMessage(ctx context.Context, sel ast.SelectionSet, v *RetainedMessage) graphql.Marshaler {

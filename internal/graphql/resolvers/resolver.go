@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	mqtt "monstermq.io/edge/internal/mqtt"
 	"monstermq.io/edge/internal/mqtt/packets"
@@ -21,9 +23,11 @@ import (
 	"monstermq.io/edge/internal/bridge/winccua"
 	"monstermq.io/edge/internal/config"
 	"monstermq.io/edge/internal/graphql/generated"
+	"monstermq.io/edge/internal/hmi"
 	mlog "monstermq.io/edge/internal/log"
 	"monstermq.io/edge/internal/metrics"
 	"monstermq.io/edge/internal/pubsub"
+	"monstermq.io/edge/internal/redfish"
 	"monstermq.io/edge/internal/stores"
 	"monstermq.io/edge/internal/version"
 )
@@ -45,6 +49,8 @@ type Resolver struct {
 	NodeID    string
 	Version   string
 	Mochi     *mqtt.Server
+	HmiMgr    *hmi.Manager
+	Redfish   *redfish.Manager
 
 	// Publish injects a message into the local broker (used by the publish mutation).
 	Publish func(topic string, payload []byte, retain bool, qos byte) error
@@ -55,7 +61,9 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 	authCache *auth.Cache, collector *metrics.Collector,
 	logBus *mlog.Bus, logger *slog.Logger,
 	mochi *mqtt.Server,
-	publish func(string, []byte, bool, byte) error) *Resolver {
+	publish func(string, []byte, bool, byte) error,
+	hmiMgr *hmi.Manager,
+	redfishMgr *redfish.Manager) *Resolver {
 	return &Resolver{
 		Cfg:       cfg,
 		Storage:   storage,
@@ -72,6 +80,8 @@ func New(cfg *config.Config, storage *stores.Storage, bus *pubsub.Bus, archives 
 		Version:   formatEdgeVersion(version.Version),
 		Mochi:     mochi,
 		Publish:   publish,
+		HmiMgr:    hmiMgr,
+		Redfish:   redfishMgr,
 	}
 }
 
@@ -91,6 +101,15 @@ func (r *Resolver) enabledFeatures() []string {
 	}
 	if r.Cfg.Features.DeviceImportExport {
 		out = append(out, "DeviceImportExport")
+	}
+	if r.Cfg.Features.Mcp || r.Cfg.MCP.Enabled {
+		out = append(out, "Mcp")
+	}
+	if r.Cfg.Features.Hmi || r.Cfg.HMI.Enabled {
+		out = append(out, "Hmi")
+	}
+	if r.Cfg.Features.Redfish || r.Cfg.Redfish.Enabled {
+		out = append(out, "Redfish")
 	}
 	return out
 }
@@ -118,6 +137,9 @@ func (r *Resolver) SessionMutations() generated.SessionMutationsResolver {
 func (r *Resolver) MqttClient() generated.MqttClientResolver { return &mqttClientResolver{r} }
 func (r *Resolver) MqttClientMutations() generated.MqttClientMutationsResolver {
 	return &mqttClientMutationsResolver{r}
+}
+func (r *Resolver) HmiMutations() generated.HmiMutationsResolver {
+	return &hmiMutationsResolver{r}
 }
 func (r *Resolver) WinCCUaClient() generated.WinCCUaClientResolver {
 	return &winCCUaClientResolver{r}
@@ -198,11 +220,25 @@ func derefStr(s *string) string {
 	}
 	return *s
 }
+func ptrIfNonZero(i int) *int {
+	if i <= 0 {
+		return nil
+	}
+	return &i
+}
+func ptrIfNonZero64(i int64) *int64 {
+	if i <= 0 {
+		return nil
+	}
+	return &i
+}
 
 // encodePayload returns the payload string and the format it was encoded in,
 // matching the JVM broker's contract:
 //
 //	requested = JSON   → return (json text, JSON) if it parses as JSON,
+//	                     otherwise fall through to BINARY
+//	requested = TEXT   → return (plain text, TEXT) if valid UTF-8,
 //	                     otherwise fall through to BINARY
 //	requested = BINARY → return (base64, BINARY)
 //	requested = nil    → default to JSON behaviour (try JSON first, then base64)
@@ -210,8 +246,23 @@ func encodePayload(raw []byte, requested *generated.DataFormat) (string, generat
 	if raw == nil {
 		return "", generated.DataFormatJSON
 	}
-	wantBinary := requested != nil && *requested == generated.DataFormatBinary
-	if !wantBinary && isJSON(raw) {
+	if requested != nil {
+		switch *requested {
+		case generated.DataFormatBinary:
+			return base64.StdEncoding.EncodeToString(raw), generated.DataFormatBinary
+		case generated.DataFormatText:
+			if utf8.Valid(raw) {
+				return string(raw), generated.DataFormatText
+			}
+			return base64.StdEncoding.EncodeToString(raw), generated.DataFormatBinary
+		case generated.DataFormatJSON:
+			if isJSON(raw) {
+				return string(raw), generated.DataFormatJSON
+			}
+			return base64.StdEncoding.EncodeToString(raw), generated.DataFormatBinary
+		}
+	}
+	if isJSON(raw) {
 		return string(raw), generated.DataFormatJSON
 	}
 	return base64.StdEncoding.EncodeToString(raw), generated.DataFormatBinary
@@ -223,16 +274,18 @@ func isJSON(raw []byte) bool {
 }
 
 func decodePayload(in *generated.PublishInput) ([]byte, error) {
-	if in.Payload != nil {
-		return []byte(*in.Payload), nil
+	format := generated.DataFormatJSON
+	if in.Format != nil {
+		format = *in.Format
 	}
-	if in.PayloadBase64 != nil {
-		return base64.StdEncoding.DecodeString(*in.PayloadBase64)
+	switch format {
+	case generated.DataFormatBinary:
+		return base64.StdEncoding.DecodeString(in.Payload)
+	case generated.DataFormatJSON, generated.DataFormatText:
+		return []byte(in.Payload), nil
+	default:
+		return []byte(in.Payload), nil
 	}
-	if in.PayloadJSON != nil {
-		return json.Marshal(in.PayloadJSON)
-	}
-	return nil, nil
 }
 
 func toMessageStoreType(s stores.MessageStoreType) generated.MessageStoreType {
@@ -255,6 +308,10 @@ func toMessageArchiveType(s stores.MessageArchiveType) generated.MessageArchiveT
 		return generated.MessageArchiveTypeSQLIte
 	case stores.ArchivePostgres:
 		return generated.MessageArchiveTypePostgres
+	case stores.ArchiveCrateDB:
+		return generated.MessageArchiveTypeCratedb
+	case stores.ArchiveQuestDB:
+		return generated.MessageArchiveTypeQuestdb
 	case stores.ArchiveMongoDB:
 		return generated.MessageArchiveTypeMongodb
 	}
@@ -281,6 +338,10 @@ func fromMessageArchiveType(t generated.MessageArchiveType) stores.MessageArchiv
 		return stores.ArchiveSQLite
 	case generated.MessageArchiveTypePostgres:
 		return stores.ArchivePostgres
+	case generated.MessageArchiveTypeCratedb:
+		return stores.ArchiveCrateDB
+	case generated.MessageArchiveTypeQuestdb:
+		return stores.ArchiveQuestDB
 	case generated.MessageArchiveTypeMongodb:
 		return stores.ArchiveMongoDB
 	}
@@ -291,6 +352,12 @@ func toDatabaseConnectionType(t stores.DatabaseConnectionType) generated.Databas
 	switch t {
 	case stores.DatabaseConnectionMongoDB:
 		return generated.DatabaseConnectionTypeMongodb
+	case stores.DatabaseConnectionSQLite:
+		return generated.DatabaseConnectionTypeSQLIte
+	case stores.DatabaseConnectionCrateDB:
+		return generated.DatabaseConnectionTypeCratedb
+	case stores.DatabaseConnectionQuestDB:
+		return generated.DatabaseConnectionTypeQuestdb
 	}
 	return generated.DatabaseConnectionTypePostgres
 }
@@ -299,6 +366,12 @@ func fromDatabaseConnectionType(t generated.DatabaseConnectionType) stores.Datab
 	switch t {
 	case generated.DatabaseConnectionTypeMongodb:
 		return stores.DatabaseConnectionMongoDB
+	case generated.DatabaseConnectionTypeSQLIte:
+		return stores.DatabaseConnectionSQLite
+	case generated.DatabaseConnectionTypeCratedb:
+		return stores.DatabaseConnectionCrateDB
+	case generated.DatabaseConnectionTypeQuestdb:
+		return stores.DatabaseConnectionQuestDB
 	}
 	return stores.DatabaseConnectionPostgres
 }
@@ -350,7 +423,7 @@ func deviceInputToStore(in generated.DeviceInput) (stores.DeviceConfig, error) {
 	if err != nil {
 		return stores.DeviceConfig{}, fmt.Errorf("config must be a JSON object: %w", err)
 	}
-	deviceType := "OPCUA-Client"
+	var deviceType string
 	if in.Type != nil && strings.TrimSpace(*in.Type) != "" {
 		deviceType = strings.TrimSpace(*in.Type)
 	}
@@ -436,30 +509,41 @@ func (r *mutationResolver) Login(ctx context.Context, username, password string)
 }
 
 func (r *mutationResolver) Publish(ctx context.Context, input generated.PublishInput) (*generated.PublishResult, error) {
+	now := time.Now().UnixMilli()
+	if strings.ContainsRune(input.Topic, '+') || strings.ContainsRune(input.Topic, '#') {
+		errMsg := "Topic must not contain wildcard characters '+' or '#'"
+		return &generated.PublishResult{Success: false, Topic: input.Topic, Timestamp: now, Error: ptr(errMsg)}, nil
+	}
 	payload, err := decodePayload(&input)
 	if err != nil {
-		return &generated.PublishResult{Success: false, Topic: input.Topic, Message: ptr(err.Error())}, nil
+		errStr := err.Error()
+		return &generated.PublishResult{Success: false, Topic: input.Topic, Timestamp: now, Error: ptr(errStr)}, nil
 	}
 	qos := byte(0)
 	if input.Qos != nil {
 		qos = byte(*input.Qos)
 	}
 	retain := false
-	if input.Retain != nil {
-		retain = *input.Retain
+	if input.Retained != nil {
+		retain = *input.Retained
 	}
 	if r.Resolver.Publish == nil {
-		return &generated.PublishResult{Success: false, Topic: input.Topic, Message: ptr("publish unavailable")}, nil
+		errMsg := "publish unavailable"
+		return &generated.PublishResult{Success: false, Topic: input.Topic, Timestamp: now, Error: ptr(errMsg)}, nil
 	}
 	if err := r.Resolver.Publish(input.Topic, payload, retain, qos); err != nil {
-		return &generated.PublishResult{Success: false, Topic: input.Topic, Message: ptr(err.Error())}, nil
+		errStr := err.Error()
+		return &generated.PublishResult{Success: false, Topic: input.Topic, Timestamp: now, Error: ptr(errStr)}, nil
 	}
-	return &generated.PublishResult{Success: true, Topic: input.Topic}, nil
+	return &generated.PublishResult{Success: true, Topic: input.Topic, Timestamp: now}, nil
 }
 
 func (r *mutationResolver) PublishBatch(ctx context.Context, inputs []*generated.PublishInput) ([]*generated.PublishResult, error) {
 	out := make([]*generated.PublishResult, 0, len(inputs))
 	for _, in := range inputs {
+		if in == nil {
+			continue
+		}
 		res, _ := r.Publish(ctx, *in)
 		out = append(out, res)
 	}
@@ -477,9 +561,9 @@ func (r *mutationResolver) PurgeQueuedMessages(ctx context.Context, clientID *st
 		n, err = r.Storage.Queue.PurgeForClient(ctx, *clientID)
 	}
 	if err != nil {
-		return &generated.PurgeResult{Success: false, Message: ptr(err.Error()), PurgedCount: 0}, nil
+		return &generated.PurgeResult{Success: false, Message: ptr(err.Error()), DeletedCount: 0, PurgedCount: 0}, nil
 	}
-	return &generated.PurgeResult{Success: true, PurgedCount: n}, nil
+	return &generated.PurgeResult{Success: true, DeletedCount: n, PurgedCount: n}, nil
 }
 
 func (r *mutationResolver) ImportDevices(ctx context.Context, configs []*generated.DeviceInput) (*generated.ImportDeviceConfigResult, error) {
@@ -487,11 +571,6 @@ func (r *mutationResolver) ImportDevices(ctx context.Context, configs []*generat
 	if !r.Cfg.Features.DeviceImportExport {
 		res.Failed = len(configs)
 		res.Errors = append(res.Errors, "DeviceImportExport feature is not enabled on this node")
-		return res, nil
-	}
-	if r.Cfg.UserManagement.Enabled {
-		res.Failed = len(configs)
-		res.Errors = append(res.Errors, "admin authorization required")
 		return res, nil
 	}
 	if r.Storage == nil || r.Storage.DeviceConfig == nil {
@@ -594,24 +673,16 @@ func (r *queryResolver) BrokerConfig(ctx context.Context) (*generated.BrokerConf
 		TCPPort: c.TCP.Port, WsPort: c.WS.Port, TcpsPort: c.TCPS.Port, WssPort: c.WSS.Port, NatsPort: 0,
 		SessionStoreType: string(c.SessionStore()), RetainedStoreType: string(c.RetainedStore()), ConfigStoreType: string(c.ConfigStore()),
 		UserManagementEnabled: c.UserManagement.Enabled, AnonymousEnabled: c.UserManagement.AnonymousEnabled,
-		McpEnabled: false, McpPort: 0, PrometheusEnabled: false, PrometheusPort: 0,
-		I3xEnabled: false, I3xPort: 0,
-		GraphqlEnabled: c.GraphQL.Enabled, GraphqlPort: c.GraphQL.Port,
-		MetricsEnabled: c.Metrics.Enabled,
-		GenAiEnabled:   false, GenAiProvider: "", GenAiModel: "",
 		PostgresURL: c.Postgres.URL, PostgresUser: c.Postgres.User,
 		CrateDbURL: "", CrateDbUser: "",
+		QuestDbURL: c.QuestDB.URL, QuestDbUser: c.QuestDB.User,
 		MongoDbURL: c.MongoDB.URL, MongoDbDatabase: c.MongoDB.Database,
 		SqlitePath: c.SQLite.Path, KafkaServers: "",
 	}, nil
 }
 
 func (r *queryResolver) Broker(ctx context.Context, nodeID *string) (*generated.Broker, error) {
-	id := r.NodeID
-	if nodeID != nil {
-		id = *nodeID
-	}
-	if id != r.NodeID {
+	if nodeID != nil && *nodeID != "local" && *nodeID != r.NodeID {
 		return nil, nil
 	}
 	return r.brokerObj(), nil
@@ -623,7 +694,7 @@ func (r *queryResolver) Brokers(ctx context.Context) ([]*generated.Broker, error
 
 func (r *Resolver) brokerObj() *generated.Broker {
 	return &generated.Broker{
-		NodeID: r.NodeID, Version: r.Version,
+		NodeID: "local", Version: r.Version,
 		UserManagementEnabled: r.Cfg.UserManagement.Enabled,
 		AnonymousEnabled:      r.Cfg.UserManagement.AnonymousEnabled,
 		IsLeader:              true, IsCurrent: true,
@@ -902,14 +973,69 @@ func (r *queryResolver) ArchivedMessages(ctx context.Context, topicFilter string
 }
 
 func (r *queryResolver) AggregatedMessages(ctx context.Context, topics []string, interval generated.AggregationInterval, startTime, endTime string, functions []generated.AggregationFunction, fields []string, archiveGroup *string) (*generated.AggregatedResult, error) {
+	arc := r.archive(archiveGroup)
+	if arc == nil {
+		return &generated.AggregatedResult{
+			Columns:    []string{"timestamp"},
+			Rows:       [][]any{},
+			Interval:   interval,
+			StartTime:  startTime,
+			EndTime:    endTime,
+			TopicCount: len(topics),
+			RowCount:   0,
+		}, nil
+	}
+
+	fromTime, _ := parseTimeArg(&startTime)
+	toTime, _ := parseTimeArg(&endTime)
+
+	var from, to time.Time
+	if fromTime != nil {
+		from = *fromTime
+	} else {
+		from = time.Now().Add(-24 * time.Hour)
+	}
+	if toTime != nil {
+		to = *toTime
+	} else {
+		to = time.Now()
+	}
+
+	intervalMinutes := 5
+	switch interval {
+	case generated.AggregationIntervalOneMinute:
+		intervalMinutes = 1
+	case generated.AggregationIntervalFiveMinutes:
+		intervalMinutes = 5
+	case generated.AggregationIntervalFifteenMinutes:
+		intervalMinutes = 15
+	case generated.AggregationIntervalOneHour:
+		intervalMinutes = 60
+	case generated.AggregationIntervalOneDay:
+		intervalMinutes = 1440
+	}
+
+	fnStrings := make([]string, len(functions))
+	for i, fn := range functions {
+		fnStrings[i] = string(fn)
+	}
+	if len(fnStrings) == 0 {
+		fnStrings = []string{"AVG"}
+	}
+
+	storeRes, err := arc.GetAggregatedHistory(ctx, topics, from, to, intervalMinutes, fnStrings, fields)
+	if err != nil {
+		return nil, err
+	}
+
 	return &generated.AggregatedResult{
-		Columns:    []string{"timestamp"},
-		Rows:       [][]map[string]any{},
+		Columns:    storeRes.Columns,
+		Rows:       storeRes.Rows,
 		Interval:   interval,
 		StartTime:  startTime,
 		EndTime:    endTime,
-		TopicCount: len(topics),
-		RowCount:   0,
+		TopicCount: storeRes.TopicCount,
+		RowCount:   storeRes.RowCount,
 	}, nil
 }
 
@@ -919,14 +1045,49 @@ func (r *queryResolver) SearchTopics(ctx context.Context, pattern string, limit 
 		return []string{}, nil
 	}
 	max := intPtr(limit, 100)
+	matcher := compileSearchMatcher(pattern)
 	out := []string{}
 	err := store.FindMatchingTopics(ctx, "#", func(topic string) bool {
-		if pattern == "" || strings.Contains(topic, pattern) {
+		if matcher(topic) {
 			out = append(out, topic)
 		}
 		return len(out) < max
 	})
 	return out, err
+}
+
+func compileSearchMatcher(pattern string) func(string) bool {
+	if pattern == "" {
+		return func(string) bool { return true }
+	}
+	hasWildcard := strings.ContainsAny(pattern, "*%?_+#")
+	if hasWildcard {
+		var sb strings.Builder
+		sb.WriteString("(?i)^")
+		for _, r := range pattern {
+			switch r {
+			case '*', '%', '#':
+				sb.WriteString(".*")
+			case '?', '_':
+				sb.WriteString(".")
+			case '+':
+				sb.WriteString("[^/]+")
+			default:
+				sb.WriteString(regexp.QuoteMeta(string(r)))
+			}
+		}
+		sb.WriteString("$")
+		re, err := regexp.Compile(sb.String())
+		if err == nil {
+			return func(topic string) bool {
+				return re.MatchString(topic)
+			}
+		}
+	}
+	lowerPattern := strings.ToLower(pattern)
+	return func(topic string) bool {
+		return strings.Contains(strings.ToLower(topic), lowerPattern)
+	}
 }
 
 // BrowseTopics returns the distinct topic prefixes truncated at the level of
@@ -1160,6 +1321,13 @@ func (r *Resolver) archiveGroupInfoTo(c stores.ArchiveGroupConfig) *generated.Ar
 		LastValRetention:       ptrIfNotEmpty(c.LastValRetention),
 		ArchiveRetention:       ptrIfNotEmpty(c.ArchiveRetention),
 		PurgeInterval:          ptrIfNotEmpty(c.PurgeInterval),
+		QueueType:              ptrIfNotEmpty(c.QueueType),
+		QueueSize:              ptrIfNonZero(c.QueueSize),
+		BulkSize:               ptrIfNonZero(c.BulkSize),
+		BulkTimeoutMs:          ptrIfNonZero64(c.BulkTimeoutMs),
+		QueueDiskPath:          ptrIfNotEmpty(c.QueueDiskPath),
+		LastValReadOnly:        c.LastValReadOnly,
+		ArchiveReadOnly:        c.ArchiveReadOnly,
 		// createdAt/updatedAt aren't tracked in ArchiveGroupConfig today;
 		// surface as nil so the dashboard renders "—".
 	}
@@ -1208,13 +1376,13 @@ func (r *Resolver) validateDatabaseConnectionSelection(ctx context.Context, sele
 	}
 	required := archive.RequiredDatabaseConnectionTypes(lastValType, archiveType)
 	if len(required) == 0 {
-		return "", fmt.Errorf("a database connection can only be selected for PostgreSQL or MongoDB storage")
+		return "", fmt.Errorf("a database connection can only be selected for PostgreSQL, MongoDB, or SQLite storage")
 	}
 	if len(required) > 1 {
 		if archive.IsDefaultDatabaseConnectionName(selected) {
 			return "", nil
 		}
-		return "", fmt.Errorf("mixed PostgreSQL and MongoDB storage cannot use a named database connection; leave the selection empty to use config-file defaults")
+		return "", fmt.Errorf("mixed database storage cannot use a named database connection; leave the selection empty to use config-file defaults")
 	}
 	want := required[0]
 	if archive.IsDefaultDatabaseConnectionName(selected) {
@@ -1251,8 +1419,12 @@ func (r *queryResolver) MqttClients(ctx context.Context, name, node *string) ([]
 		if name != nil && d.Name != *name {
 			continue
 		}
-		if node != nil && d.NodeID != *node {
-			continue
+		if node != nil && *node != "" {
+			target := *node
+			matches := d.NodeID == target || d.NodeID == "local" || d.NodeID == "*" || (target == "local" && (d.NodeID == r.NodeID || d.NodeID == "local" || d.NodeID == "*"))
+			if !matches {
+				continue
+			}
 		}
 		out = append(out, r.deviceToMqttClient(d))
 	}
@@ -1778,6 +1950,13 @@ func (r *archiveGroupMutationsResolver) Create(ctx context.Context, _ *generated
 		LastValRetention: derefStr(input.LastValRetention),
 		ArchiveRetention: derefStr(input.ArchiveRetention),
 		PurgeInterval:    derefStr(input.PurgeInterval),
+		QueueType:        derefStr(input.QueueType),
+		QueueSize:        intPtr(input.QueueSize, 100000),
+		BulkSize:         intPtr(input.BulkSize, 4000),
+		BulkTimeoutMs:    int64Ptr(input.BulkTimeoutMs, 1000),
+		QueueDiskPath:    derefStr(input.QueueDiskPath),
+		LastValReadOnly:  boolPtr(input.LastValReadOnly, false),
+		ArchiveReadOnly:  boolPtr(input.ArchiveReadOnly, false),
 	}
 	if input.PayloadFormat != nil {
 		cfg.PayloadFormat = stores.PayloadFormat(*input.PayloadFormat)
@@ -1847,6 +2026,27 @@ func (r *archiveGroupMutationsResolver) Update(ctx context.Context, _ *generated
 	}
 	if input.PurgeInterval != nil {
 		existing.PurgeInterval = *input.PurgeInterval
+	}
+	if input.QueueType != nil {
+		existing.QueueType = *input.QueueType
+	}
+	if input.QueueSize != nil {
+		existing.QueueSize = *input.QueueSize
+	}
+	if input.BulkSize != nil {
+		existing.BulkSize = *input.BulkSize
+	}
+	if input.BulkTimeoutMs != nil {
+		existing.BulkTimeoutMs = *input.BulkTimeoutMs
+	}
+	if input.QueueDiskPath != nil {
+		existing.QueueDiskPath = *input.QueueDiskPath
+	}
+	if input.LastValReadOnly != nil {
+		existing.LastValReadOnly = *input.LastValReadOnly
+	}
+	if input.ArchiveReadOnly != nil {
+		existing.ArchiveReadOnly = *input.ArchiveReadOnly
 	}
 	if err := r.Storage.ArchiveConfig.Save(ctx, *existing); err != nil {
 		return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
@@ -2072,12 +2272,37 @@ func (r *userManagementMutationsResolver) CreateACLRule(ctx context.Context, _ *
 	return &generated.UserManagementResult{Success: true}, nil
 }
 func (r *userManagementMutationsResolver) UpdateACLRule(ctx context.Context, _ *generated.UserManagementMutations, input generated.UpdateACLRuleInput) (*generated.UserManagementResult, error) {
-	rule := stores.AclRule{
-		ID: input.ID, Username: input.Username, TopicPattern: input.TopicPattern,
-		CanSubscribe: boolPtr(input.CanSubscribe, false), CanPublish: boolPtr(input.CanPublish, false),
-		Priority: intPtr(input.Priority, 0),
+	rules, err := r.Storage.Users.GetAllAclRules(ctx)
+	if err != nil {
+		return &generated.UserManagementResult{Success: false, Message: ptr(err.Error())}, nil
 	}
-	if err := r.Storage.Users.UpdateAclRule(ctx, rule); err != nil {
+	var existing *stores.AclRule
+	for _, rule := range rules {
+		if rule.ID == input.ID {
+			ruleCopy := rule
+			existing = &ruleCopy
+			break
+		}
+	}
+	if existing == nil {
+		return &generated.UserManagementResult{Success: false, Message: ptr("ACL rule not found")}, nil
+	}
+	if input.Username != nil {
+		existing.Username = *input.Username
+	}
+	if input.TopicPattern != nil {
+		existing.TopicPattern = *input.TopicPattern
+	}
+	if input.CanSubscribe != nil {
+		existing.CanSubscribe = *input.CanSubscribe
+	}
+	if input.CanPublish != nil {
+		existing.CanPublish = *input.CanPublish
+	}
+	if input.Priority != nil {
+		existing.Priority = *input.Priority
+	}
+	if err := r.Storage.Users.UpdateAclRule(ctx, *existing); err != nil {
 		return &generated.UserManagementResult{Success: false, Message: ptr(err.Error())}, nil
 	}
 	_ = r.AuthCache.Refresh(ctx)
@@ -2426,7 +2651,7 @@ func (r *Resolver) deviceToMqttClient(d stores.DeviceConfig) *generated.MqttClie
 		Config:          mapToConnectionConfig(cfg),
 		CreatedAt:       formatTime(d.CreatedAt),
 		UpdatedAt:       formatTime(d.UpdatedAt),
-		IsOnCurrentNode: d.NodeID == r.NodeID || d.NodeID == "*",
+		IsOnCurrentNode: d.NodeID == r.NodeID || d.NodeID == "local" || d.NodeID == "*",
 	}
 }
 
@@ -2579,4 +2804,198 @@ func asInt64(v any, def int64) int64 {
 		return int64(n)
 	}
 	return def
+}
+
+func mapHmiDevice(d *hmi.HmiDevice) *generated.Hmi {
+	if d == nil {
+		return nil
+	}
+	fileCount := d.FileCount
+	sizeBytes := d.SizeBytes
+	return &generated.Hmi{
+		Name:    d.Name,
+		NodeID:  d.NodeID,
+		Enabled: d.Enabled,
+		Config: &generated.HmiConfig{
+			URLPath:     d.Config.UrlPath,
+			IsMain:      d.Config.IsMain,
+			Title:       &d.Config.Title,
+			Description: &d.Config.Description,
+			EntryPoint:  &d.Config.EntryPoint,
+		},
+		CreatedAt:       d.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:       d.UpdatedAt.Format(time.RFC3339),
+		IsOnCurrentNode: d.IsOnCurrentNode,
+		FileCount:       &fileCount,
+		SizeBytes:       &sizeBytes,
+	}
+}
+
+type hmiMutationsResolver struct{ *Resolver }
+
+func (r *mutationResolver) Hmi(ctx context.Context) (*generated.HmiMutations, error) {
+	return &generated.HmiMutations{}, nil
+}
+
+func (r *queryResolver) Hmis(ctx context.Context, name *string, nodeId *string) ([]*generated.Hmi, error) {
+	if r.HmiMgr == nil {
+		return []*generated.Hmi{}, nil
+	}
+	list, err := r.HmiMgr.ListHmis()
+	if err != nil {
+		return nil, err
+	}
+	var out []*generated.Hmi
+	for _, d := range list {
+		if name != nil && d.Name != *name {
+			continue
+		}
+		if nodeId != nil && *nodeId != "" {
+			target := *nodeId
+			matches := d.NodeID == target || d.NodeID == "local" || d.NodeID == "*" || (target == "local" && (d.NodeID == r.NodeID || d.NodeID == "local" || d.NodeID == "*"))
+			if !matches {
+				continue
+			}
+		}
+		out = append(out, mapHmiDevice(d))
+	}
+	return out, nil
+}
+
+func (r *queryResolver) Hmi(ctx context.Context, name string) (*generated.Hmi, error) {
+	if r.HmiMgr == nil {
+		return nil, nil
+	}
+	d, err := r.HmiMgr.GetHmi(name)
+	if err != nil {
+		return nil, nil
+	}
+	return mapHmiDevice(d), nil
+}
+
+func (r *queryResolver) HmiFiles(ctx context.Context, name string) ([]*generated.DashboardFile, error) {
+	if r.HmiMgr == nil {
+		return []*generated.DashboardFile{}, nil
+	}
+	files, err := r.HmiMgr.ListDashboardFiles(name)
+	if err != nil {
+		return nil, err
+	}
+	var out []*generated.DashboardFile
+	for _, f := range files {
+		out = append(out, &generated.DashboardFile{
+			Path:      f.Path,
+			SizeBytes: f.SizeBytes,
+		})
+	}
+	return out, nil
+}
+
+func (r *queryResolver) ExportHmiZip(ctx context.Context, name string) (string, error) {
+	if r.HmiMgr == nil {
+		return "", fmt.Errorf("HMI is not enabled")
+	}
+	return r.HmiMgr.ExportDashboardZip(name)
+}
+
+func (r *hmiMutationsResolver) Create(ctx context.Context, _ *generated.HmiMutations, input generated.HmiInput) (*generated.HmiResult, error) {
+	if r.HmiMgr == nil {
+		msg := "HMI is not enabled"
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	nodeID := "local"
+	if input.NodeID != nil && *input.NodeID != "" {
+		nodeID = *input.NodeID
+	}
+	cfg := hmi.HmiConfig{}
+	if input.Config.URLPath != nil {
+		cfg.UrlPath = *input.Config.URLPath
+	}
+	if input.Config.IsMain != nil {
+		cfg.IsMain = *input.Config.IsMain
+	}
+	if input.Config.Title != nil {
+		cfg.Title = *input.Config.Title
+	}
+	if input.Config.Description != nil {
+		cfg.Description = *input.Config.Description
+	}
+	if input.Config.EntryPoint != nil {
+		cfg.EntryPoint = *input.Config.EntryPoint
+	}
+
+	d, err := r.HmiMgr.SaveHmiDevice(input.Name, nodeID, input.Enabled, cfg)
+	if err != nil {
+		msg := err.Error()
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	return &generated.HmiResult{Success: true, Hmi: mapHmiDevice(d)}, nil
+}
+
+func (r *hmiMutationsResolver) Update(ctx context.Context, _ *generated.HmiMutations, name string, input generated.HmiInput) (*generated.HmiResult, error) {
+	return r.Create(ctx, nil, input)
+}
+
+func (r *hmiMutationsResolver) Delete(ctx context.Context, _ *generated.HmiMutations, name string) (*generated.HmiResult, error) {
+	if r.HmiMgr == nil {
+		msg := "HMI is not enabled"
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	err := r.HmiMgr.DeleteHmiDevice(name)
+	if err != nil {
+		msg := err.Error()
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	return &generated.HmiResult{Success: true}, nil
+}
+
+func (r *hmiMutationsResolver) Start(ctx context.Context, _ *generated.HmiMutations, name string) (*generated.HmiResult, error) {
+	return r.Toggle(ctx, nil, name, true)
+}
+
+func (r *hmiMutationsResolver) Stop(ctx context.Context, _ *generated.HmiMutations, name string) (*generated.HmiResult, error) {
+	return r.Toggle(ctx, nil, name, false)
+}
+
+func (r *hmiMutationsResolver) Toggle(ctx context.Context, _ *generated.HmiMutations, name string, enabled bool) (*generated.HmiResult, error) {
+	if r.HmiMgr == nil {
+		msg := "HMI is not enabled"
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	d, err := r.HmiMgr.ToggleHmiDevice(name, enabled)
+	if err != nil {
+		msg := err.Error()
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	return &generated.HmiResult{Success: true, Hmi: mapHmiDevice(d)}, nil
+}
+
+func (r *hmiMutationsResolver) Reassign(ctx context.Context, _ *generated.HmiMutations, name string, nodeId string) (*generated.HmiResult, error) {
+	if r.HmiMgr == nil {
+		msg := "HMI is not enabled"
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	d, err := r.HmiMgr.ReassignHmiDevice(name, nodeId)
+	if err != nil {
+		msg := err.Error()
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	return &generated.HmiResult{Success: true, Hmi: mapHmiDevice(d)}, nil
+}
+
+func (r *hmiMutationsResolver) UploadZip(ctx context.Context, _ *generated.HmiMutations, name string, zipBase64 string, setAsMain *bool) (*generated.HmiResult, error) {
+	if r.HmiMgr == nil {
+		msg := "HMI is not enabled"
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	isMain := false
+	if setAsMain != nil {
+		isMain = *setAsMain
+	}
+	d, err := r.HmiMgr.UploadDashboardZip(name, zipBase64, isMain)
+	if err != nil {
+		msg := err.Error()
+		return &generated.HmiResult{Success: false, Message: &msg}, nil
+	}
+	return &generated.HmiResult{Success: true, Hmi: mapHmiDevice(d)}, nil
 }

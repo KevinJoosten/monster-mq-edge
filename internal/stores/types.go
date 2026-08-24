@@ -56,6 +56,8 @@ type MessageArchiveType string
 const (
 	ArchiveNone     MessageArchiveType = "NONE"
 	ArchivePostgres MessageArchiveType = "POSTGRES"
+	ArchiveCrateDB  MessageArchiveType = "CRATEDB"
+	ArchiveQuestDB  MessageArchiveType = "QUESTDB"
 	ArchiveMongoDB  MessageArchiveType = "MONGODB"
 	ArchiveSQLite   MessageArchiveType = "SQLITE"
 )
@@ -72,6 +74,9 @@ type DatabaseConnectionType string
 const (
 	DatabaseConnectionPostgres DatabaseConnectionType = "POSTGRES"
 	DatabaseConnectionMongoDB  DatabaseConnectionType = "MONGODB"
+	DatabaseConnectionSQLite   DatabaseConnectionType = "SQLITE"
+	DatabaseConnectionCrateDB  DatabaseConnectionType = "CRATEDB"
+	DatabaseConnectionQuestDB  DatabaseConnectionType = "QUESTDB"
 )
 
 type DatabaseConnectionConfig struct {

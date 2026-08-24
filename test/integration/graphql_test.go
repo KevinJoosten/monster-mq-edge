@@ -91,8 +91,8 @@ func TestGraphQLPublishAndCurrentValue(t *testing.T) {
 	srv, url := startWithGraphQL(t, 23002, 28002)
 	defer srv.Close()
 
-	// Publish via GraphQL.
-	gqlQuery(t, url, `mutation { publish(input: { topic: "g/temp", payload: "23.5", qos: 0, retain: true }) { success topic } }`, nil)
+	// Publish via GraphQL using retained: true.
+	gqlQuery(t, url, `mutation { publish(input: { topic: "g/temp", payload: "23.5", qos: 0, retained: true }) { success topic } }`, nil)
 
 	// Wait for archive group flush.
 	time.Sleep(500 * time.Millisecond)
@@ -111,6 +111,61 @@ func TestGraphQLPublishAndCurrentValue(t *testing.T) {
 	rm := data["retainedMessage"].(map[string]any)
 	if !strings.Contains(fmt.Sprintf("%v", rm["payload"]), "23.5") {
 		t.Fatalf("retained payload %v", rm["payload"])
+	}
+}
+
+func TestGraphQLPublishBatchAndBinary(t *testing.T) {
+	srv, url := startWithGraphQL(t, 23020, 28020)
+	defer srv.Close()
+
+	// Wildcard publish should be rejected with an error message
+	res := gqlQuery(t, url, `mutation { publish(input: { topic: "g/+/wildcard", payload: "fail" }) { success topic error } }`, nil)
+	pubRes := res["publish"].(map[string]any)
+	if pubRes["success"].(bool) {
+		t.Fatalf("expected wildcard publish to fail")
+	}
+	if !strings.Contains(fmt.Sprintf("%v", pubRes["error"]), "wildcard") {
+		t.Fatalf("unexpected error message: %v", pubRes["error"])
+	}
+
+	// Publish binary payload (base64 encoded "hello-edge" is "aGVsbG8tZWRnZQ==")
+	res = gqlQuery(t, url, `mutation { publish(input: { topic: "g/bin", payload: "aGVsbG8tZWRnZQ==", format: BINARY, retained: true }) { success topic } }`, nil)
+	pubRes = res["publish"].(map[string]any)
+	if !pubRes["success"].(bool) {
+		t.Fatalf("publish binary failed: %v", pubRes)
+	}
+
+	// Publish text payload
+	res = gqlQuery(t, url, `mutation { publish(input: { topic: "g/txt", payload: "plain-text-msg", format: TEXT, retained: true }) { success topic } }`, nil)
+	pubRes = res["publish"].(map[string]any)
+	if !pubRes["success"].(bool) {
+		t.Fatalf("publish text failed: %v", pubRes)
+	}
+
+	// Query currentValue with TEXT format
+	time.Sleep(100 * time.Millisecond)
+	data := gqlQuery(t, url, `{ currentValue(topic: "g/txt", format: TEXT) { topic payload format } }`, nil)
+	cv := data["currentValue"].(map[string]any)
+	if cv["payload"] != "plain-text-msg" || cv["format"] != "TEXT" {
+		t.Fatalf("unexpected currentValue for text: %v", cv)
+	}
+
+	// PublishBatch
+	res = gqlQuery(t, url, `mutation {
+		publishBatch(inputs: [
+			{ topic: "g/batch/1", payload: "val1", retained: true },
+			{ topic: "g/batch/2", payload: "val2", retained: true }
+		]) { success topic }
+	}`, nil)
+	batchList := res["publishBatch"].([]any)
+	if len(batchList) != 2 {
+		t.Fatalf("expected 2 batch results, got %d", len(batchList))
+	}
+	for _, item := range batchList {
+		itemMap := item.(map[string]any)
+		if !itemMap["success"].(bool) {
+			t.Fatalf("batch item failed: %v", itemMap)
+		}
 	}
 }
 
@@ -204,11 +259,21 @@ func TestGraphQLDatabaseConnectionCRUDAndValidation(t *testing.T) {
 	if len(names) != 1 || names[0] != "Default" {
 		t.Fatalf("postgres names: %v", names)
 	}
+	data = gqlQuery(t, url, `{ databaseConnectionNames(type: SQLITE) }`, nil)
+	sqliteNames := data["databaseConnectionNames"].([]any)
+	if len(sqliteNames) != 1 || sqliteNames[0] != "Default" {
+		t.Fatalf("sqlite names: %v", sqliteNames)
+	}
 	data = gqlQuery(t, url, `{ databaseConnections(type: POSTGRES) { name type url readOnly } }`, nil)
 	conns := data["databaseConnections"].([]any)
 	def := conns[0].(map[string]any)
 	if def["name"] != "Default" || def["readOnly"] != true || strings.Contains(def["url"].(string), "secret") {
 		t.Fatalf("unexpected default connection: %v", def)
+	}
+	data = gqlQuery(t, url, `{ databaseConnections(type: SQLITE) { name type url readOnly } }`, nil)
+	sqliteConns := data["databaseConnections"].([]any)
+	if len(sqliteConns) != 1 || sqliteConns[0].(map[string]any)["name"] != "Default" {
+		t.Fatalf("unexpected default sqlite connection: %v", sqliteConns)
 	}
 
 	data = gqlQuery(t, url, `mutation {
@@ -425,3 +490,101 @@ func TestGraphQLDeviceImportExportDisabled(t *testing.T) {
 		t.Fatalf("disabled importDevices result: %v", result)
 	}
 }
+
+func TestGraphQLDeviceImportExportWithUserManagement(t *testing.T) {
+	srv, url := startWithGraphQL(t, 23024, 28024, func(c *config.Config) {
+		c.UserManagement.Enabled = true
+		c.Features.DeviceImportExport = true
+		c.Features.MqttClient = true
+	})
+	defer srv.Close()
+
+	data := gqlQuery(t, url, `mutation Import($configs: [DeviceInput!]!) {
+        importDevices(configs: $configs) { success imported failed total errors }
+    }`, map[string]any{"configs": []any{
+		map[string]any{
+			"name":      "mqtt-edge-client",
+			"namespace": "default",
+			"nodeId":    "g-28024",
+			"type":      "MQTT-Client",
+			"enabled":   true,
+			"config": map[string]any{
+				"brokerUrl":    "tcp://localhost:1883",
+				"clientId":     "edge-client-1",
+				"cleanSession": true,
+				"addresses": []any{
+					map[string]any{
+						"mode":        "PUBLISH",
+						"remoteTopic": "remote/#",
+						"localTopic":  "local/#",
+						"removePath":  true,
+					},
+				},
+			},
+		},
+	}})
+	result := data["importDevices"].(map[string]any)
+	if result["success"] != true || int(result["imported"].(float64)) != 1 || int(result["failed"].(float64)) != 0 {
+		t.Fatalf("importDevices with UserManagement failed: %v", result)
+	}
+}
+
+func TestGraphQLRetainedMessageInArchiveAcrossRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "retained_arch.db")
+	mqttPort := 23025
+	gqlPort := 28025
+
+	srv, url := startWithGraphQL(t, mqttPort, gqlPort, func(c *config.Config) {
+		c.SQLite.Path = dbPath
+	})
+
+	// 1. Publish retained message via GraphQL
+	gqlQuery(t, url, `mutation { publish(input: { topic: "sensors/temp/office", payload: "21.5", retained: true }) { success topic } }`, nil)
+	time.Sleep(300 * time.Millisecond)
+
+	// Verify before restart
+	data := gqlQuery(t, url, `{ currentValue(topic: "sensors/temp/office") { topic payload } }`, nil)
+	cv := data["currentValue"].(map[string]any)
+	if cv["topic"] != "sensors/temp/office" || !strings.Contains(fmt.Sprintf("%v", cv["payload"]), "21.5") {
+		t.Fatalf("currentValue before restart mismatch: %+v", cv)
+	}
+
+	// 2. Restart broker on same DB
+	srv.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	srv2, url2 := startWithGraphQL(t, mqttPort, gqlPort, func(c *config.Config) {
+		c.SQLite.Path = dbPath
+	})
+	defer srv2.Close()
+
+	// 3. Query currentValue from Default archive group (in-memory last-value store)
+	data2 := gqlQuery(t, url2, `{ currentValue(topic: "sensors/temp/office") { topic payload } }`, nil)
+	cv2, ok := data2["currentValue"].(map[string]any)
+	if !ok || cv2["topic"] != "sensors/temp/office" || !strings.Contains(fmt.Sprintf("%v", cv2["payload"]), "21.5") {
+		t.Fatalf("currentValue after restart mismatch: %+v", data2)
+	}
+
+	// 4. Query currentValues with wildcard
+	dataValues := gqlQuery(t, url2, `{ currentValues(topicFilter: "sensors/#") { topic payload } }`, nil)
+	list, ok := dataValues["currentValues"].([]any)
+	if !ok || len(list) == 0 {
+		t.Fatalf("currentValues after restart empty: %+v", dataValues)
+	}
+
+	// 5. Query retainedMessage
+	dataRet := gqlQuery(t, url2, `{ retainedMessage(topic: "sensors/temp/office") { topic payload } }`, nil)
+	rm, ok := dataRet["retainedMessage"].(map[string]any)
+	if !ok || rm["topic"] != "sensors/temp/office" || !strings.Contains(fmt.Sprintf("%v", rm["payload"]), "21.5") {
+		t.Fatalf("retainedMessage after restart mismatch: %+v", dataRet)
+	}
+
+	// 6. Query browseTopics
+	dataBrowse := gqlQuery(t, url2, `{ browseTopics(topic: "sensors/+") { name } }`, nil)
+	browseList, ok := dataBrowse["browseTopics"].([]any)
+	if !ok || len(browseList) == 0 {
+		t.Fatalf("browseTopics after restart empty: %+v", dataBrowse)
+	}
+}
+
+

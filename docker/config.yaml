@@ -42,5 +42,7 @@ Features:
   MqttClient: true
   WinCCUa: true
   WinCCOa: true
+  Hmi: true
+  Redfish: false
 
 QueuedMessagesEnabled: false

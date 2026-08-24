@@ -19,16 +19,6 @@ type ACLRuleInfo struct {
 	CreatedAt    *string `json:"createdAt,omitempty"`
 }
 
-type AggregatedResult struct {
-	Columns    []string            `json:"columns"`
-	Rows       [][]map[string]any  `json:"rows"`
-	Interval   AggregationInterval `json:"interval"`
-	StartTime  string              `json:"startTime"`
-	EndTime    string              `json:"endTime"`
-	TopicCount int                 `json:"topicCount"`
-	RowCount   int                 `json:"rowCount"`
-}
-
 type ArchiveGroupInfo struct {
 	Name                   string                  `json:"name"`
 	Enabled                bool                    `json:"enabled"`
@@ -43,8 +33,15 @@ type ArchiveGroupInfo struct {
 	LastValRetention       *string                 `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string                 `json:"archiveRetention,omitempty"`
 	PurgeInterval          *string                 `json:"purgeInterval,omitempty"`
+	QueueType              *string                 `json:"queueType,omitempty"`
+	QueueSize              *int                    `json:"queueSize,omitempty"`
+	BulkSize               *int                    `json:"bulkSize,omitempty"`
+	BulkTimeoutMs          *int64                  `json:"bulkTimeoutMs,omitempty"`
+	QueueDiskPath          *string                 `json:"queueDiskPath,omitempty"`
 	CreatedAt              *string                 `json:"createdAt,omitempty"`
 	UpdatedAt              *string                 `json:"updatedAt,omitempty"`
+	LastValReadOnly        bool                    `json:"lastValReadOnly"`
+	ArchiveReadOnly        bool                    `json:"archiveReadOnly"`
 	ConnectionStatus       []*NodeConnectionStatus `json:"connectionStatus"`
 	Metrics                []*ArchiveGroupMetrics  `json:"metrics"`
 	MetricsHistory         []*ArchiveGroupMetrics  `json:"metricsHistory"`
@@ -119,22 +116,12 @@ type BrokerConfig struct {
 	ConfigStoreType       string `json:"configStoreType"`
 	UserManagementEnabled bool   `json:"userManagementEnabled"`
 	AnonymousEnabled      bool   `json:"anonymousEnabled"`
-	McpEnabled            bool   `json:"mcpEnabled"`
-	McpPort               int    `json:"mcpPort"`
-	PrometheusEnabled     bool   `json:"prometheusEnabled"`
-	PrometheusPort        int    `json:"prometheusPort"`
-	I3xEnabled            bool   `json:"i3xEnabled"`
-	I3xPort               int    `json:"i3xPort"`
-	GraphqlEnabled        bool   `json:"graphqlEnabled"`
-	GraphqlPort           int    `json:"graphqlPort"`
-	MetricsEnabled        bool   `json:"metricsEnabled"`
-	GenAiEnabled          bool   `json:"genAiEnabled"`
-	GenAiProvider         string `json:"genAiProvider"`
-	GenAiModel            string `json:"genAiModel"`
 	PostgresURL           string `json:"postgresUrl"`
 	PostgresUser          string `json:"postgresUser"`
 	CrateDbURL            string `json:"crateDbUrl"`
 	CrateDbUser           string `json:"crateDbUser"`
+	QuestDbURL            string `json:"questDbUrl"`
+	QuestDbUser           string `json:"questDbUser"`
 	MongoDbURL            string `json:"mongoDbUrl"`
 	MongoDbDatabase       string `json:"mongoDbDatabase"`
 	SqlitePath            string `json:"sqlitePath"`
@@ -187,6 +174,13 @@ type CreateArchiveGroupInput struct {
 	LastValRetention       *string            `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string            `json:"archiveRetention,omitempty"`
 	PurgeInterval          *string            `json:"purgeInterval,omitempty"`
+	QueueType              *string            `json:"queueType,omitempty"`
+	QueueSize              *int               `json:"queueSize,omitempty"`
+	BulkSize               *int               `json:"bulkSize,omitempty"`
+	BulkTimeoutMs          *int64             `json:"bulkTimeoutMs,omitempty"`
+	QueueDiskPath          *string            `json:"queueDiskPath,omitempty"`
+	LastValReadOnly        *bool              `json:"lastValReadOnly,omitempty"`
+	ArchiveReadOnly        *bool              `json:"archiveReadOnly,omitempty"`
 }
 
 type CreateDatabaseConnectionInput struct {
@@ -216,6 +210,11 @@ type CurrentUser struct {
 type DailyCount struct {
 	Date  string `json:"date"`
 	Count int64  `json:"count"`
+}
+
+type DashboardFile struct {
+	Path      string `json:"path"`
+	SizeBytes int64  `json:"sizeBytes"`
 }
 
 type DatabaseConnectionInfo struct {
@@ -262,6 +261,58 @@ type ExceptionInfo struct {
 	Class      string  `json:"class"`
 	Message    *string `json:"message,omitempty"`
 	StackTrace string  `json:"stackTrace"`
+}
+
+type Hmi struct {
+	Name            string     `json:"name"`
+	NodeID          string     `json:"nodeId"`
+	Enabled         bool       `json:"enabled"`
+	Config          *HmiConfig `json:"config"`
+	CreatedAt       string     `json:"createdAt"`
+	UpdatedAt       string     `json:"updatedAt"`
+	IsOnCurrentNode bool       `json:"isOnCurrentNode"`
+	FileCount       *int       `json:"fileCount,omitempty"`
+	SizeBytes       *int64     `json:"sizeBytes,omitempty"`
+}
+
+type HmiConfig struct {
+	URLPath     string  `json:"urlPath"`
+	IsMain      bool    `json:"isMain"`
+	Title       *string `json:"title,omitempty"`
+	Description *string `json:"description,omitempty"`
+	EntryPoint  *string `json:"entryPoint,omitempty"`
+}
+
+type HmiConfigInput struct {
+	URLPath     *string `json:"urlPath,omitempty"`
+	IsMain      *bool   `json:"isMain,omitempty"`
+	Title       *string `json:"title,omitempty"`
+	Description *string `json:"description,omitempty"`
+	EntryPoint  *string `json:"entryPoint,omitempty"`
+}
+
+type HmiInput struct {
+	Name    string          `json:"name"`
+	NodeID  *string         `json:"nodeId,omitempty"`
+	Enabled *bool           `json:"enabled,omitempty"`
+	Config  *HmiConfigInput `json:"config"`
+}
+
+type HmiMutations struct {
+	Create    *HmiResult `json:"create"`
+	Update    *HmiResult `json:"update"`
+	Delete    *HmiResult `json:"delete"`
+	Start     *HmiResult `json:"start"`
+	Stop      *HmiResult `json:"stop"`
+	Toggle    *HmiResult `json:"toggle"`
+	Reassign  *HmiResult `json:"reassign"`
+	UploadZip *HmiResult `json:"uploadZip"`
+}
+
+type HmiResult struct {
+	Hmi     *Hmi    `json:"hmi,omitempty"`
+	Success bool    `json:"success"`
+	Message *string `json:"message,omitempty"`
 }
 
 type ImportDeviceConfigResult struct {
@@ -423,28 +474,91 @@ type NodeConnectionStatus struct {
 }
 
 type PublishInput struct {
-	Topic         string         `json:"topic"`
-	Payload       *string        `json:"payload,omitempty"`
-	PayloadBase64 *string        `json:"payloadBase64,omitempty"`
-	PayloadJSON   map[string]any `json:"payloadJson,omitempty"`
-	Qos           *int           `json:"qos,omitempty"`
-	Retain        *bool          `json:"retain,omitempty"`
-	Format        *DataFormat    `json:"format,omitempty"`
+	Topic    string      `json:"topic"`
+	Payload  string      `json:"payload"`
+	Format   *DataFormat `json:"format,omitempty"`
+	Qos      *int        `json:"qos,omitempty"`
+	Retained *bool       `json:"retained,omitempty"`
 }
 
 type PublishResult struct {
-	Success bool    `json:"success"`
-	Message *string `json:"message,omitempty"`
-	Topic   string  `json:"topic"`
+	Success   bool    `json:"success"`
+	Topic     string  `json:"topic"`
+	Timestamp int64   `json:"timestamp"`
+	Error     *string `json:"error,omitempty"`
 }
 
 type PurgeResult struct {
-	Success     bool    `json:"success"`
-	Message     *string `json:"message,omitempty"`
-	PurgedCount int64   `json:"purgedCount"`
+	Success      bool    `json:"success"`
+	Message      *string `json:"message,omitempty"`
+	DeletedCount int64   `json:"deletedCount"`
+	PurgedCount  int64   `json:"purgedCount"`
 }
 
 type Query struct {
+}
+
+type RedfishMapping struct {
+	Name            string                `json:"name"`
+	NodeID          string                `json:"nodeId"`
+	Enabled         bool                  `json:"enabled"`
+	Config          *RedfishMappingConfig `json:"config"`
+	CreatedAt       string                `json:"createdAt"`
+	UpdatedAt       string                `json:"updatedAt"`
+	IsOnCurrentNode bool                  `json:"isOnCurrentNode"`
+}
+
+type RedfishMappingConfig struct {
+	TopicPrefix         string             `json:"topicPrefix"`
+	TopicFilters        []string           `json:"topicFilters"`
+	ChassisID           *string            `json:"chassisId,omitempty"`
+	DefaultReadingType  *string            `json:"defaultReadingType,omitempty"`
+	DefaultReadingUnits *string            `json:"defaultReadingUnits,omitempty"`
+	Thresholds          *RedfishThresholds `json:"thresholds,omitempty"`
+	JSONSchema          map[string]any     `json:"jsonSchema"`
+}
+
+type RedfishMappingConfigInput struct {
+	TopicPrefix         *string                 `json:"topicPrefix,omitempty"`
+	TopicFilters        []string                `json:"topicFilters"`
+	ChassisID           *string                 `json:"chassisId,omitempty"`
+	DefaultReadingType  *string                 `json:"defaultReadingType,omitempty"`
+	DefaultReadingUnits *string                 `json:"defaultReadingUnits,omitempty"`
+	Thresholds          *RedfishThresholdsInput `json:"thresholds,omitempty"`
+	JSONSchema          map[string]any          `json:"jsonSchema"`
+}
+
+type RedfishResult struct {
+	Redfish *RedfishMapping `json:"redfish,omitempty"`
+	Success bool            `json:"success"`
+	Message *string         `json:"message,omitempty"`
+}
+
+type RedfishSensorStatus struct {
+	ID           string  `json:"id"`
+	Name         string  `json:"name"`
+	ChassisID    string  `json:"chassisId"`
+	Topic        string  `json:"topic"`
+	Reading      float64 `json:"reading"`
+	ReadingType  string  `json:"readingType"`
+	ReadingUnits string  `json:"readingUnits"`
+	Health       string  `json:"health"`
+	State        string  `json:"state"`
+	LastUpdated  string  `json:"lastUpdated"`
+}
+
+type RedfishThresholds struct {
+	UpperCaution  *float64 `json:"upperCaution,omitempty"`
+	UpperCritical *float64 `json:"upperCritical,omitempty"`
+	LowerCaution  *float64 `json:"lowerCaution,omitempty"`
+	LowerCritical *float64 `json:"lowerCritical,omitempty"`
+}
+
+type RedfishThresholdsInput struct {
+	UpperCaution  *float64 `json:"upperCaution,omitempty"`
+	UpperCritical *float64 `json:"upperCritical,omitempty"`
+	LowerCaution  *float64 `json:"lowerCaution,omitempty"`
+	LowerCritical *float64 `json:"lowerCritical,omitempty"`
 }
 
 type RetainedMessage struct {
@@ -563,12 +677,12 @@ type TopicValue struct {
 }
 
 type UpdateACLRuleInput struct {
-	ID           string `json:"id"`
-	Username     string `json:"username"`
-	TopicPattern string `json:"topicPattern"`
-	CanSubscribe *bool  `json:"canSubscribe,omitempty"`
-	CanPublish   *bool  `json:"canPublish,omitempty"`
-	Priority     *int   `json:"priority,omitempty"`
+	ID           string  `json:"id"`
+	Username     *string `json:"username,omitempty"`
+	TopicPattern *string `json:"topicPattern,omitempty"`
+	CanSubscribe *bool   `json:"canSubscribe,omitempty"`
+	CanPublish   *bool   `json:"canPublish,omitempty"`
+	Priority     *int    `json:"priority,omitempty"`
 }
 
 type UpdateArchiveGroupInput struct {
@@ -582,6 +696,13 @@ type UpdateArchiveGroupInput struct {
 	LastValRetention       *string             `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string             `json:"archiveRetention,omitempty"`
 	PurgeInterval          *string             `json:"purgeInterval,omitempty"`
+	QueueType              *string             `json:"queueType,omitempty"`
+	QueueSize              *int                `json:"queueSize,omitempty"`
+	BulkSize               *int                `json:"bulkSize,omitempty"`
+	BulkTimeoutMs          *int64              `json:"bulkTimeoutMs,omitempty"`
+	QueueDiskPath          *string             `json:"queueDiskPath,omitempty"`
+	LastValReadOnly        *bool               `json:"lastValReadOnly,omitempty"`
+	ArchiveReadOnly        *bool               `json:"archiveReadOnly,omitempty"`
 }
 
 type UpdateDatabaseConnectionInput struct {
@@ -978,17 +1099,19 @@ type DataFormat string
 
 const (
 	DataFormatJSON   DataFormat = "JSON"
+	DataFormatText   DataFormat = "TEXT"
 	DataFormatBinary DataFormat = "BINARY"
 )
 
 var AllDataFormat = []DataFormat{
 	DataFormatJSON,
+	DataFormatText,
 	DataFormatBinary,
 }
 
 func (e DataFormat) IsValid() bool {
 	switch e {
-	case DataFormatJSON, DataFormatBinary:
+	case DataFormatJSON, DataFormatText, DataFormatBinary:
 		return true
 	}
 	return false
@@ -1034,16 +1157,22 @@ type DatabaseConnectionType string
 const (
 	DatabaseConnectionTypePostgres DatabaseConnectionType = "POSTGRES"
 	DatabaseConnectionTypeMongodb  DatabaseConnectionType = "MONGODB"
+	DatabaseConnectionTypeSQLIte   DatabaseConnectionType = "SQLITE"
+	DatabaseConnectionTypeCratedb  DatabaseConnectionType = "CRATEDB"
+	DatabaseConnectionTypeQuestdb  DatabaseConnectionType = "QUESTDB"
 )
 
 var AllDatabaseConnectionType = []DatabaseConnectionType{
 	DatabaseConnectionTypePostgres,
 	DatabaseConnectionTypeMongodb,
+	DatabaseConnectionTypeSQLIte,
+	DatabaseConnectionTypeCratedb,
+	DatabaseConnectionTypeQuestdb,
 }
 
 func (e DatabaseConnectionType) IsValid() bool {
 	switch e {
-	case DatabaseConnectionTypePostgres, DatabaseConnectionTypeMongodb:
+	case DatabaseConnectionTypePostgres, DatabaseConnectionTypeMongodb, DatabaseConnectionTypeSQLIte, DatabaseConnectionTypeCratedb, DatabaseConnectionTypeQuestdb:
 		return true
 	}
 	return false
@@ -1090,6 +1219,7 @@ const (
 	MessageArchiveTypeNone     MessageArchiveType = "NONE"
 	MessageArchiveTypePostgres MessageArchiveType = "POSTGRES"
 	MessageArchiveTypeCratedb  MessageArchiveType = "CRATEDB"
+	MessageArchiveTypeQuestdb  MessageArchiveType = "QUESTDB"
 	MessageArchiveTypeMongodb  MessageArchiveType = "MONGODB"
 	MessageArchiveTypeSQLIte   MessageArchiveType = "SQLITE"
 )
@@ -1098,13 +1228,14 @@ var AllMessageArchiveType = []MessageArchiveType{
 	MessageArchiveTypeNone,
 	MessageArchiveTypePostgres,
 	MessageArchiveTypeCratedb,
+	MessageArchiveTypeQuestdb,
 	MessageArchiveTypeMongodb,
 	MessageArchiveTypeSQLIte,
 }
 
 func (e MessageArchiveType) IsValid() bool {
 	switch e {
-	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeMongodb, MessageArchiveTypeSQLIte:
+	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeQuestdb, MessageArchiveTypeMongodb, MessageArchiveTypeSQLIte:
 		return true
 	}
 	return false
@@ -1493,17 +1624,19 @@ const (
 	WinCCUaMessageFormatJSONIso  WinCCUaMessageFormat = "JSON_ISO"
 	WinCCUaMessageFormatJSONMs   WinCCUaMessageFormat = "JSON_MS"
 	WinCCUaMessageFormatRawValue WinCCUaMessageFormat = "RAW_VALUE"
+	WinCCUaMessageFormatRawJSON  WinCCUaMessageFormat = "RAW_JSON"
 )
 
 var AllWinCCUaMessageFormat = []WinCCUaMessageFormat{
 	WinCCUaMessageFormatJSONIso,
 	WinCCUaMessageFormatJSONMs,
 	WinCCUaMessageFormatRawValue,
+	WinCCUaMessageFormatRawJSON,
 }
 
 func (e WinCCUaMessageFormat) IsValid() bool {
 	switch e {
-	case WinCCUaMessageFormatJSONIso, WinCCUaMessageFormatJSONMs, WinCCUaMessageFormatRawValue:
+	case WinCCUaMessageFormatJSONIso, WinCCUaMessageFormatJSONMs, WinCCUaMessageFormatRawValue, WinCCUaMessageFormatRawJSON:
 		return true
 	}
 	return false

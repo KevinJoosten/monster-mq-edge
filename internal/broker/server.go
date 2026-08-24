@@ -20,9 +20,12 @@ import (
 	gql "monstermq.io/edge/internal/graphql"
 	"monstermq.io/edge/internal/graphql/resolvers"
 	"monstermq.io/edge/internal/hostinfo"
+	"monstermq.io/edge/internal/hmi"
 	mlog "monstermq.io/edge/internal/log"
+	"monstermq.io/edge/internal/mcp"
 	"monstermq.io/edge/internal/metrics"
 	"monstermq.io/edge/internal/pubsub"
+	"monstermq.io/edge/internal/redfish"
 	"monstermq.io/edge/internal/stores"
 	storememory "monstermq.io/edge/internal/stores/memory"
 	storemongo "monstermq.io/edge/internal/stores/mongodb"
@@ -48,6 +51,8 @@ type Server struct {
 	gqlSrv      *gql.Server
 	renewal     *renewalAgent
 	provision   *provisionAgent
+	mcpSrv      *mcp.Server
+	redfishMgr  *redfish.Manager
 	hostMonitor *hostinfo.Collector
 	metricsCtx  context.Context
 	metricsStop context.CancelFunc
@@ -252,11 +257,40 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		hostMonitor = hostinfo.NewCollector(cfg.NodeID, cfg.HostMonitoring.IntervalSeconds, cfg.HostMonitoring.BaseTopic, cfg.HostMonitoring.QoS, publishFn, logger)
 	}
 
+	// 7d. HMI Manager
+	var hmiMgr *hmi.Manager
+	if cfg.HMI.Enabled || cfg.Features.Hmi {
+		if cfg.HMI.Path == "" {
+			logger.Warn("HMI is enabled, but HMI.Path is not specified in configuration. HMI server will not be started.")
+		} else {
+			hmiMgr = hmi.NewManager(cfg, storage.DeviceConfig)
+		}
+	}
+
+	// 7e. Redfish Manager
+	var redfishMgr *redfish.Manager
+	var lastVal stores.MessageStore
+	if defGroup := archives.Get("Default"); defGroup != nil {
+		lastVal = defGroup.LastValue()
+	}
+	if lastVal == nil && storage.Retained != nil {
+		lastVal = storage.Retained
+	}
+	if cfg.Redfish.Enabled || cfg.Features.Redfish {
+		redfishMgr = redfish.NewManager(cfg, storage.DeviceConfig, bus, lastVal, publishFn, cfg.NodeID, logger)
+	}
+
 	// 8. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled {
-		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn)
-		gqlSrv = gql.NewServer(cfg, resolver, logger)
+		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn, hmiMgr, redfishMgr)
+		gqlSrv = gql.NewServer(cfg, resolver, hmiMgr, redfishMgr, logger)
+	}
+
+	// 9. MCP server (Streamable HTTP / SSE)
+	var mcpSrv *mcp.Server
+	if cfg.MCP.Enabled {
+		mcpSrv = mcp.NewServer(cfg, storage, archives, authCache, publishFn, logger)
 	}
 
 	return &Server{
@@ -264,11 +298,14 @@ func New(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus) (*Server, er
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, gqlSrv: gqlSrv,
 		tcpsDeferred: tcpsDeferred,
-		hostMonitor:  hostMonitor,
+		mcpSrv:       mcpSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor,
 	}, nil
 }
 
 func configureVolatileStores(ctx context.Context, cfg *config.Config, storage *stores.Storage) error {
+	if cfg.RetainedStore() == config.StoreMemory {
+		storage.Retained = storememory.NewMessageStore("retainedmessages")
+	}
 	if storage.Backend == config.StoreSQLite {
 		return nil
 	}
@@ -383,6 +420,11 @@ func (s *Server) Serve() error {
 	if s.hostMonitor != nil {
 		s.hostMonitor.Start(context.Background())
 	}
+	if s.redfishMgr != nil {
+		if err := s.redfishMgr.Start(context.Background()); err != nil {
+			s.logger.Warn("redfish start error", "err", err)
+		}
+	}
 	if s.gqlSrv != nil {
 		go func() {
 			if err := s.gqlSrv.Start(); err != nil {
@@ -414,6 +456,13 @@ func (s *Server) Serve() error {
 			s.provision = pa
 		}
 	}
+	if s.mcpSrv != nil {
+		go func() {
+			if err := s.mcpSrv.Start(); err != nil {
+				s.logger.Error("mcp server error", "err", err)
+			}
+		}()
+	}
 	return s.mochi.Serve()
 }
 
@@ -436,6 +485,11 @@ func (s *Server) Close() error {
 	if s.hostMonitor != nil {
 		s.hostMonitor.Stop()
 	}
+	if s.redfishMgr != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.redfishMgr.Stop(ctx)
+	}
 	if s.metricsStop != nil {
 		s.metricsStop()
 	}
@@ -446,6 +500,11 @@ func (s *Server) Close() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = s.gqlSrv.Stop(ctx)
+	}
+	if s.mcpSrv != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = s.mcpSrv.Stop(ctx)
 	}
 	if s.archives != nil {
 		s.archives.Stop()

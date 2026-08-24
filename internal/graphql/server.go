@@ -17,13 +17,18 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 
+	"os"
+	"path/filepath"
+	"strings"
+
 	"monstermq.io/edge/internal/config"
 	"monstermq.io/edge/internal/graphql/generated"
 	"monstermq.io/edge/internal/graphql/resolvers"
+	"monstermq.io/edge/internal/hmi"
+	"monstermq.io/edge/internal/redfish"
 )
 
-// Server hosts the GraphQL HTTP and WebSocket endpoints. There is no UI
-// served from the edge — an external dashboard talks to /graphql.
+// Server hosts the GraphQL HTTP and WebSocket endpoints, HMI dashboards, and Redfish API.
 type Server struct {
 	cfg     *config.Config
 	logger  *slog.Logger
@@ -31,7 +36,7 @@ type Server struct {
 	httpSrv *http.Server
 }
 
-func NewServer(cfg *config.Config, resolver *resolvers.Resolver, logger *slog.Logger) *Server {
+func NewServer(cfg *config.Config, resolver *resolvers.Resolver, hmiMgr *hmi.Manager, redfishMgr *redfish.Manager, logger *slog.Logger) *Server {
 	es := generated.NewExecutableSchema(generated.Config{Resolvers: resolver})
 	gql := handler.New(es)
 	gql.AddTransport(transport.Options{})
@@ -57,6 +62,72 @@ func NewServer(cfg *config.Config, resolver *resolvers.Resolver, logger *slog.Lo
 	// Apollo-style alias the existing dashboard might use.
 	r.Handle("/query", gql)
 	r.Get("/playground", playground.Handler("MonsterMQ Edge", "/graphql"))
+
+	if (cfg.HMI.Enabled || cfg.Features.Hmi) && hmiMgr != nil {
+		mountPath := cfg.HMI.MountPath
+		if mountPath == "" {
+			mountPath = "/hmi"
+		}
+
+		hmiHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			relPath := strings.TrimPrefix(r.URL.Path, mountPath)
+			relPath = strings.TrimPrefix(relPath, "/")
+
+			parts := strings.Split(relPath, "/")
+			firstSegment := parts[0]
+
+			var dashName string
+			var fileSubPath string
+
+			if firstSegment != "" {
+				if _, err := hmiMgr.GetHmi(firstSegment); err == nil {
+					dashName = firstSegment
+					fileSubPath = strings.Join(parts[1:], "/")
+				}
+			}
+
+			if dashName == "" {
+				dashName = hmiMgr.GetMainDashboardName()
+				fileSubPath = relPath
+			}
+
+			if !hmiMgr.IsHmiEnabled(dashName) {
+				http.Error(w, fmt.Sprintf("HMI dashboard %q is disabled", dashName), http.StatusNotFound)
+				return
+			}
+
+			if fileSubPath == "" || strings.HasSuffix(r.URL.Path, "/") {
+				fileSubPath = "index.html"
+			}
+
+			dir := cfg.HMI.Path
+			if dir == "" {
+				logger.Warn("HMI.Path is not specified in configuration. HMI server will not be started.")
+				http.Error(w, "HMI server not configured (HMI.Path missing)", http.StatusNotFound)
+				return
+			}
+			fullPath := filepath.Join(dir, dashName, fileSubPath)
+			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+				http.ServeFile(w, r, fullPath)
+				return
+			}
+
+			http.NotFound(w, r)
+		})
+
+		r.Handle(mountPath+"/*", hmiHandler)
+		r.Handle(mountPath, hmiHandler)
+	}
+
+	if redfishMgr != nil {
+		mountPath := cfg.Redfish.MountPath
+		if mountPath == "" {
+			mountPath = "/redfish/v1"
+		}
+		mountPath = strings.TrimSuffix(mountPath, "/")
+		r.Mount(mountPath, redfishMgr.Handler())
+	}
+
 	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))

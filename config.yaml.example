@@ -57,11 +57,32 @@ GraphQL:
   Enabled: true
   Port: 4000
 
+HMI:
+  Enabled: false
+  Path: "./data/hmi"
+  MountPath: "/hmi"
+
+MCP:
+  Enabled: false
+  Port: 3000
+
 Features:
   MqttClient: true
   WinCCUa: false
   WinCCOa: false
   DeviceImportExport: true
+  Mcp: false
+  Hmi: false
+  Redfish: false
+
+Redfish:
+  Enabled: false
+  Port: 8000
+  MountPath: "/redfish/v1"
+  DefaultChassisId: "EdgeNode"
+  DefaultSystemId: "edge-node"
+  DefaultManagerId: "monstermq-edge"
+  AnonymousEnabled: true
 
 HostMonitoring:
   Enabled: false

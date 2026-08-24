@@ -17,6 +17,7 @@ import (
 	storememory "monstermq.io/edge/internal/stores/memory"
 	storemongo "monstermq.io/edge/internal/stores/mongodb"
 	storepg "monstermq.io/edge/internal/stores/postgres"
+	storequestdb "monstermq.io/edge/internal/stores/questdb"
 	storesqlite "monstermq.io/edge/internal/stores/sqlite"
 )
 
@@ -167,6 +168,25 @@ func (m *Manager) startGroup(ctx context.Context, c stores.ArchiveGroupConfig) e
 	delete(m.deployError, c.Name)
 	m.mu.Unlock()
 	closeOnErr = false
+
+	// Populate in-memory last-value store with existing retained messages from storage.
+	if c.LastValType == stores.MessageStoreMemory && lastVal != nil && m.storage.Retained != nil {
+		var batch []stores.BrokerMessage
+		_ = m.storage.Retained.FindMatchingMessages(ctx, "#", func(msg stores.BrokerMessage) bool {
+			if g.Matches(msg.TopicName, msg.IsRetain) {
+				batch = append(batch, msg)
+			}
+			return true
+		})
+		if len(batch) > 0 {
+			if err := lastVal.AddAll(ctx, batch); err != nil {
+				m.logger.Warn("failed to populate retained messages to memory store", "group", c.Name, "err", err)
+			} else {
+				m.logger.Info("populated retained messages to memory store", "group", c.Name, "count", len(batch))
+			}
+		}
+	}
+
 	m.logger.Info("archive group started",
 		"name", c.Name, "filters", c.TopicFilters,
 		"lastValType", c.LastValType, "archiveType", c.ArchiveType)
@@ -196,9 +216,11 @@ func ValidateGroupName(name string) error {
 }
 
 type groupDatabaseHandles struct {
-	pgDB    *storepg.DB
-	mongoDB *storemongo.DB
-	owned   []func() error
+	sqliteDB  *storesqlite.DB
+	pgDB      *storepg.DB
+	questdbDB *storequestdb.DB
+	mongoDB   *storemongo.DB
+	owned     []func() error
 }
 
 func (h groupDatabaseHandles) close(logger *slog.Logger, group string) {
@@ -223,27 +245,41 @@ func (h groupDatabaseHandles) closeFunc(logger *slog.Logger, group string) func(
 }
 
 func (m *Manager) openGroupDatabaseHandles(ctx context.Context, c stores.ArchiveGroupConfig) (groupDatabaseHandles, error) {
-	handles := groupDatabaseHandles{pgDB: m.pgDB, mongoDB: m.mongoDB}
+	handles := groupDatabaseHandles{sqliteDB: m.sqliteDB, pgDB: m.pgDB, mongoDB: m.mongoDB}
 	selectedName := strings.TrimSpace(c.DatabaseConnectionName)
 	required := RequiredDatabaseConnectionTypes(c.LastValType, c.ArchiveType)
 	if selectedName == "" {
 		return handles, nil
 	}
 	if len(required) == 0 {
-		return handles, fmt.Errorf("group %s: databaseConnectionName can only be used with Postgres or MongoDB stores", c.Name)
+		return handles, fmt.Errorf("group %s: databaseConnectionName can only be used with SQLite, Postgres, QuestDB, or MongoDB stores", c.Name)
 	}
 	if len(required) > 1 {
 		if IsDefaultDatabaseConnectionName(selectedName) {
 			return handles, nil
 		}
-		return handles, fmt.Errorf("group %s: cannot use one named database connection for mixed Postgres and MongoDB stores", c.Name)
+		return handles, fmt.Errorf("group %s: cannot use one named database connection for mixed database stores", c.Name)
 	}
 	if IsDefaultDatabaseConnectionName(selectedName) {
 		switch required[0] {
+		case stores.DatabaseConnectionSQLite:
+			if m.sqliteDB == nil {
+				return handles, fmt.Errorf("group %s: default SQLite database connection is not configured", c.Name)
+			}
 		case stores.DatabaseConnectionPostgres:
 			if m.pgDB == nil {
 				return handles, fmt.Errorf("group %s: default Postgres database connection is not configured", c.Name)
 			}
+		case stores.DatabaseConnectionQuestDB:
+			if m.cfg.QuestDB.URL == "" {
+				return handles, fmt.Errorf("group %s: default QuestDB database connection is not configured", c.Name)
+			}
+			db, err := storequestdb.Open(ctx, m.cfg.QuestDB.URL, m.cfg.QuestDB.User, m.cfg.QuestDB.Pass)
+			if err != nil {
+				return handles, fmt.Errorf("group %s: open default QuestDB connection: %w", c.Name, err)
+			}
+			handles.questdbDB = db
+			handles.owned = append(handles.owned, db.Close)
 		case stores.DatabaseConnectionMongoDB:
 			if m.mongoDB == nil {
 				return handles, fmt.Errorf("group %s: default MongoDB database connection is not configured", c.Name)
@@ -262,12 +298,26 @@ func (m *Manager) openGroupDatabaseHandles(ctx context.Context, c stores.Archive
 		return handles, fmt.Errorf("group %s: selected %s connection %q but requires %s", c.Name, conn.Type, selectedName, required[0])
 	}
 	switch conn.Type {
+	case stores.DatabaseConnectionSQLite:
+		db, err := storesqlite.Open(conn.URL)
+		if err != nil {
+			return handles, err
+		}
+		handles.sqliteDB = db
+		handles.owned = append(handles.owned, db.Close)
 	case stores.DatabaseConnectionPostgres:
 		db, err := storepg.Open(ctx, postgresDSN(conn.URL, conn.Username, conn.Password))
 		if err != nil {
 			return handles, err
 		}
 		handles.pgDB = db
+		handles.owned = append(handles.owned, db.Close)
+	case stores.DatabaseConnectionQuestDB:
+		db, err := storequestdb.Open(ctx, conn.URL, conn.Username, conn.Password)
+		if err != nil {
+			return handles, err
+		}
+		handles.questdbDB = db
 		handles.owned = append(handles.owned, db.Close)
 	case stores.DatabaseConnectionMongoDB:
 		dbName := conn.Database
@@ -287,6 +337,7 @@ func (m *Manager) openGroupDatabaseHandles(ctx context.Context, c stores.Archive
 }
 
 func postgresDSN(raw, username, password string) string {
+	raw = strings.TrimPrefix(raw, "jdbc:")
 	if username == "" && password == "" {
 		return raw
 	}
@@ -312,10 +363,10 @@ func (m *Manager) buildLastValStore(ctx context.Context, c stores.ArchiveGroupCo
 	case stores.MessageStoreMemory:
 		return storememory.NewMessageStore(name), nil
 	case stores.MessageStoreSQLite:
-		if m.sqliteDB == nil {
+		if handles.sqliteDB == nil {
 			return nil, fmt.Errorf("group %s: lastValType=SQLITE but no SQLite DB configured", c.Name)
 		}
-		s := storesqlite.NewMessageStore(name, m.sqliteDB)
+		s := storesqlite.NewMessageStore(name, handles.sqliteDB)
 		if err := s.EnsureTable(ctx); err != nil {
 			return nil, fmt.Errorf("ensure %s on sqlite: %w", name, err)
 		}
@@ -348,10 +399,10 @@ func (m *Manager) buildArchiveStore(ctx context.Context, c stores.ArchiveGroupCo
 	name := ArchiveName(c.Name)
 	switch c.ArchiveType {
 	case stores.ArchiveSQLite:
-		if m.sqliteDB == nil {
+		if handles.sqliteDB == nil {
 			return nil, fmt.Errorf("group %s: archiveType=SQLITE but no SQLite DB configured", c.Name)
 		}
-		a := storesqlite.NewMessageArchive(name, m.sqliteDB, c.PayloadFormat)
+		a := storesqlite.NewMessageArchive(name, handles.sqliteDB, c.PayloadFormat)
 		if err := a.EnsureTable(ctx); err != nil {
 			return nil, fmt.Errorf("ensure %s on sqlite: %w", name, err)
 		}
@@ -363,6 +414,24 @@ func (m *Manager) buildArchiveStore(ctx context.Context, c stores.ArchiveGroupCo
 		a := storepg.NewMessageArchive(name, handles.pgDB, c.PayloadFormat)
 		if err := a.EnsureTable(ctx); err != nil {
 			return nil, fmt.Errorf("ensure %s on postgres: %w", name, err)
+		}
+		return a, nil
+	case stores.ArchiveQuestDB:
+		if handles.questdbDB == nil {
+			if m.cfg.QuestDB.URL != "" {
+				db, err := storequestdb.Open(ctx, m.cfg.QuestDB.URL, m.cfg.QuestDB.User, m.cfg.QuestDB.Pass)
+				if err != nil {
+					return nil, fmt.Errorf("group %s: open default QuestDB: %w", c.Name, err)
+				}
+				handles.questdbDB = db
+				handles.owned = append(handles.owned, db.Close)
+			} else {
+				return nil, fmt.Errorf("group %s: archiveType=QUESTDB but no QuestDB connection configured", c.Name)
+			}
+		}
+		a := storequestdb.NewMessageArchive(name, handles.questdbDB, c.PayloadFormat)
+		if err := a.EnsureTable(ctx); err != nil {
+			return nil, fmt.Errorf("ensure %s on questdb: %w", name, err)
 		}
 		return a, nil
 	case stores.ArchiveMongoDB:
@@ -432,6 +501,9 @@ func configsEqual(a, b stores.ArchiveGroupConfig) bool {
 		return false
 	}
 	if a.LastValType != b.LastValType || a.ArchiveType != b.ArchiveType {
+		return false
+	}
+	if a.LastValReadOnly != b.LastValReadOnly || a.ArchiveReadOnly != b.ArchiveReadOnly {
 		return false
 	}
 	if a.DatabaseConnectionName != b.DatabaseConnectionName {

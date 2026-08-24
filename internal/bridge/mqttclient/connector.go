@@ -353,7 +353,7 @@ func (c *Connector) subscribeInbound(client paho.Client) {
 		tok := client.Subscribe(addr.RemoteTopic, byte(addr.QoS), func(_ paho.Client, m paho.Message) {
 			localTopic := mapInboundTopic(addr, m.Topic())
 			c.recordIn()
-			if err := c.publisher(localTopic, m.Payload(), addr.Retain, byte(addr.QoS)); err != nil {
+			if err := c.publisher(localTopic, m.Payload(), addr.Retain || m.Retained(), byte(addr.QoS)); err != nil {
 				c.logger.Warn("bridge inbound publish failed", "name", c.name, "topic", localTopic, "err", err)
 			}
 		})
@@ -367,15 +367,21 @@ func (c *Connector) subscribeInbound(client paho.Client) {
 // topic to publish under, respecting the address's removePath flag and the
 // LocalTopic prefix (if it has no wildcards).
 func mapInboundTopic(a Address, remoteTopic string) string {
-	if hasWildcard(a.RemoteTopic) && a.RemovePath {
-		base := literalPrefix(a.RemoteTopic)
-		suffix := remoteTopic
-		if base != "" && (remoteTopic == base || strings.HasPrefix(remoteTopic, base+"/")) {
-			suffix = strings.TrimPrefix(strings.TrimPrefix(remoteTopic, base), "/")
+	if hasWildcard(a.RemoteTopic) {
+		if a.RemovePath {
+			base := literalPrefix(a.RemoteTopic)
+			suffix := remoteTopic
+			if base != "" && (remoteTopic == base || strings.HasPrefix(remoteTopic, base+"/")) {
+				suffix = strings.TrimPrefix(strings.TrimPrefix(remoteTopic, base), "/")
+			}
+			return joinTopic(destinationPrefix(a.LocalTopic), suffix)
 		}
-		return joinTopic(destinationPrefix(a.LocalTopic), suffix)
+		return joinTopic(destinationPrefix(a.LocalTopic), remoteTopic)
 	}
-	return joinTopic(destinationPrefix(a.LocalTopic), remoteTopic)
+	if a.LocalTopic != "" {
+		return a.LocalTopic
+	}
+	return remoteTopic
 }
 
 func (c *Connector) startOutbound(ctx context.Context) {

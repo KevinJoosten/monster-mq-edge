@@ -16,9 +16,9 @@ import (
 	"github.com/99designs/gqlgen/graphql/handler/lru"
 	"github.com/99designs/gqlgen/graphql/handler/transport"
 	"github.com/99designs/gqlgen/graphql/playground"
+	coderws "github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 
 	"os"
@@ -62,10 +62,11 @@ func NewServer(cfg *config.Config, resolver *resolvers.Resolver, hmiMgr *hmi.Man
 	gql.AddTransport(transport.MultipartForm{})
 	gql.AddTransport(transport.Websocket{
 		KeepAlivePingInterval: 10 * time.Second,
-		Upgrader: websocket.Upgrader{
-			CheckOrigin:     func(r *http.Request) bool { return true },
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
+		Implementation: transport.CoderWebsocketImplementation{
+			AcceptOptions: coderws.AcceptOptions{
+				// Accept any Origin, as the external dashboard may be served from elsewhere.
+				InsecureSkipVerify: true,
+			},
 		},
 		InitFunc: func(ctx context.Context, payload transport.InitPayload) (context.Context, *transport.InitPayload, error) {
 			if !cfg.UserManagement.Enabled {

@@ -115,7 +115,7 @@ dev/done/                  # completed or archived plans
 
 ## Conventions and rules
 
-- **Go 1.25**. Generics are fine. Don't introduce CGO — pure Go is a
+- **Go 1.26**. Generics are fine. Don't introduce CGO — pure Go is a
   shipping requirement for cross-compile to ARM.
 - Storage interfaces in `internal/stores/interfaces.go` are the contract.
   Backends implement them; consumers depend only on the interface.

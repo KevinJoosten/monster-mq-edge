@@ -100,7 +100,8 @@ else
 fi
 
 # Convert version '+' characters to Debian-compliant '~' (often used for pre-releases/git shas)
-DEB_VERSION=$(echo "$VERSION" | tr '+' '~')
+# and convert -dev / -beta / -alpha to ~dev / ~beta / ~alpha so dpkg sorts pre-releases correctly
+DEB_VERSION=$(echo "$VERSION" | tr '+' '~' | sed -E 's/-(dev|beta|alpha)/~\1/')
 
 echo -e "${GREEN}=== Building MonsterMQ Edge Debian Package ===${NC}"
 echo -e "Target Architecture : ${YELLOW}${DEB_ARCH}${NC} (Go: GOARCH=${GOARCH}${GOARM:+, GOARM=${GOARM}})"

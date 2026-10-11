@@ -123,10 +123,17 @@ if [ "$SHOULD_PUSH" = true ]; then
             -f docker/Dockerfile \
             .
     else
+        IS_DEV=false
+        if [[ "$VERSION" =~ -dev$ || "$VERSION" =~ -beta$ || "$VERSION" =~ -alpha$ ]]; then
+            IS_DEV=true
+        fi
+
+        TAG_ARGS=(-t "${IMAGE_REPO}:${VERSION}")
+        [ "$IS_DEV" = false ] && TAG_ARGS+=(-t "${IMAGE_REPO}:latest")
+
         $BUILDX build --platform "$PLATFORMS" --push \
             --build-arg VERSION="${FULL_VERSION}" \
-            -t "${IMAGE_REPO}:${VERSION}" \
-            -t "${IMAGE_REPO}:latest" \
+            "${TAG_ARGS[@]}" \
             -f docker/Dockerfile \
             .
     fi
@@ -136,7 +143,7 @@ if [ "$SHOULD_PUSH" = true ]; then
         echo -e "${GREEN}  - ${IMAGE_REPO}:testing${NC}"
     else
         echo -e "${GREEN}  - ${IMAGE_REPO}:${VERSION}${NC}"
-        echo -e "${GREEN}  - ${IMAGE_REPO}:latest${NC}"
+        [ "$IS_DEV" = false ] && echo -e "${GREEN}  - ${IMAGE_REPO}:latest${NC}"
     fi
 else
     # Local build only (native platform), with optional tar save
@@ -156,10 +163,17 @@ else
             .
         IMAGE_TAG="${IMAGE_REPO}:testing"
     else
+        IS_DEV=false
+        if [[ "$VERSION" =~ -dev$ || "$VERSION" =~ -beta$ || "$VERSION" =~ -alpha$ ]]; then
+            IS_DEV=true
+        fi
+
+        LOCAL_TAG_ARGS=(-t "${IMAGE_REPO}:${VERSION}")
+        [ "$IS_DEV" = false ] && LOCAL_TAG_ARGS+=(-t "${IMAGE_REPO}:latest")
+
         eval $DOCKER_BUILD_LOCAL \
             --build-arg VERSION="${FULL_VERSION}" \
-            -t "${IMAGE_REPO}:${VERSION}" \
-            -t "${IMAGE_REPO}:latest" \
+            "${LOCAL_TAG_ARGS[@]}" \
             -f docker/Dockerfile \
             .
         IMAGE_TAG="${IMAGE_REPO}:${VERSION}"
@@ -170,7 +184,7 @@ else
         echo -e "${GREEN}  - ${IMAGE_REPO}:testing${NC}"
     else
         echo -e "${GREEN}  - ${IMAGE_REPO}:${VERSION}${NC}"
-        echo -e "${GREEN}  - ${IMAGE_REPO}:latest${NC}"
+        [ "$IS_DEV" = false ] && echo -e "${GREEN}  - ${IMAGE_REPO}:latest${NC}"
     fi
 
     if [ "$SAVE_TAR" = true ]; then

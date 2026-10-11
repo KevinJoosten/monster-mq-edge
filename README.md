@@ -1,15 +1,15 @@
 # MonsterMQ Edge
 
 A native, single-binary MQTT broker that ships the same GraphQL API and storage
-schemas as the JVM-based MonsterMQ broker, slimmed down for edge deployments
+schemas as MonsterMQ Core (the JVM-based broker), slimmed down for edge deployments
 on devices like the Raspberry Pi 4/5.
 
 ## Highlights
 
 - **Single static binary** (~25 MB), zero CGO. Pure-Go SQLite via `modernc.org/sqlite`.
 - **MQTT 3.1 / 3.1.1 / 5.0** native server engine ([internal/mqtt/](internal/mqtt)) — TCP, WebSocket, TLS, WSS.
-- **Storage**: SQLite (default), PostgreSQL, MongoDB. Schemas are byte-compatible with the Kotlin broker, so the same DB can be opened by either implementation.
-- **Archive groups** (last-value + history fanout, retention purging) — same model as the Kotlin broker.
+- **Storage**: SQLite (default), PostgreSQL, MongoDB. Schemas are byte-compatible with MonsterMQ Core, so the same DB can be opened by either implementation.
+- **Archive groups** (last-value + history fanout, retention purging) — same model as MonsterMQ Core.
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
 - **REST API** for publishing, bodyless current/retained/history reads, bulk and Influx writes, and SSE subscriptions.
 - **MQTT bridge** — forward local topics to a remote broker and vice versa.
@@ -84,7 +84,7 @@ retained topic; combining it with a wildcard or history range returns HTTP 400.
 
 `POST /api/v1/login` issues an opaque edge session token accepted by both REST
 and GraphQL on this broker. It is local to the edge process and is not a JWT
-from the main broker. See [the OpenAPI contract](internal/restapi/openapi.yaml)
+from MonsterMQ Core. See [the OpenAPI contract](internal/restapi/openapi.yaml)
 for publishing, retained and history reads, bulk writes, and SSE.
 REST publishes appear in history with the edge inline MQTT client ID.
 
@@ -332,14 +332,14 @@ startup leaves it unchanged.
 
 With `AnonymousEnabled: true`, GraphQL login and MQTT clients can still use
 anonymous access. Set `AnonymousEnabled: false` to require configured users.
-If a user named `Anonymous` exists (the Kotlin broker creates one), anonymous
-clients get its enabled state, permissions and ACL rules, as on the Kotlin
-broker; without it, anonymous access is unrestricted.
+If a user named `Anonymous` exists (MonsterMQ Core creates one), anonymous
+clients get its enabled state, permissions and ACL rules, as on MonsterMQ
+Core; without it, anonymous access is unrestricted.
 
 ACL rules are evaluated by descending priority and the first matching rule
 that decides wins. A rule with `canPublish` and `canSubscribe` both false is a
 deny rule; any other rule allows only the operations set to true. See
-`doc/acl.md` in the Kotlin broker for the full reference; both brokers behave
+`doc/acl.md` in MonsterMQ Core for the full reference; both brokers behave
 identically.
 
 ### Localhost unauthenticated access

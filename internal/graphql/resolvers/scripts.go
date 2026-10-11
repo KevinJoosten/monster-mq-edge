@@ -58,7 +58,7 @@ func (r *queryResolver) ScriptLanguages(ctx context.Context) ([]*generated.Scrip
 		return []*generated.ScriptLanguage{}, nil
 	}
 	isDefault := true
-	desc := "Python-compatible dialect supported across both Edge and Main brokers."
+	desc := "Python-compatible dialect supported across both MonsterMQ Edge and MonsterMQ Core."
 	return []*generated.ScriptLanguage{
 		{
 			Name:          "starlark",

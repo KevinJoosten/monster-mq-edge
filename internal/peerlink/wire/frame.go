@@ -178,8 +178,8 @@ const (
 
 // Broker types announced in HELLO and HELLO_OK.
 const (
-	BrokerTypeFull = "FULL" // the main broker (Kotlin/JVM)
-	BrokerTypeEdge = "EDGE" // the edge broker (Go)
+	BrokerTypeFull = "FULL" // MonsterMQ Core (Kotlin/JVM)
+	BrokerTypeEdge = "EDGE" // MonsterMQ Edge (Go)
 )
 
 // ProtocolVersion formats a protocol version as "major.minor".

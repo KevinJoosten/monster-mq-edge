@@ -689,7 +689,7 @@ receives this broker's messages (`serveState` is the `consumers[]` state).
 `source` and `consumer` are the matching status entries. The query uses the
 normal GraphQL authentication instead of the loopback guard.
 
-Each broker announces its type (`FULL` for the main broker, `EDGE` for the
+Each broker announces its type (`FULL` for MonsterMQ Core, `EDGE` for the
 edge broker) and build version in the handshake. `brokerType`,
 `brokerVersion` and `protocolVersion` on `peerLink` describe this broker; on a
 peer they are what the peer announced in its last handshake, or null before
@@ -752,19 +752,19 @@ Common messages:
 
 ---
 
-## 12. Interoperability with the Kotlin broker
+## 12. Interoperability with MonsterMQ Core
 
-The Kotlin MonsterMQ broker implements the same protocol and the same
-`PeerLink` keys, so Go and Kotlin brokers can be linked in any combination.
+MonsterMQ Core (the Kotlin/Vert.x broker) implements the same protocol and the same
+`PeerLink` keys, so Go and MonsterMQ Core brokers can be linked in any combination.
 Differences:
 
-- The Kotlin broker has no WinCC OA retained store; it always announces the
+- MonsterMQ Core has no WinCC OA retained store; it always announces the
   retained class `DB` and never uses `oaRetained`. It does not know
   `Peers[].RedundancyPartner` and fails startup on that key, so a config file
   shared between both brokers must not contain it.
 - Default `MaxMessageSize`: 1 MiB on Edge, `TCP.MaxMessageSizeKb` 512 on
-  Kotlin. Align them.
-- The Kotlin broker refuses PeerLink together with clustering (`-cluster`) or
+  MonsterMQ Core. Align them.
+- MonsterMQ Core refuses PeerLink together with clustering (`-cluster`) or
   the Kafka message bus.
-- Interest routing works in both directions between Go and Kotlin brokers,
+- Interest routing works in both directions between Go and MonsterMQ Core brokers,
   with the same status layout.

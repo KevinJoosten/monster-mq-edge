@@ -5,10 +5,10 @@ before making non-trivial changes.
 
 ## What this project is
 
-`monster-mq-edge` is the **Go port** of [MonsterMQ](https://github.com/vogler75/monster-mq),
+`monster-mq-edge` is the **Go port** of [MonsterMQ Core](https://github.com/vogler75/monster-mq),
 the JVM/Kotlin MQTT broker. The mission is a **single-binary**
-broker for edge devices (Raspberry Pi 4/5 class) that talks to the central
-MonsterMQ over MQTT.
+broker for edge devices (Raspberry Pi 4/5 class) that talks to central
+MonsterMQ Core instances over MQTT or PeerLink.
 
 The original design rationale is archived in `dev/done/PLAN-broker-go.md`.
 Active plans live under `dev/plans/`; completed plans move to `dev/done/`.
@@ -18,7 +18,7 @@ The short version:
 - GraphQL API via [`99designs/gqlgen`](https://github.com/99designs/gqlgen).
 - Storage backends: SQLite (`modernc.org/sqlite`, no CGO), PostgreSQL (`pgx/v5`),
   MongoDB (`mongo-driver/v2`).
-- Lightweight subset of the Java broker's device subsystems. Currently:
+- Lightweight subset of MonsterMQ Core's device subsystems. Currently:
   MQTT bridge (`bridge/mqttclient/`) and WinCC Unified bridge
   (`bridge/winccua/`, GraphQL or Open Pipe transports). Heavyweight ones
   (Kafka, NATS, Redis, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
@@ -32,15 +32,15 @@ The short version:
 The two rules below define why this project exists. Any change that
 violates them needs explicit user sign-off — do not silently drift.
 
-### 1. GraphQL schema parity with the Java broker
+### 1. GraphQL schema parity with MonsterMQ Core
 
 The schema (types, field names, argument names, enum values, nullability)
-must remain a **strict subset** of the Java broker's schema at
+must remain a **strict subset** of MonsterMQ Core's schema at
 `../main/broker/src/main/resources/schema-*.graphqls`. The same
 external dashboard binary is supposed to work against either backend.
 
 **CRITICAL: AVOID CHANGING THE GRAPHQL INTERFACE**:
-- **Avoid changes at all costs**: The GraphQL interface is the central shared contract connecting the Kotlin broker (`monster-mq`), Go edge broker (`monster-mq-edge`), web dashboard (`monster-mq-dashboard`), and external integrations. Modifying or extending the GraphQL interface (types, fields, queries, mutations, subscriptions, inputs, arguments, or enums) must be strictly avoided whenever possible.
+- **Avoid changes at all costs**: The GraphQL interface is the central shared contract connecting MonsterMQ Core (`monster-mq`), Go edge broker (`monster-mq-edge`), web dashboard (`monster-mq-dashboard`), and external integrations. Modifying or extending the GraphQL interface (types, fields, queries, mutations, subscriptions, inputs, arguments, or enums) must be strictly avoided whenever possible.
 - **Human commitment required**: Any change to the GraphQL interface must ONLY be done with explicit commitment from the human. Never modify the GraphQL schema or resolvers unilaterally.
 - **Give a clear hint if the GraphQL interface must be changed**: If a task, feature, or bugfix appears to necessitate changing or extending the GraphQL interface:
   1. **Flag it clearly and prominently**: Immediately give a clear hint to the human up front before making any changes.
@@ -166,7 +166,7 @@ The schema in `yaml-json-schema.json` validates `config.yaml` and
 
 ## Cross-repo workflow
 
-The Java broker lives at:
+MonsterMQ Core lives at:
 
 - **GitHub**: https://github.com/vogler75/monster-mq
 - **Local sibling**: `../main/` (the `monster-mq` repo, checked out next to this one)

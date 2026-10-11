@@ -217,4 +217,5 @@ echo -e "${YELLOW}Next steps:${NC}"
 echo "  1. Build artifacts locally : ./build.sh"
 echo "  2. Publish release assets  : ./publish.sh"
 echo "  3. Or build & publish      : ./build.sh --publish"
+echo "  4. Advance to next dev ver : ./release.sh --dev (or ./bump-dev.sh)"
 

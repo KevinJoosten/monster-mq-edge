@@ -70,36 +70,24 @@ For the Go port on Edge, we evaluate the leading framework candidates:
 | **Stability & Maintenance** | Community-driven; popular but occasional schema drifts. | Maintained directly by Google, OpenAI, Anthropic; production SLAs. | Self-maintained. |
 | **Binary Footprint** | Moderate (imports LangChainGo toolchain). | Low to moderate (clean vendor packages). | Lowest. |
 
-### Recommended Decision: **Option B (Official Vendor SDKs with Internal Adapter)**, with **Option A** as viable alternative
+### Recommended Decision: **Option A (LangChainGo — `github.com/tmc/langchaingo`)**
 
-**Why Option B is the recommended choice for Edge:**
-1. **Official Support**:
-   - **Google**: `google.golang.org/genai` is the official next-gen Google Gen AI Go SDK (supporting Gemini 2.5/2.0/1.5 Flash/Pro).
-   - **OpenAI**: `github.com/openai/openai-go` is the official OpenAI Go SDK.
-   - **Anthropic**: `github.com/anthropics/anthropic-sdk-go` is the official Anthropic Go SDK.
-2. **The "OpenAI-Compatible" Leverage**:
-   Crucially, `github.com/openai/openai-go` can target **any OpenAI-compatible endpoint** simply by configuring `option.WithBaseURL(...)`. This single official SDK covers:
-   - Direct **OpenAI** (ChatGPT / GPT-4o)
-   - **OpenRouter** (`https://openrouter.ai/api/v1`)
-   - **llama.cpp server** (`http://localhost:8080/v1`)
-   - **Ollama** (`http://localhost:11434/v1` - Ollama provides a native `/v1` OpenAI-compatible endpoint)
-   - **LocalAI / vLLM / LiteLLM**
-3. **Lightweight Internal Abstraction**:
-   Instead of exposing third-party framework types, `monster-mq-edge` defines a clean, thread-safe internal interface in `internal/genai`:
-   ```go
-   type Provider interface {
-       Name() string
-       Model() string
-       Generate(ctx context.Context, req Request) (*Response, error)
-       IsReady() bool
-       Close() error
-   }
-   ```
-   Adapters for Gemini (`google.golang.org/genai`), Anthropic (`anthropic-sdk-go`), and OpenAI-compatible (`openai-go`) each require under 80 lines of Go code.
-4. **ARM Cross-Compilation & CGO-Free**:
-   All three official SDKs are 100% pure Go, compile cleanly for `linux/arm64` and `linux/armv7`, and introduce zero CGO dependencies.
-
-*(Note: If owner prefers using LangChainGo to mirror LangChain4j directly, the internal `Provider` interface remains identical, and only the underlying adapter instantiates `llms.Model` instead).*
+**Why Option A is selected:**
+1. **1:1 Architectural Mirror with Main Broker (LangChain4j)**:
+   - The main broker relies entirely on **LangChain4j** (`dev.langchain4j`, see `LangChain4jFactory.kt`).
+   - LangChainGo is the direct Go ecosystem equivalent. Using it preserves conceptual parity across both repositories (`llms.Model`, `llms.MessageContent`, prompt formatting, model parameters).
+   - This drastically simplifies future feature porting (e.g. AI autonomous agents, tool calling, embeddings).
+2. **Unified Multi-Provider Engine**:
+   - LangChainGo natively provides providers for all 6 target configurations under a uniform `llms.Model` interface:
+     - `llms/googleai` for Google Gemini
+     - `llms/anthropic` for Anthropic Claude
+     - `llms/openai` for OpenAI, OpenRouter, and llama.cpp (via `openai.WithBaseURL(...)`)
+     - `llms/ollama` for native Ollama
+   - Parameter normalization (`Temperature`, `MaxTokens`, system prompt, stop words) is handled uniformly without writing per-vendor boilerplate.
+3. **First-Class Chat History**:
+   - The multi-turn chat format (`[]llms.MessageContent` with role-based text parts) directly matches the GraphQL `chatHistory: [ChatMessage!]` input for `analyzeTopics`.
+4. **Pure Go & Cross-Platform**:
+   - LangChainGo is 100% pure Go with no CGO requirements, ensuring seamless cross-compilation to `linux/arm64` and `linux/armv7`.
 
 ---
 
@@ -332,12 +320,10 @@ extend type Mutation {
 
 ```
 internal/
-  genai/                   # GenAI core subsystem
+  genai/                   # GenAI core subsystem (backed by LangChainGo)
     provider.go            # Provider, Request, Response interfaces & structs
-    factory.go             # Factory creating Provider from config or DeviceConfig
-    adapter_gemini.go      # google.golang.org/genai adapter
-    adapter_openai.go      # github.com/openai/openai-go adapter (OpenAI, OpenRouter, llama.cpp, Ollama)
-    adapter_claude.go      # github.com/anthropics/anthropic-sdk-go adapter
+    factory.go             # LangChainGo model factory (mirrors JVM's LangChain4jFactory)
+    adapter.go             # LangChainGo Model adapter wrapping llms.Model (mirrors LangChain4jProviderAdapter)
     tree.go                # Hierarchical ASCII tree formatter for topic analysis
     docs.go                # Markdown documentation loader for RAG context
   graphql/
@@ -419,14 +405,12 @@ ProveIt/
 5. Add catalog proposal types required by `proposeDataCatalog`.
 6. Run `make gen` (`gqlgen`) to generate Go models and resolver interfaces.
 
-### Phase 2: Core `internal/genai` Package
-1. Define `genai.Provider`, `genai.Request`, and `genai.Response`.
-2. Implement `adapter_openai.go` using `github.com/openai/openai-go` (handles OpenAI, OpenRouter, llama.cpp, and Ollama).
-3. Implement `adapter_gemini.go` using `google.golang.org/genai`.
-4. Implement `adapter_claude.go` using `github.com/anthropics/anthropic-sdk-go`.
-5. Implement `tree.go` (topic tree builder and ASCII tree renderer).
-6. Implement `docs.go` (local markdown file reader with path traversal protection).
-7. Implement `factory.go` to construct providers from YAML config or `DeviceConfig`.
+### Phase 2: Core `internal/genai` Package (LangChainGo)
+1. Import `github.com/tmc/langchaingo/llms` and provider subpackages (`googleai`, `anthropic`, `openai`, `ollama`).
+2. Implement `factory.go` (`CreateChatModel`) to instantiate `llms.Model` from `GenAI.Assistant`, `GenAI.Providers`, or dynamic DB config (mirroring `LangChain4jFactory.kt`).
+3. Implement `adapter.go` (`LangChainProviderAdapter`) implementing `genai.Provider` over `llms.Model`, managing docs context and prompt orchestration (mirroring `LangChain4jProviderAdapter.kt`).
+4. Implement `tree.go` (topic tree builder and ASCII tree renderer).
+5. Implement `docs.go` (local markdown file reader with path traversal protection).
 
 ### Phase 3: Resolvers & Store Integration
 1. Implement `genAiProviders` and `genAiProvider` queries in `internal/graphql/resolvers/genai_providers.go`.
@@ -456,8 +440,29 @@ ProveIt/
 
 ---
 
-## 7. Open Questions & Sign-Off
+## 7. Acceptance Criteria Catalog
 
-1. **SDK Preference**: Owner confirmation on using official SDKs (`openai-go`, `google.golang.org/genai`, `anthropic-sdk-go`) vs LangChainGo (`github.com/tmc/langchaingo`).
+All behavior tests run through real HTTP/GraphQL listeners in `test/integration/`; no mocked broker engine. An HTTP mock server (`httptest.Server`) stands in for external LLM endpoints (OpenAI/Ollama format) to provide deterministic, zero-cost integration testing.
+
+| ID | Acceptance Criterion | Verification & Evidence | Status |
+| :--- | :--- | :--- | :---: |
+| **AC-01** | **Subsystem Gating**: With `Features.GenAi: false` or `GenAI.Enabled: false`, `Query.genai` is `null`, `genAiProviders` is `[]`, `genAiProvider(name)` is `null`, and `Broker.enabledFeatures` omits `"GenAi"`. With `GenAi: true`, `"GenAi"` appears in `enabledFeatures`. | Black-box GraphQL queries under both configurations in `test/integration/genai_test.go`. | [ ] |
+| **AC-02** | **Configuration Parity**: YAML parser accepts the full `GenAI` block (`Enabled`, `Assistant`, `Providers`), correctly expands `${ENV_VAR}` references, and validates cleanly against `yaml-json-schema.json`. | Config loading unit tests; JSON schema validation test. | [ ] |
+| **AC-03** | **Schema & Code Generation**: `genai.graphqls` and `genai-providers.graphqls` match the Kotlin schemas 1:1, including `TopicDataInput` and catalog proposal types. `make gen` produces clean Go bindings without conflicts. | `make gen` succeeds; git diff on schema files matches Kotlin source verbatim. | [ ] |
+| **AC-04** | **Provider CRUD Persistence**: `mutation { genAiProvider { create/update/delete } }` persists configurations into `stores.DeviceConfigStore` with type `"genai_provider"`. Queries return config providers first (`source: "config"`), then DB providers (`source: "database"`). | Integration test exercising create, query, update, query, delete against SQLite, Postgres, and MongoDB. | [ ] |
+| **AC-05** | **AI Script Generation (`generate`)**: `Query.genai.generate(prompt, context, docs)` executes against the configured model. Documentation paths outside `DocsPath` are rejected. Empty prompt returns user error without failing query. | Integration test verifying prompt dispatch, mock LLM response, and path boundary rejection. | [ ] |
+| **AC-06** | **Dual-Source Topic Analysis**: `analyzeTopics` accepts `topicPattern` (searches `LastValueStore`), direct `topicData` (`[TopicDataInput!]`), or both. Returns error if neither yields topics. Follow-up requests with `chatHistory` skip re-sending topic values. | Integration test publishing topics to `LastValueStore`, passing direct `topicData`, and asserting LLM prompt content. | [ ] |
+| **AC-07** | **Unlimited Limits & Safety Guards**: When `maxTopics <= 0`, all matching topics are included. When `maxValueLength <= 0`, full payloads are included. Payloads > 5 MB (when unlimited) or > `max(10KB, maxLength*4)` (when bounded) and binary payloads are skipped. | Unit & integration tests with oversized, binary, and unlimited inputs. | [ ] |
+| **AC-08** | **Topic ASCII Tree Compression**: `tree.go` generates standard ASCII tree syntax (`├── `, `└── `, `│   `) matching `formatTopicsAsHierarchy` in Kotlin. | Unit tests in `internal/genai/tree_test.go` comparing against golden tree structures. | [ ] |
+| **AC-09** | **Data Catalog Proposal**: `proposeDataCatalog` formats CESMII i3X prompt, queries LLM, and parses structured JSON proposal (`types`, `instances`, `relations`, `summary`). Malformed JSON returns an error field without crashing. | Integration test with mock LLM returning valid and invalid JSON. | [ ] |
+| **AC-10** | **Multi-Provider Instantiation**: LangChainGo factory initializes `openai`, `openrouter`, `llamacpp`, `ollama` (via `openai.WithBaseURL` or `ollama`), `googleai`, and `anthropic` with configured parameters (`temperature`, `model`). | Unit test in `factory_test.go` verifying client creation per provider type. | [ ] |
+| **AC-11** | **Dashboard Compatibility**: Running the official web dashboard against MonsterMQ Edge successfully detects GenAI support (`hasQueryField('genai') == true`), displays AI cards in Script Editor and Topic Browser, and loads AI Providers management. | Manual or automated dashboard end-to-end smoke check. | [ ] |
+| **AC-12** | **CGO-Free & ARM Cross-Compilation**: The codebase compiles with `CGO_ENABLED=0` for host, `linux/arm64`, and `linux/armv7`. All tests pass race detector and linter. | `make build`, `make build-arm64`, `make build-armv7`, `make test-race`, `make lint`. | [ ] |
+
+---
+
+## 8. Open Questions & Sign-Off
+
+1. **Framework Confirmed**: LangChainGo (`github.com/tmc/langchaingo`) selected for 1:1 parity with the main broker's LangChain4j.
 2. **Local Edge Default**: Should Ollama or llama.cpp be recommended in `config.yaml.example` as the default edge provider when deploying offline?
 3. **Data Catalog CRUD**: Confirm that `proposeDataCatalog` generates the proposal type, while the full Data Catalog persistence CRUD (`dataCatalogTypes`, `saveType`, etc.) remains a separate future plan.

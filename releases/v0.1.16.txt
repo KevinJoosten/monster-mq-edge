@@ -1,0 +1,85 @@
+Release v0.1.16
+Built from commit: 9ed0b83
+Date: 2026-10-11 21:51:47
+
+Changes since v0.1.16-dev:
+---
+9ed0b83 docs: rename main broker references to MonsterMQ Core
+b92475a feat(genai): implement GenAI query functions and provider management
+5d0a2ea Update plan-genai.md
+8aa96e1 Update plan-genai.md
+9d0f7a5 Create plan-genai.md
+adef7b2 chore(release): support -dev pre-release versioning and advance to 0.1.16-dev
+5eed16a fix(graphql): allow unauthenticated currentUser and broker queries with parity return value
+8eb2124 peerlink: default Interest.Enabled to true
+6fbd7f8 fix(peerlink): do not report interest-skipped records as lost in sparse reads
+d539827 Update plan-nats-server.md
+c90eb3b feat(peerlink): announce broker type and version in the handshake
+d39680a Merge pull request #24 from vogler75/claude/peerlink-graphql-dashboard-b2irsz
+c0afc4e feat(graphql): add peerLink query for PeerLink configuration and link state
+f9e30e7 Update peerlink.md
+3d9cf08 feat(peerlink): interest routing
+31d912f docs: align PeerLink routing and redundancy implementation plans
+8a6869a docs(plans): add PeerLink redundancy plan for the edge broker (WinCC OA and witness)
+db2d0c1 docs(winccoa): point spec references to winccoa/doc/spec-winccoa-native.md
+4f584e9 docs(plans): move MQTT review findings to done, split open items
+b2bda0b fix(mqtt): close shutdown-race connections, CONNECT timeout, alias before ACL
+3382126 fix(mqtt): address low-hanging code-review findings
+da1a1f9 Organized plans
+2fe2282 Clean up source files headers
+028c2b4 fix(mqtt5): persist and deliver subscription identifiers (#17)
+c65f87a feat(auth): ACL allow/deny rules with Kotlin broker parity (#19)
+20f00de chore: ignore local PeerLink certs directory
+d777f96 feat(peerlink): RedundancyPartner gates oaRetained; PeerLink guide
+aa7f9a2 fix(cabi): log detailed config error to host log during mmq_create
+bf8f28b feat(peerlink): add golden vector generator for cross-implementation parity
+519d727 WinCC Unified: trustAllCertificates option to ignore TLS certificate errors
+72b073a Archive groups: CrateDB history store (archiveType CRATEDB)
+cfaccd1 AGENTS.md: the Java broker checkout is ../main
+c19866b PeerLink: oaRetained also without the native namespace
+092dfb8 ABI harness: answer TYPE_CHECK, drop the occupied-port check
+874b310 Update .gitignore
+2196c3b Removed winccoa
+120aeef WinCC OA: retained status for every connected system
+798639b WinCC OA: publish the source time (_online.._stime) instead of receive time
+e8a75f3 WinCC OA counters on $SYS; inline client not a session; broker version
+35a02a7 WinCC OA manager: rename MonsterMQ to MMQ
+95b6e59 Merge branch 'main' into winccoa-native
+c116daf Plans for Kafka and NATS Protocol
+577c346 Spec: PeerLink and WinCC OA redundancy as built, JVM port plan
+192ad05 WinCC OA queries: REMOTE before WHERE
+e52f96f Update Makefile
+9f95d30 Session metrics: per-client message rates
+2a8a301 WinCC OA redundancy: broker role in status, connectToRedundantHosts docs
+6da822a PeerLink: pull-based in-memory forwarding between MonsterMQ Edge brokers
+287f659 PeerLink plan: record owner decisions
+3e30102 Plan PeerLink broker-to-broker forwarding; drop single-node rule
+05ea66c WinCC OA topics branch: wildcard subscriptions and readable datapoint names
+760fda7 WinCC OA topics branch: MQTT topics replicated through MMQTopic datapoints
+a108284 Merge WinCC OA native features and fixes from edge-dev
+d49eea1 Embedded broker: log bus for the dashboard log viewer
+c6d9400 Fix GraphQL auth error loop on websocket subscriptions
+2fd47fe winccoa example config: list all features
+6e7617c WinCC OA user store and DefaultStoreType WINCCOA
+005978e Address systems as winccoa/systems/<system> with a local shortcut
+a136f97 Configurable topic names, WINCCOA retained store, manager creates types
+eb740b1 Address WinCC OA systems by name; WINCCOA store types
+d2a19fe Stale node status clear, manager runs in project dir, build script
+35fdffc Debug logging of WinCC OA calls; rename native scope local to this
+b7810a2 Native WinCC OA wildcard subscriptions and AllowRootWildcardSubscription
+5f5b4a4 Embed the broker in a WinCC OA API manager (WCCOAmmq)
+ec08b98 Update dependencies, bump Go to 1.26, and migrate to go.yaml.in
+c4887b6 Plans for WinCC OA embedding.
+67d1f31 Delete EDGE_BROKER_GRAPHQL_ADAPTATIONS.md
+7c1e2d5 Merge branch 'develop'
+b8c2fc1 Plans for a potential gpio bridge
+869f08c Merge remote-tracking branch 'origin/develop'
+b4830c5 add THIRD_PARTY_NOTICES for mochi
+b044a4e Delete GEMINI.md
+9074152 feat(scripting): align timer to wall-clock boundaries and inject trigger_time context
+7ef8665 Update docker-compose.yml
+814d696 Added HTTPS GraphQL Port 4443
+f7c862c docs(industrial-edge): rename version template to 0.1.x and document template usage
+c92d834 Update on config for docker image
+911050c Update config.yaml
+c59615f Update release.sh

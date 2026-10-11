@@ -89,7 +89,7 @@ func NewServer(cfg *config.Config, resolver *resolvers.Resolver, hmiMgr *hmi.Man
 			return next(ctx)
 		}
 		op := gqlgraphql.GetOperationContext(ctx).Operation
-		if isLoginOnly(op) {
+		if isPublicOperation(op) {
 			return next(ctx)
 		}
 		if _, ok := auth.Principal(ctx); !ok && !cfg.UserManagement.AnonymousEnabled {
@@ -313,12 +313,24 @@ func errorOnce(ctx context.Context, msg string) gqlgraphql.ResponseHandler {
 	}
 }
 
-func isLoginOnly(op *ast.OperationDefinition) bool {
-	if op == nil || op.Operation != ast.Mutation {
+func isPublicOperation(op *ast.OperationDefinition) bool {
+	if op == nil {
 		return false
 	}
 	fields := rootFields(op.SelectionSet)
-	return len(fields) == 1 && fields[0].Name == "login"
+	if len(fields) == 0 {
+		return false
+	}
+	for _, field := range fields {
+		if op.Operation == ast.Mutation && field.Name == "login" {
+			continue
+		}
+		if op.Operation == ast.Query && (field.Name == "currentUser" || field.Name == "broker") {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func rootFields(selections ast.SelectionSet) []*ast.Field {

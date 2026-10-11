@@ -693,12 +693,12 @@ func (r *mutationResolver) WinCCOaDevice(ctx context.Context) (*generated.WinCCO
 
 func (r *queryResolver) CurrentUser(ctx context.Context) (*generated.CurrentUser, error) {
 	if !r.Cfg.UserManagement.Enabled {
-		return &generated.CurrentUser{Username: "Anonymous", IsAdmin: true}, nil
+		return nil, nil
 	}
 	if user, ok := auth.Principal(ctx); ok {
 		return &generated.CurrentUser{Username: user.Username, IsAdmin: user.IsAdmin}, nil
 	}
-	return &generated.CurrentUser{Username: "Anonymous", IsAdmin: false}, nil
+	return nil, nil
 }
 
 func (r *queryResolver) GetDevices(ctx context.Context, names []string) ([]*generated.Device, error) {

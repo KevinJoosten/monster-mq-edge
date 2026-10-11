@@ -23,6 +23,7 @@ import (
 	"monstermq.io/edge/internal/bridge/winccoa"
 	"monstermq.io/edge/internal/bridge/winccua"
 	"monstermq.io/edge/internal/config"
+	"monstermq.io/edge/internal/genai"
 	gql "monstermq.io/edge/internal/graphql"
 	"monstermq.io/edge/internal/graphql/resolvers"
 	"monstermq.io/edge/internal/hmi"
@@ -635,6 +636,15 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if cfg.GraphQL.Enabled && (cfg.GraphQL.HTTPEnabled() || cfg.GraphQL.TLSEnabled()) {
 		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn, hmiMgr, redfishMgr, rtspCameras, scripts)
 		resolver.PeerLinkMgr = pl
+		if cfg.Features.GenAi || cfg.GenAI.Enabled {
+			genAiProv, err := genai.CreateAssistantProvider(ctx, cfg.GenAI)
+			if err != nil {
+				logger.Warn("failed to initialize GenAI assistant provider", "err", err)
+			} else if genAiProv != nil {
+				resolver.GenAi = genAiProv
+				logger.Info("genai assistant provider initialized", "provider", genAiProv.ProviderName(), "model", genAiProv.ModelName())
+			}
+		}
 		var rest *restapi.Handler
 		if cfg.RestApi.Enabled {
 			rest = restapi.New(cfg, authCache, storage.Retained, archives, bus, publishFn)

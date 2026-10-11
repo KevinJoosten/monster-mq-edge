@@ -239,6 +239,7 @@ type FeaturesConfig struct {
 	Redfish            bool `yaml:"Redfish"`
 	RtspCamera         bool `yaml:"RtspCamera"`
 	PythonScripts      bool `yaml:"PythonScripts"`
+	GenAi              bool `yaml:"GenAi"`
 }
 
 // WinCCOaNativeConfig is the bootstrap configuration for running the broker
@@ -357,6 +358,60 @@ type SSLConfig struct {
 	WSS                   WSSOverrideConfig `yaml:"WSS,omitempty"`
 }
 
+type GenAIConfig struct {
+	Enabled   bool                 `yaml:"Enabled"`
+	Assistant GenAiAssistantConfig `yaml:"Assistant"`
+	Providers GenAiProvidersConfig `yaml:"Providers"`
+}
+
+type GenAiAssistantConfig struct {
+	Provider       string  `yaml:"Provider"`
+	Model          string  `yaml:"Model"`
+	Temperature    float64 `yaml:"Temperature"`
+	DocsPath       string  `yaml:"DocsPath"`
+	Endpoint       string  `yaml:"Endpoint"`
+	ServiceVersion string  `yaml:"ServiceVersion"`
+}
+
+type GenAiProvidersConfig struct {
+	Gemini     GenAiApiKeyConfig     `yaml:"Gemini"`
+	Claude     GenAiApiKeyConfig     `yaml:"Claude"`
+	OpenAI     GenAiOpenAIConfig     `yaml:"OpenAI"`
+	Ollama     GenAiOllamaConfig     `yaml:"Ollama"`
+	LlamaCpp   GenAiLlamaCppConfig   `yaml:"LlamaCpp"`
+	OpenRouter GenAiOpenRouterConfig `yaml:"OpenRouter"`
+}
+
+type GenAiApiKeyConfig struct {
+	ApiKey string `yaml:"ApiKey"`
+}
+
+type GenAiOpenAIConfig struct {
+	ApiKey         string `yaml:"ApiKey"`
+	Endpoint       string `yaml:"Endpoint"`
+	TimeoutSeconds int    `yaml:"TimeoutSeconds"`
+}
+
+type GenAiOllamaConfig struct {
+	BaseUrl        string `yaml:"BaseUrl"`
+	TimeoutSeconds int    `yaml:"TimeoutSeconds"`
+}
+
+type GenAiLlamaCppConfig struct {
+	Endpoint       string `yaml:"Endpoint"`
+	Model          string `yaml:"Model"`
+	ApiKey         string `yaml:"ApiKey"`
+	TimeoutSeconds int    `yaml:"TimeoutSeconds"`
+}
+
+type GenAiOpenRouterConfig struct {
+	Type           string `yaml:"Type"`
+	ApiKey         string `yaml:"ApiKey"`
+	Model          string `yaml:"Model"`
+	Endpoint       string `yaml:"Endpoint"`
+	TimeoutSeconds int    `yaml:"TimeoutSeconds"`
+}
+
 type Config struct {
 	NodeID         string    `yaml:"NodeId"`
 	TCP            Listener  `yaml:"TCP"`
@@ -386,6 +441,7 @@ type Config struct {
 	Dashboard      DashboardConfig      `yaml:"Dashboard"`
 	RestApi        RestApiConfig        `yaml:"RestApi"`
 	MCP            MCPConfig            `yaml:"MCP"`
+	GenAI          GenAIConfig          `yaml:"GenAI"`
 	Features       FeaturesConfig       `yaml:"Features"`
 	HostMonitoring HostMonitoringConfig `yaml:"HostMonitoring"`
 	HMI            HMIConfig            `yaml:"HMI"`
@@ -461,7 +517,27 @@ func Default() *Config {
 		Dashboard: DashboardConfig{Enabled: true, Path: ""},
 		RestApi:   RestApiConfig{Enabled: true},
 		MCP:       MCPConfig{Enabled: false},
-		Features:  FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false, Mcp: false, Hmi: false, Redfish: false, RtspCamera: false, PythonScripts: false},
+		GenAI: GenAIConfig{
+			Enabled: false,
+			Assistant: GenAiAssistantConfig{
+				Provider:    "gemini",
+				Model:       "gemini-2.5-flash",
+				Temperature: 0.7,
+				DocsPath:    "docs",
+			},
+			Providers: GenAiProvidersConfig{
+				Ollama: GenAiOllamaConfig{
+					BaseUrl:        "http://localhost:11434",
+					TimeoutSeconds: 120,
+				},
+				OpenRouter: GenAiOpenRouterConfig{
+					Type:           "chat",
+					Endpoint:       "https://openrouter.ai/api/v1",
+					TimeoutSeconds: 60,
+				},
+			},
+		},
+		Features: FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false, Mcp: false, Hmi: false, Redfish: false, RtspCamera: false, PythonScripts: false, GenAi: false},
 		HostMonitoring: HostMonitoringConfig{
 			Enabled:         false,
 			BaseTopic:       "nodes/{NodeId}/host",

@@ -155,6 +155,14 @@ type BrokerMetrics struct {
 	Timestamp             string  `json:"timestamp"`
 }
 
+// A single message in the chat history
+type ChatMessage struct {
+	// Role of the message sender (user or assistant)
+	Role string `json:"role"`
+	// Content of the message
+	Content string `json:"content"`
+}
+
 type CreateACLRuleInput struct {
 	Username     string `json:"username"`
 	TopicPattern string `json:"topicPattern"`
@@ -217,6 +225,42 @@ type DashboardFile struct {
 	SizeBytes int64  `json:"sizeBytes"`
 }
 
+type DataCatalogInstance struct {
+	ID         string         `json:"id"`
+	TypeID     string         `json:"typeId"`
+	Name       string         `json:"name"`
+	BaseTopic  string         `json:"baseTopic"`
+	Properties map[string]any `json:"properties"`
+	CreatedAt  *string        `json:"createdAt,omitempty"`
+	UpdatedAt  *string        `json:"updatedAt,omitempty"`
+}
+
+type DataCatalogProposal struct {
+	Types          []*DataCatalogType     `json:"types"`
+	Instances      []*DataCatalogInstance `json:"instances"`
+	Relations      []*DataCatalogRelation `json:"relations"`
+	TopicsAnalyzed int                    `json:"topicsAnalyzed"`
+	Summary        *string                `json:"summary,omitempty"`
+	Error          *string                `json:"error,omitempty"`
+}
+
+type DataCatalogRelation struct {
+	SourceID     string `json:"sourceId"`
+	TargetID     string `json:"targetId"`
+	RelationType string `json:"relationType"`
+}
+
+type DataCatalogType struct {
+	ID           string         `json:"id"`
+	Namespace    string         `json:"namespace"`
+	Name         string         `json:"name"`
+	Description  *string        `json:"description,omitempty"`
+	Structure    map[string]any `json:"structure"`
+	TopicPattern *string        `json:"topicPattern,omitempty"`
+	CreatedAt    *string        `json:"createdAt,omitempty"`
+	UpdatedAt    *string        `json:"updatedAt,omitempty"`
+}
+
 type DatabaseConnectionInfo struct {
 	Name      string                 `json:"name"`
 	Type      DatabaseConnectionType `json:"type"`
@@ -261,6 +305,68 @@ type ExceptionInfo struct {
 	Class      string  `json:"class"`
 	Message    *string `json:"message,omitempty"`
 	StackTrace string  `json:"stackTrace"`
+}
+
+type GenAiProvider struct {
+	Name           string  `json:"name"`
+	Type           string  `json:"type"`
+	Model          *string `json:"model,omitempty"`
+	APIKey         *string `json:"apiKey,omitempty"`
+	Endpoint       *string `json:"endpoint,omitempty"`
+	ServiceVersion *string `json:"serviceVersion,omitempty"`
+	BaseURL        *string `json:"baseUrl,omitempty"`
+	Temperature    float64 `json:"temperature"`
+	MaxTokens      *int    `json:"maxTokens,omitempty"`
+	Enabled        bool    `json:"enabled"`
+	Source         string  `json:"source"`
+	CreatedAt      string  `json:"createdAt"`
+	UpdatedAt      string  `json:"updatedAt"`
+}
+
+type GenAiProviderInput struct {
+	Type           string   `json:"type"`
+	Model          *string  `json:"model,omitempty"`
+	APIKey         *string  `json:"apiKey,omitempty"`
+	Endpoint       *string  `json:"endpoint,omitempty"`
+	ServiceVersion *string  `json:"serviceVersion,omitempty"`
+	BaseURL        *string  `json:"baseUrl,omitempty"`
+	Temperature    *float64 `json:"temperature,omitempty"`
+	MaxTokens      *int     `json:"maxTokens,omitempty"`
+	Enabled        *bool    `json:"enabled,omitempty"`
+}
+
+type GenAiProviderMutations struct {
+	Create *GenAiProvider `json:"create"`
+	Update *GenAiProvider `json:"update"`
+	Delete bool           `json:"delete"`
+}
+
+// GenAI query interface for AI-supported JavaScript coding
+type GenAiQuery struct {
+	// Generate AI response with optional context and documentation.
+	//
+	// The prompt parameter is required and contains your question or instruction.
+	// The context parameter is optional and provides additional background information.
+	// The docs parameter is optional and lists documentation files to include as context.
+	Generate *GenAiResponse `json:"generate"`
+	// Analyze MQTT topics using AI.
+	// Collects topic values from the LastValueStore and/or directly passed topicData, and sends them to the LLM for analysis.
+	//
+	// On the first request (empty chatHistory), topic data is included in the prompt.
+	// On subsequent requests, only the chat history is sent to continue the conversation.
+	AnalyzeTopics *TopicAnalysisResponse `json:"analyzeTopics"`
+	// Analyze MQTT topics and propose a Data Catalog (Object Types, Instances, Relations) using AI.
+	ProposeDataCatalog *DataCatalogProposal `json:"proposeDataCatalog"`
+}
+
+// GenAI response containing the AI-generated content and metadata
+type GenAiResponse struct {
+	// The AI-generated text response
+	Response string `json:"response"`
+	// The specific model that generated this response (e.g., 'gemini-pro', 'claude-3-opus')
+	Model *string `json:"model,omitempty"`
+	// Error message if the request failed
+	Error *string `json:"error,omitempty"`
 }
 
 type Hmi struct {
@@ -836,6 +942,26 @@ type Topic struct {
 	Name   string      `json:"name"`
 	IsLeaf bool        `json:"isLeaf"`
 	Value  *TopicValue `json:"value,omitempty"`
+}
+
+// Result of topic analysis with metadata
+type TopicAnalysisResponse struct {
+	// The AI-generated analysis
+	Response string `json:"response"`
+	// Number of topics included in context
+	TopicsAnalyzed int `json:"topicsAnalyzed"`
+	// The model used
+	Model *string `json:"model,omitempty"`
+	// Error message if failed
+	Error *string `json:"error,omitempty"`
+}
+
+// Topic and its associated value/payload for AI analysis
+type TopicDataInput struct {
+	// MQTT topic name
+	Topic string `json:"topic"`
+	// Topic value or payload string
+	Value *string `json:"value,omitempty"`
 }
 
 type TopicUpdate struct {

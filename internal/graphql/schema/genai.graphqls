@@ -1,0 +1,135 @@
+# Generative AI Integration Schema
+#
+# Provides AI-assisted JavaScript coding capabilities through the dashboard.
+# Supports querying AI models (Gemini, Claude, OpenAI) for code generation,
+# documentation, and development assistance.
+
+"GenAI response containing the AI-generated content and metadata"
+type GenAiResponse {
+    "The AI-generated text response"
+    response: String!
+
+    "The specific model that generated this response (e.g., 'gemini-pro', 'claude-3-opus')"
+    model: String
+
+    "Error message if the request failed"
+    error: String
+}
+
+"GenAI query interface for AI-supported JavaScript coding"
+type GenAiQuery {
+    """
+    Generate AI response with optional context and documentation.
+
+    The prompt parameter is required and contains your question or instruction.
+    The context parameter is optional and provides additional background information.
+    The docs parameter is optional and lists documentation files to include as context.
+    """
+    generate(
+        "The main prompt/instruction for the AI"
+        prompt: String!
+
+        "Optional additional context to help the AI understand your specific use case"
+        context: String
+
+        "Optional list of documentation markdown files to include as context"
+        docs: [String!]
+    ): GenAiResponse!
+}
+
+"A single message in the chat history"
+input ChatMessage {
+    "Role of the message sender (user or assistant)"
+    role: String!
+
+    "Content of the message"
+    content: String!
+}
+
+"Result of topic analysis with metadata"
+type TopicAnalysisResponse {
+    "The AI-generated analysis"
+    response: String!
+
+    "Number of topics included in context"
+    topicsAnalyzed: Int!
+
+    "The model used"
+    model: String
+
+    "Error message if failed"
+    error: String
+}
+
+# Extend GenAiQuery with topic analysis
+"Topic and its associated value/payload for AI analysis"
+input TopicDataInput {
+    "MQTT topic name"
+    topic: String!
+
+    "Topic value or payload string"
+    value: String
+}
+
+extend type GenAiQuery {
+    """
+    Analyze MQTT topics using AI.
+    Collects topic values from the LastValueStore and/or directly passed topicData, and sends them to the LLM for analysis.
+
+    On the first request (empty chatHistory), topic data is included in the prompt.
+    On subsequent requests, only the chat history is sent to continue the conversation.
+    """
+    analyzeTopics(
+        "Archive group to query (defaults to 'Default'; optional if topicData is provided)"
+        archiveGroup: String
+
+        "MQTT topic pattern (supports + and # wildcards; optional if topicData is provided)"
+        topicPattern: String
+
+        "Directly passed list of topics and their values/payloads (e.g. from UI subscriptions or live table)"
+        topicData: [TopicDataInput!]
+
+        "User's question about the topics"
+        question: String!
+
+        "Custom system prompt (optional)"
+        systemPrompt: String
+
+        "Max topics to include (default 100; set to 0 for unlimited)"
+        maxTopics: Int
+
+        "Max value length before truncation (default 1000 chars; set to 0 for unlimited)"
+        maxValueLength: Int
+
+        "Chat history from previous exchanges (optional). When provided, topic data is not re-sent."
+        chatHistory: [ChatMessage!]
+    ): TopicAnalysisResponse!
+
+    """
+    Analyze MQTT topics and propose a Data Catalog (Object Types, Instances, Relations) using AI.
+    """
+    proposeDataCatalog(
+        "Archive group to query (defaults to 'Default')"
+        archiveGroup: String
+
+        "MQTT topic pattern to inspect (e.g. 'machine1/#')"
+        topicPattern: String!
+
+        "Optional custom user guidance or context prompt"
+        prompt: String
+
+        "Max topics to sample (default 100)"
+        maxTopics: Int
+    ): DataCatalogProposal!
+}
+
+# Extend the root Query type with GenAI capabilities
+extend type Query {
+    """
+    Access AI-assisted JavaScript coding features.
+
+    Requires GenAI to be enabled in configuration and a valid API key.
+    Returns null if GenAI is disabled or not configured.
+    """
+    genai: GenAiQuery
+}

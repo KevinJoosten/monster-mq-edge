@@ -99,6 +99,38 @@ Features:
   Redfish: false
   RtspCamera: true
   PythonScripts: true
+  GenAi: true
+
+GenAI:
+  Enabled: true
+  Assistant:
+    Provider: "gemini"               # gemini | claude | openai | ollama | llamacpp | openrouter
+    Model: "gemini-2.5-flash"
+    Temperature: 0.7
+    DocsPath: "docs"
+  Providers:
+    Gemini:
+      ApiKey: "${GEMINI_API_KEY}"
+    Claude:
+      ApiKey: "${ANTHROPIC_API_KEY}"
+    OpenAI:
+      ApiKey: "${OPENAI_API_KEY}"
+      Endpoint: "http://localhost:8080/v1"
+      TimeoutSeconds: 60
+    Ollama:
+      BaseUrl: "http://localhost:11434"
+      TimeoutSeconds: 120
+    LlamaCpp:
+      Endpoint: "http://localhost:8080/v1"
+      Model: "llama-3-8b"
+      ApiKey: ""
+      TimeoutSeconds: 60
+    OpenRouter:
+      Type: "chat"                   # chat | decision
+      ApiKey: "${OPENROUTER_API_KEY}"
+      Model: "anthropic/claude-3.5-sonnet"
+      Endpoint: "https://openrouter.ai/api/v1"
+      TimeoutSeconds: 60
 
 Redfish:
   Enabled: false

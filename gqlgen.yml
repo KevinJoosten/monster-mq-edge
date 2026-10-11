@@ -153,4 +153,15 @@ models:
       start:  { resolver: true }
       stop:   { resolver: true }
       test:   { resolver: true }
+  GenAiProviderMutations:
+    fields:
+      create: { resolver: true }
+      update: { resolver: true }
+      delete: { resolver: true }
+  GenAiQuery:
+    fields:
+      generate:           { resolver: true }
+      analyzeTopics:      { resolver: true }
+      proposeDataCatalog: { resolver: true }
+
 

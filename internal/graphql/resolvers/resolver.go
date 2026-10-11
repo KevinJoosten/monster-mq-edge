@@ -23,6 +23,7 @@ import (
 	"monstermq.io/edge/internal/bridge/winccoa"
 	"monstermq.io/edge/internal/bridge/winccua"
 	"monstermq.io/edge/internal/config"
+	"monstermq.io/edge/internal/genai"
 	"monstermq.io/edge/internal/graphql/generated"
 	"monstermq.io/edge/internal/hmi"
 	mlog "monstermq.io/edge/internal/log"
@@ -56,6 +57,7 @@ type Resolver struct {
 	Redfish     *redfish.Manager
 	RtspCameras *rtspcamera.Manager
 	Scripts     *scripting.Manager
+	GenAi       genai.Provider
 	// PeerLinkMgr is nil while PeerLink is disabled.
 	PeerLinkMgr *peerlink.Manager
 
@@ -127,6 +129,9 @@ func (r *Resolver) enabledFeatures() []string {
 	}
 	if r.Cfg.Features.PythonScripts {
 		out = append(out, "PythonScripts")
+	}
+	if r.Cfg.Features.GenAi || r.Cfg.GenAI.Enabled {
+		out = append(out, "GenAi")
 	}
 	return out
 }

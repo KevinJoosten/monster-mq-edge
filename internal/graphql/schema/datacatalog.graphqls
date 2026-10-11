@@ -1,0 +1,39 @@
+# =======================
+# Data Catalog Types (Proposal Support)
+# =======================
+
+type DataCatalogType {
+    id: String!
+    namespace: String!
+    name: String!
+    description: String
+    structure: JSON!
+    topicPattern: String
+    createdAt: String
+    updatedAt: String
+}
+
+type DataCatalogInstance {
+    id: String!
+    typeId: String!
+    name: String!
+    baseTopic: String!
+    properties: JSON!
+    createdAt: String
+    updatedAt: String
+}
+
+type DataCatalogRelation {
+    sourceId: String!
+    targetId: String!
+    relationType: String!
+}
+
+type DataCatalogProposal {
+    types: [DataCatalogType!]!
+    instances: [DataCatalogInstance!]!
+    relations: [DataCatalogRelation!]!
+    topicsAnalyzed: Int!
+    summary: String
+    error: String
+}

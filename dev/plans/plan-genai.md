@@ -224,6 +224,52 @@ And `yaml-json-schema.json` will be updated to include the exact JSON schema def
 
 Under `internal/graphql/schema/`:
 1. `genai.graphqls` — copied verbatim from `../main/broker/src/main/resources/schema-genai.graphqls`.
+   Includes the updated `analyzeTopics` signature and `TopicDataInput`:
+   ```graphql
+   "Topic and its associated value/payload for AI analysis"
+   input TopicDataInput {
+       "MQTT topic name"
+       topic: String!
+
+       "Topic value or payload string"
+       value: String
+   }
+
+   extend type GenAiQuery {
+       """
+       Analyze MQTT topics using AI.
+       Collects topic values from the LastValueStore and/or directly passed topicData, and sends them to the LLM for analysis.
+
+       On the first request (empty chatHistory), topic data is included in the prompt.
+       On subsequent requests, only the chat history is sent to continue the conversation.
+       """
+       analyzeTopics(
+           "Archive group to query (defaults to 'Default'; optional if topicData is provided)"
+           archiveGroup: String
+
+           "MQTT topic pattern (supports + and # wildcards; optional if topicData is provided)"
+           topicPattern: String
+
+           "Directly passed list of topics and their values/payloads (e.g. from UI subscriptions or live table)"
+           topicData: [TopicDataInput!]
+
+           "User's question about the topics"
+           question: String!
+
+           "Custom system prompt (optional)"
+           systemPrompt: String
+
+           "Max topics to include (default 100; set to 0 for unlimited)"
+           maxTopics: Int
+
+           "Max value length before truncation (default 1000 chars; set to 0 for unlimited)"
+           maxValueLength: Int
+
+           "Chat history from previous exchanges (optional). When provided, topic data is not re-sent."
+           chatHistory: [ChatMessage!]
+       ): TopicAnalysisResponse!
+   }
+   ```
 2. `genai-providers.graphqls` — copied verbatim from `../main/broker/src/main/resources/schema-genai-providers.graphqls`.
 3. Supporting catalog proposal types (needed by `proposeDataCatalog`):
    ```graphql
@@ -314,16 +360,26 @@ Like the JVM broker, Edge supports two provider sources:
 
 `genAiProviders` query returns config providers first, followed by database providers.
 
-### 5.3 Topic Analysis & Hierarchy Compression (`tree.go`)
+### 5.3 Topic Analysis & Hierarchy Compression (`tree.go` & Dual-Source Input)
 
-In `analyzeTopics` and `proposeDataCatalog`, the resolver fetches topic values matching `topicPattern` from the active `LastValueStore` via `store.FindMatchingMessages(ctx, pattern, ...)`.
+In `analyzeTopics`, topics are gathered from two complementary sources:
+1. **`LastValueStore` via `topicPattern`**: When `topicPattern` is supplied, the resolver searches the specified `archiveGroup` (default `"Default"`).
+2. **Direct `topicData`**: When `topicData` (`[TopicDataInput!]`) is supplied, topics and values are fed directly into the analysis set. This enables analyzing live table rows, active client subscriptions, or arbitrary topic selections without requiring an active archive group or database scan.
+3. **Merging & Fallback**:
+   - Both sources can be combined in a single request.
+   - If `topicPattern` is supplied but the archive group or `LastValueStore` is missing, the resolver logs a warning and proceeds if `topicData` contains items.
+   - If neither `topicPattern` nor `topicData` yields topics, an informative error is returned (`"Either topicPattern or topicData must be provided"` or `"No topics found matching pattern ..."`).
 
-To minimize LLM token consumption and improve structural comprehension:
-1. Non-UTF8 or binary payloads (> 10 KB or containing control characters) are skipped.
-2. Long values are truncated to `maxValueLength` (default 1000 chars).
-3. The topic paths are converted into an ASCII tree structure (`├── `, `└── `, `│   `), ported directly from `GenAiResolver.kt:formatTopicsAsHierarchy`.
+**Unlimited Limits & Safety Thresholds**:
+- `maxTopics`: When set to `<= 0`, limits are disabled and all matched topics are analyzed.
+- `maxValueLength`: When set to `<= 0`, truncation is disabled and full payloads are included.
+- **Safety size guard**:
+  - When `maxValueLength > 0`, payloads exceeding `max(10KB, maxValueLength * 4)` are skipped.
+  - When `maxValueLength <= 0` (unlimited), payloads exceeding **5 MB** are skipped to protect memory.
+  - Binary payloads (containing non-whitespace control characters) or non-UTF8 data are safely excluded.
 
-Example generated context:
+**Context Tree Structure**:
+The gathered `map[string]string` is converted into an ASCII tree structure (`├── `, `└── `, `│   `), ported directly from `GenAiResolver.kt:formatTopicsAsHierarchy`:
 ```
 ProveIt/
 └── Enterprise B/
@@ -377,7 +433,7 @@ ProveIt/
 2. Implement `GenAiProviderMutations` (`create`, `update`, `delete`) in `internal/graphql/resolvers/genai_providers.go` using `r.Stores.DeviceConfigStore`.
 3. Implement `Query.genai` resolver returning `GenAiQuery`.
 4. Implement `GenAiQuery.generate` resolver with optional doc reading and prompt context.
-5. Implement `GenAiQuery.analyzeTopics` resolver with `LastValueStore` matching and chat history.
+5. Implement `GenAiQuery.analyzeTopics` resolver supporting dual-source topic collection (`LastValueStore` via `topicPattern` + direct `topicData`), unlimited limits (`maxTopics`/`maxValueLength` <= 0), extreme size safety guards (>5 MB), and multi-turn chat history.
 6. Implement `GenAiQuery.proposeDataCatalog` resolver with prompt framing and JSON extraction.
 7. Update `r.enabledFeatures()` in `resolver.go`.
 

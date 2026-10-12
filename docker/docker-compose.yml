@@ -9,3 +9,6 @@ services:
       - "8080:8080"   # GraphQL
     volumes:
       - ./data:/cfg-data
+    # USB camera for a v4l2:///dev/video0 camera URL (Linux hosts only)
+    # devices:
+    #   - /dev/video0:/dev/video0

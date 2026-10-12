@@ -157,8 +157,8 @@ Features:
 - `WinCCOa` enables WinCC Open Architecture clients. Each client subscribes to
   WinCC OA GraphQL `dpQueryConnectSingle` updates and republishes datapoint
   changes into MQTT.
-- `RtspCamera` enables the RTSP / HTTP / WebSocket video stream bridge for
-  capturing frames and publishing JPEG snapshots into MQTT topics.
+- `RtspCamera` enables the RTSP / HTTP / WebSocket / USB (V4L2) video stream
+  bridge for capturing frames and publishing JPEG snapshots into MQTT topics.
 
 Enabled features are also reported through GraphQL as `enabledFeatures`, using
 the same names as the config flags.
@@ -194,11 +194,17 @@ no shared libraries). Supported sources:
 - **HTTP / HTTPS**: `http://...` or `https://...` multipart MJPEG streams
   (`multipart/x-mixed-replace`).
 - **WebSocket / WSS**: `ws://...` or `wss://...` streaming raw MJPEG frames.
+- **USB / V4L2 (Linux only)**: `v4l2:///dev/video0` captures directly from a
+  locally attached UVC camera via Video4Linux2. See
+  [USB cameras (V4L2, Linux)](#usb-cameras-v4l2-linux) below.
 
 Supported codecs and decoding modes:
 
-- **Motion JPEG (MJPEG)**: RTP, HTTP, or WebSocket MJPEG payloads are assembled
-  directly into JPEG snapshots with minimal processing.
+- **Motion JPEG (MJPEG)**: RTP, HTTP, WebSocket, or V4L2 MJPEG payloads are
+  assembled directly into JPEG snapshots with minimal processing. Missing
+  Huffman tables (common with UVC cameras) are inserted automatically.
+- **YUYV (V4L2 only)**: Raw 4:2:2 frames are kept uncompressed (at most ~10/s)
+  and JPEG-encoded only when a snapshot is published.
 - **H.264 / AVC**: Progressive 8-bit YCbCr 4:2:0 I/P/B streams decoded natively
   via `pkg/h264`. Configurable via `h264DecodeMode`:
   - `FULL` (default): Decodes all reference frames continuously to maintain
@@ -207,6 +213,129 @@ Supported codecs and decoding modes:
   - `KEYFRAMES_ONLY`: Skips P/B frames and decodes only independent IDR keyframes
     at most once per `intervalMs`. This dramatically reduces CPU usage on edge
     devices like the Raspberry Pi 4/5 while trading off capture latency.
+
+#### USB cameras (V4L2, Linux)
+
+A USB camera plugged into the edge device is captured directly by the broker
+through the Linux Video4Linux2 API (pure Go ioctls, no CGO, no ffmpeg). Almost
+every USB webcam is a UVC device and works without extra drivers. It is
+configured like any other camera; only the URL differs.
+
+**1. Find the device.** With `v4l-utils` installed (`apt install v4l-utils`):
+
+```bash
+v4l2-ctl --list-devices
+```
+
+```text
+HD Pro Webcam C920 (usb-0000:01:00.0-1.3):
+        /dev/video0
+        /dev/video1
+        /dev/media0
+```
+
+Most UVC cameras expose two nodes: the first (`/dev/video0`) delivers video,
+the second is metadata only and is rejected by the bridge. Prefer the stable
+path under `/dev/v4l/by-id/`, which survives re-plugging and reboots:
+
+```bash
+ls -l /dev/v4l/by-id/
+```
+
+**2. Check the supported formats and sizes** (optional):
+
+```bash
+v4l2-ctl -d /dev/video0 --list-formats-ext
+```
+
+The bridge supports `MJPG` (Motion JPEG) and `YUYV`. Prefer MJPEG: frames are
+already JPEG and are published without re-encoding, which is cheap even at high
+resolution. YUYV is uncompressed, so larger sizes are limited to low frame rates
+by USB bandwidth and need a JPEG encode per published snapshot.
+
+**3. Grant device access.** The broker process must be able to open
+`/dev/video*`, which normally belongs to the `video` group:
+
+- **`.deb` package**: the installer adds the `monstermq` user to `video` and
+  restarts the service; nothing else to do.
+- **Manual install**: `sudo usermod -a -G video <broker-user>`, then restart
+  the broker (group changes apply to new processes only).
+- **Docker**: pass the device into the container, e.g.
+  `docker run --device /dev/video0 ...` or in `docker-compose.yml`:
+
+  ```yaml
+      devices:
+        - /dev/video0:/dev/video0
+  ```
+
+**4. Create the camera** in the dashboard (*RTSP Cameras*, field *Stream URL*) or via
+GraphQL, using a `v4l2://` URL:
+
+```text
+v4l2:///dev/video0
+v4l2:///dev/video0?width=1280&height=720&format=MJPEG&fps=15
+v4l2:///dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920-video-index0?width=1920&height=1080
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `width`, `height` | device's current size | Capture resolution; set both or neither. The driver may pick the nearest supported size (logged at connect). |
+| `format` | `AUTO` | `MJPEG`, `YUYV`, or `AUTO` (MJPEG if the camera offers it, else YUYV). |
+| `fps` | driver default | Requested frame rate; best effort, some drivers ignore it. |
+
+`transport` and `h264DecodeMode` are ignored for USB cameras. All snapshot
+options (`mode`, `intervalMs`, `slots`, `triggerTopic`, ...) and the published
+topics are the same as for network cameras.
+
+```graphql
+mutation {
+  rtspCamera {
+    create(input: {
+      name: "usb_cam"
+      nodeId: "edge-rpi-01"
+      config: {
+        url: "v4l2:///dev/video0?width=1280&height=720&format=MJPEG"
+        topicPrefix: "cameras/usb_cam"
+        mode: CONTINUOUS
+        intervalMs: 1000
+      }
+    }) { success errors }
+  }
+}
+```
+
+**5. Verify.** The broker logs `V4L2 camera streaming` with the negotiated
+format and size, `cameras/usb_cam/status` reports `"connected": true`, and the
+latest image can be fetched via REST:
+
+```bash
+curl -o usb.jpg 'http://localhost:4000/api/v1/topics/cameras/usb_cam/capture/latest/pic?raw'
+```
+
+**Troubleshooting**
+
+| Status / log error | Cause and fix |
+|--------------------|---------------|
+| `open /dev/video0: permission denied` | Broker user is not in the `video` group (step 3). |
+| `open /dev/video0: no such file or directory` | Camera not plugged in, wrong node, or device not passed into the container. |
+| `... is busy (in use by another process)` | Another program (e.g. `motion`, a browser, a second camera config) holds the device; only one process can stream from it. |
+| `... does not support video capture streaming` | This is the metadata node; use the other `/dev/videoN` of the camera. |
+| `... supports none of the requested pixel formats` | Camera offers neither MJPEG nor YUYV (e.g. H.264-only or IR cameras), or `format=` forces one it lacks. |
+| `delivered no frame for 10s` / `device disconnected` | Camera unplugged or stalled; the bridge reconnects with backoff (1 s up to 30 s). |
+
+**Limitations**
+
+- Linux only. On Windows and macOS a `v4l2://` camera stays disconnected with
+  an error; expose the camera as RTSP or HTTP MJPEG instead, e.g. with FFmpeg:
+  `ffmpeg -f dshow -i video="USB Camera" -f mpjpeg -listen 1 http://0.0.0.0:8081/cam`
+  (Windows) and configure `http://<host>:8081/cam`.
+- Raspberry Pi CSI ribbon cameras (Camera Module) need libcamera and are not
+  supported directly; USB cameras work on the Pi. To use a CSI camera, run a
+  libcamera-based streamer (e.g. MediaMTX) and connect via RTSP.
+- Camera controls (exposure, focus, white balance) are not set by the bridge;
+  adjust them with `v4l2-ctl -d /dev/video0 --set-ctrl=...` if needed.
+- USB cameras are an edge-broker feature; MonsterMQ Core does not support
+  `v4l2://` URLs.
 
 #### Snapshot modes
 

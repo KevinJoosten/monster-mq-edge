@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -20,8 +21,6 @@ import (
 	"github.com/bluenviron/gortsplib/v5/pkg/format/rtpmjpeg"
 	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
-
-	"monstermq.io/edge/pkg/h264"
 )
 
 // LocalPublisher is the broker's publish function.
@@ -59,7 +58,7 @@ type Connector struct {
 	lastSnapshotAt     time.Time
 	lastError          string
 	latestFrame        []byte
-	latestDecoded      *h264.Frame
+	latestDecoded      jpegEncoder
 	latestFrameVersion uint64
 	publishedVersion   uint64
 
@@ -190,9 +189,15 @@ func (c *Connector) setLatestFrame(frame []byte) {
 	c.latestFrameVersion++
 }
 
+// jpegEncoder is an immutable raw picture (decoded H.264, V4L2 YUYV) that is
+// only JPEG-encoded when a snapshot is actually published.
+type jpegEncoder interface {
+	WriteJPEG(w io.Writer, quality int) error
+}
+
 // The decoder owns immutable picture planes, so snapshots can encode the latest
 // picture on demand without blocking RTP decoding or retaining a frame queue.
-func (c *Connector) setLatestDecoded(frame *h264.Frame) {
+func (c *Connector) setLatestDecoded(frame jpegEncoder) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.latestDecoded = frame
@@ -210,7 +215,7 @@ func (c *Connector) latestFrameWithVersion() ([]byte, uint64, error) {
 	}
 	var buf bytes.Buffer
 	if err := decoded.WriteJPEG(&buf, 85); err != nil {
-		return nil, version, fmt.Errorf("encode H.264 snapshot: %w", err)
+		return nil, version, fmt.Errorf("encode snapshot: %w", err)
 	}
 	frame = buf.Bytes()
 	c.mu.Lock()
@@ -333,6 +338,8 @@ func (c *Connector) streamLoop(ctx context.Context) {
 				err = c.connectHTTPStream(ctx)
 			case "ws", "wss":
 				err = c.connectWebSocketStream(ctx)
+			case SchemeV4L2:
+				err = c.connectV4L2Stream(ctx)
 			default:
 				err = c.connectAndStream(ctx)
 			}

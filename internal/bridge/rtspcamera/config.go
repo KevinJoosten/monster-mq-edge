@@ -141,8 +141,12 @@ func (c *Config) Validate() []string {
 	}
 	if strings.TrimSpace(c.URL) == "" {
 		errs = append(errs, "url is required")
-	} else if parsed, err := url.Parse(c.URL); err != nil || parsed.Host == "" || !supportedStreamScheme(parsed.Scheme) {
-		errs = append(errs, "url must be an rtsp://, rtsps://, http://, https://, ws://, or wss:// URL with a host")
+	} else if parsed, err := url.Parse(c.URL); err == nil && strings.EqualFold(parsed.Scheme, SchemeV4L2) {
+		if _, err := parseV4L2URL(c.URL); err != nil {
+			errs = append(errs, err.Error())
+		}
+	} else if err != nil || parsed.Host == "" || !supportedStreamScheme(parsed.Scheme) {
+		errs = append(errs, "url must be an rtsp://, rtsps://, http://, https://, ws://, or wss:// URL with a host, or a v4l2:///dev/videoN device URL")
 	}
 
 	mode := strings.ToUpper(c.Mode)

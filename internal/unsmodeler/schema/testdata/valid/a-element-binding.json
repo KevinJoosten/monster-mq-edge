@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "outlet-flow-p102",
+      "binding": {
+        "kind": "element",
+        "type": "PumpType",
+        "datapoint": "Hall2_P102",
+        "element": "flow",
+        "overrides": { "payload": ["value", "time", "unit", "description"] }
+      }
+    },
+    {
+      "name": "ambient-temperature",
+      "description": "Scalar datapoint type: the root is the value element.",
+      "binding": { "kind": "element", "type": "ExampleDP_Float", "datapoint": "ExampleDP_Arg1", "element": "" }
+    }
+  ]
+}

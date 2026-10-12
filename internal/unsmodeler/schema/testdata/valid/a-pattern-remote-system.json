@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "filling-2",
+      "level": "productionLine",
+      "children": [
+        {
+          "name": "pumps",
+          "binding": {
+            "kind": "pattern",
+            "type": "PumpType",
+            "system": "System2",
+            "pattern": "Hall2_L2_P*",
+            "elements": [
+              { "path": "flow" },
+              { "path": "pressure", "overrides": { "qos": 0 } }
+            ]
+          }
+        },
+        {
+          "name": "valves",
+          "binding": {
+            "kind": "pattern",
+            "type": "ValveType",
+            "system": "System2",
+            "pattern": "{Hall2_L2_V?,Hall2_L2_X1*}",
+            "overrides": { "retain": false }
+          }
+        },
+        {
+          "name": "remote-flow",
+          "binding": { "kind": "element", "type": "PumpType", "system": "System2", "datapoint": "Hall2_L2_P1", "element": "flow" }
+        },
+        {
+          "name": "all-meters",
+          "binding": { "kind": "pattern", "type": "MeterType", "pattern": "*" }
+        }
+      ]
+    }
+  ]
+}

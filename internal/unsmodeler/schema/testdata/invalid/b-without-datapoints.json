@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "direction": "mqtt_to_winccoa",
+  "source": {
+    "mode": "archive",
+    "archiveGroup": "Default",
+    "topicFilters": [
+      "plant/line1/#"
+    ]
+  },
+  "types": [
+    {
+      "name": "UNS_Pump",
+      "elements": [
+        {
+          "path": "flow",
+          "elementType": "float",
+          "unit": "m³/h",
+          "pvRange": {
+            "min": 0,
+            "max": 200
+          },
+          "alert": {
+            "kind": "analog",
+            "limits": [
+              {
+                "when": "above",
+                "limit": 180,
+                "class": "warning"
+              }
+            ]
+          }
+        },
+        {
+          "path": "motor.speed",
+          "elementType": "float"
+        },
+        {
+          "path": "running",
+          "elementType": "bool",
+          "alert": {
+            "kind": "binary",
+            "class": "alert"
+          }
+        }
+      ]
+    }
+  ]
+}

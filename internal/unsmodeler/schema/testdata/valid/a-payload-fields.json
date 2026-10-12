@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "payloads",
+      "overrides": { "payload": ["value", "time"], "encoding": "json" },
+      "children": [
+        {
+          "name": "full",
+          "binding": {
+            "kind": "element", "type": "PumpType", "datapoint": "Hall2_P101", "element": "flow",
+            "overrides": {
+              "payload": [
+                "value", "time", "unit", "description", "format", "pvRange", "status",
+                { "name": "invalid", "attribute": "_online.._invalid" },
+                { "name": "alertState", "attribute": "_alert_hdl.._act_state" },
+                { "name": "highLimit", "attribute": "_alert_hdl.2._u_limit" },
+                { "name": "locked", "attribute": "_lock._original._locked" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "sensors",
+          "binding": {
+            "kind": "pattern", "type": "AnalogInput", "pattern": "Hall2_AI_*",
+            "elements": [
+              { "path": "value", "topic": "", "overrides": { "payload": ["value", "time", "unit", "status"] } },
+              { "path": "value", "topic": "raw", "overrides": { "encoding": "raw" } }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

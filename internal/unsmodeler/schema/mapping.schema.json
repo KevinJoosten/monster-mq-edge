@@ -1,0 +1,726 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://monstermq.io/schemas/uns-modeler/mapping.schema.json",
+  "title": "UNS Modeler mapping document",
+  "description": "Mapping of one UNS Modeler device. A device has one fixed direction, and its document has the same direction. Direction A (winccoa_to_uns) is a tree of UNS nodes below the device's unsRoot with WinCC OA bindings. Direction B (mqtt_to_winccoa) proposes WinCC OA datapoint types and datapoints fed from MQTT topics. Device settings (unsRoot, oaPrefix, allowWrite, topicDefaults, payloadDefaults, ...) are not part of this document. Limits checked before the schema: at most 256 KiB, JSON nesting at most 100, tree at most 32 node levels, no duplicate object keys. This schema checks structure only; existence, collisions and conflicts are checked by the validator.",
+  "type": "object",
+  "required": ["schemaVersion", "direction"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Version of this document format. Always 1.",
+      "const": 1
+    },
+    "direction": {
+      "description": "winccoa_to_uns (Direction A: WinCC OA datapoints published into the UNS; requires tree) or mqtt_to_winccoa (Direction B: MQTT topics into new WinCC OA datapoints; requires source, types and datapoints). Must equal the device's direction.",
+      "enum": ["winccoa_to_uns", "mqtt_to_winccoa"]
+    },
+    "tree": {
+      "description": "Direction A only. Top-level UNS nodes directly below the device's unsRoot, in display order. Topics always have at least one node level below unsRoot.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Node" }
+    },
+    "source": {
+      "description": "Direction B only. The topic selection that was analysed (provenance for review and re-runs). Stamped by the server from the run input; an LLM-written source is overwritten. The runtime subscribes to the binding topics, not to this selection.",
+      "$ref": "#/$defs/Source"
+    },
+    "types": {
+      "description": "Direction B only. Datapoint types used by the datapoints: new types to create or existing types to reuse. Every datapoints[].type must be listed here.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/TypeProposal" }
+    },
+    "datapoints": {
+      "description": "Direction B only. Datapoints to create, each fed from MQTT topics.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/Datapoint" }
+    },
+    "aiRun": {
+      "description": "Set by the server when the document comes from an AI run. Never written by the LLM. Ignored by validation and apply.",
+      "$ref": "#/$defs/AiRun"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": { "properties": { "direction": { "const": "winccoa_to_uns" } }, "required": ["direction"] },
+      "then": {
+        "required": ["tree"],
+        "properties": { "tree": true, "source": false, "types": false, "datapoints": false }
+      }
+    },
+    {
+      "if": { "properties": { "direction": { "const": "mqtt_to_winccoa" } }, "required": ["direction"] },
+      "then": {
+        "required": ["source", "types", "datapoints"],
+        "properties": { "source": true, "types": true, "datapoints": true, "tree": false }
+      }
+    }
+  ],
+  "$defs": {
+    "Node": {
+      "description": "A UNS node. Its topic is unsRoot/<names of all ancestors>/<name>. It can carry one binding and child nodes; a bound node may have children.",
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "id": {
+          "description": "Opaque node identity, kept across rename and move (diff badges, AI merge). Unique within the document. Keep the id of an existing node; omit it for a new node, the editor assigns one.",
+          "$ref": "#/$defs/NodeId"
+        },
+        "name": {
+          "description": "Exactly one topic level. No '/', '+', '#', control or invisible characters, no leading or trailing space; not the reserved '..set'.",
+          "$ref": "#/$defs/Segment"
+        },
+        "level": {
+          "description": "Optional ISA-95 equipment level, shown as a badge. No effect on publishing.",
+          "$ref": "#/$defs/Isa95Level"
+        },
+        "description": {
+          "description": "Free text for the editor. Not published.",
+          "type": "string",
+          "maxLength": 1024
+        },
+        "aiGenerated": {
+          "description": "True while the node, its binding or its overrides are an unaccepted AI proposal. Stamped by the server by comparing the AI document with the draft, cleared by the editor on accept or edit. Ignored by validation and apply.",
+          "type": "boolean"
+        },
+        "overrides": {
+          "description": "Topic semantics and payload overrides for this node's binding and the bindings of all descendants.",
+          "$ref": "#/$defs/Overrides"
+        },
+        "binding": {
+          "description": "Optional WinCC OA binding published at or below this node.",
+          "$ref": "#/$defs/Binding"
+        },
+        "children": {
+          "description": "Child nodes, in display order.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/Node" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "Binding": {
+      "description": "Binds WinCC OA data of one datapoint type to a node. kind=element: one DPE, published on the node topic. kind=datapoint: one datapoint, topics <node>/<element path>. kind=pattern: all datapoints of the type matching pattern, topics <node>/<dp>/<element path> (<dp> without system); datapoints created later are picked up. DP and element names become topic levels percent-encoded like the native namespace ('%', '/', '+', '#' and control characters as %XX).",
+      "type": "object",
+      "required": ["kind", "type"],
+      "properties": {
+        "kind": {
+          "description": "element, datapoint or pattern.",
+          "enum": ["element", "datapoint", "pattern"]
+        },
+        "type": {
+          "description": "Datapoint type (DPT) name, without system prefix.",
+          "$ref": "#/$defs/DptName"
+        },
+        "system": {
+          "description": "Remote WinCC OA system name without ':'. Omit for the local system.",
+          "$ref": "#/$defs/SystemName"
+        },
+        "datapoint": {
+          "description": "kind element and datapoint: datapoint name without system prefix and without element part.",
+          "$ref": "#/$defs/DpName"
+        },
+        "element": {
+          "description": "kind element only: dotted element path inside the datapoint, e.g. motor.speed. Empty string for a datapoint type whose root is a value element.",
+          "$ref": "#/$defs/ElementPath"
+        },
+        "pattern": {
+          "description": "kind pattern only: dpNames pattern for datapoint names, without system prefix and without '.'. '*' and '?' are wildcards, {a,b} lists alternatives. '*' matches all datapoints of the type. Internal and MMQ datapoints are always filtered out at runtime, whatever the pattern.",
+          "$ref": "#/$defs/DpPattern"
+        },
+        "elements": {
+          "description": "kind datapoint and pattern only: selected elements, in display order. Omit to select all value elements of the type (elements added to the type later are picked up by the next apply). The same path may appear twice with different topics.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/ElementSelection" }
+        },
+        "overrides": {
+          "description": "Overrides for all topics of this binding; win over node overrides.",
+          "$ref": "#/$defs/Overrides"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "element" } }, "required": ["kind"] },
+          "then": {
+            "required": ["datapoint", "element"],
+            "properties": { "datapoint": true, "element": true, "pattern": false, "elements": false }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "datapoint" } }, "required": ["kind"] },
+          "then": {
+            "required": ["datapoint"],
+            "properties": { "datapoint": true, "element": false, "pattern": false }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "pattern" } }, "required": ["kind"] },
+          "then": {
+            "required": ["pattern"],
+            "properties": { "pattern": true, "datapoint": false, "element": false }
+          }
+        }
+      ]
+    },
+    "ElementSelection": {
+      "description": "One selected element of a datapoint or pattern binding.",
+      "type": "object",
+      "required": ["path"],
+      "properties": {
+        "path": {
+          "description": "Dotted element path relative to the datapoint, e.g. motor.speed. Empty string for a datapoint type whose root is a value element.",
+          "$ref": "#/$defs/ElementPath"
+        },
+        "topic": {
+          "description": "Replaces the element path part of the topic: <node>/<topic> (datapoint) or <node>/<dp>/<topic> (pattern). '/' separates levels. Empty string publishes on <node> or <node>/<dp>. Omit to use the element path with '.' as '/' (each element name percent-encoded).",
+          "$ref": "#/$defs/RelativeTopic"
+        },
+        "overrides": {
+          "description": "Overrides for this element only; win over binding and node overrides.",
+          "$ref": "#/$defs/Overrides"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Overrides": {
+      "description": "Topic semantics and payload fields at node, binding or element level. Every property is optional; an absent property is inherited: built-in defaults, then device topicDefaults/payloadDefaults, then node overrides from root to leaf, then binding, then element. retain, qos, timestamp and encoding override one by one; publishMode, deadband and intervalMs are one unit (a level that sets publishMode replaces the inherited deadband and intervalMs); payload replaces the inherited list.",
+      "type": "object",
+      "properties": {
+        "retain": { "$ref": "#/$defs/Retain" },
+        "qos": { "$ref": "#/$defs/Qos" },
+        "publishMode": { "$ref": "#/$defs/PublishMode" },
+        "deadband": { "$ref": "#/$defs/Deadband" },
+        "intervalMs": { "$ref": "#/$defs/IntervalMs" },
+        "timestamp": { "$ref": "#/$defs/TimestampSource" },
+        "encoding": { "$ref": "#/$defs/Encoding" },
+        "payload": { "$ref": "#/$defs/PayloadFields" }
+      },
+      "additionalProperties": false,
+      "allOf": [{ "$ref": "#/$defs/PublishModeRules" }]
+    },
+    "TopicSemantics": {
+      "description": "Topic semantics without payload fields; the shape of the device setting topicDefaults. Absent properties take the built-in defaults.",
+      "type": "object",
+      "properties": {
+        "retain": { "$ref": "#/$defs/Retain" },
+        "qos": { "$ref": "#/$defs/Qos" },
+        "publishMode": { "$ref": "#/$defs/PublishMode" },
+        "deadband": { "$ref": "#/$defs/Deadband" },
+        "intervalMs": { "$ref": "#/$defs/IntervalMs" },
+        "timestamp": { "$ref": "#/$defs/TimestampSource" },
+        "encoding": { "$ref": "#/$defs/Encoding" }
+      },
+      "additionalProperties": false,
+      "allOf": [{ "$ref": "#/$defs/PublishModeRules" }]
+    },
+    "PublishModeRules": {
+      "description": "deadband and intervalMs are only set together with the publishMode that uses them.",
+      "type": "object",
+      "dependentRequired": { "deadband": ["publishMode"], "intervalMs": ["publishMode"] },
+      "allOf": [
+        {
+          "if": { "properties": { "publishMode": { "const": "onChange" } }, "required": ["publishMode"] },
+          "then": { "properties": { "deadband": false, "intervalMs": false } }
+        },
+        {
+          "if": { "properties": { "publishMode": { "const": "deadband" } }, "required": ["publishMode"] },
+          "then": { "required": ["deadband"], "properties": { "deadband": true, "intervalMs": false } }
+        },
+        {
+          "if": { "properties": { "publishMode": { "enum": ["minInterval", "cyclic"] } }, "required": ["publishMode"] },
+          "then": { "required": ["intervalMs"], "properties": { "intervalMs": true, "deadband": false } }
+        }
+      ]
+    },
+    "Retain": {
+      "description": "Publish with the MQTT retain flag. Built-in default false.",
+      "type": "boolean"
+    },
+    "Qos": {
+      "description": "MQTT QoS: 0, 1 or 2. Built-in default 0.",
+      "enum": [0, 1, 2]
+    },
+    "PublishMode": {
+      "description": "onChange (built-in default): every value change. deadband: only when the value differs from the last published one by at least deadband (absolute). minInterval: changes, at most once per intervalMs. cyclic: the current value every intervalMs.",
+      "enum": ["onChange", "deadband", "minInterval", "cyclic"]
+    },
+    "Deadband": {
+      "description": "Absolute deadband in the element's unit (no percent). Only with publishMode deadband, which requires it.",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "IntervalMs": {
+      "description": "Interval in milliseconds, 10 to 86400000. Only with publishMode minInterval or cyclic, which require it.",
+      "type": "integer",
+      "minimum": 10,
+      "maximum": 86400000
+    },
+    "TimestampSource": {
+      "description": "Payload time: source (built-in default; _online.._stime of the value) or publish (broker time).",
+      "enum": ["source", "publish"]
+    },
+    "Encoding": {
+      "description": "json (built-in default): a JSON object with the payload fields. raw: only the value, payload fields are ignored.",
+      "enum": ["json", "raw"]
+    },
+    "PayloadFields": {
+      "description": "Fields of the JSON payload, in order; the shape of the device setting payloadDefaults. Built-in default [\"value\", \"time\"]. Must contain value. value: online value; time: timestamp (RFC 3339 ms UTC); unit, description, format: element metadata; pvRange: {min,max} from _pv_range; status: raw _online.._status bits as integer; objects add further config attributes.",
+      "type": "array",
+      "uniqueItems": true,
+      "contains": { "const": "value" },
+      "items": {
+        "if": { "type": "string" },
+        "then": { "$ref": "#/$defs/PayloadField" },
+        "else": { "$ref": "#/$defs/ConfigAttributeField" }
+      }
+    },
+    "PayloadField": {
+      "description": "A predefined payload field: value, time, unit, description, format, pvRange or status.",
+      "enum": ["value", "time", "unit", "description", "format", "pvRange", "status"]
+    },
+    "ConfigAttributeField": {
+      "description": "A further WinCC OA config attribute of the element, published as payload key name. The attributes that may be read are an allowlist of the validator.",
+      "type": "object",
+      "required": ["name", "attribute"],
+      "properties": {
+        "name": {
+          "description": "Payload key. Letters, digits and '_', starting with a letter; not a predefined field name.",
+          "type": "string",
+          "maxLength": 64,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "not": { "description": "a predefined payload field name cannot be used as a config attribute key", "$ref": "#/$defs/PayloadField" }
+        },
+        "attribute": {
+          "description": "Config attribute without DPE: _config.<detail>._attribute, e.g. _online.._invalid, _alert_hdl.2._u_limit or _lock._original._locked.",
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^_[a-z][a-z0-9_]*\\.([0-9]+|_[a-z][a-z0-9_]*)?\\._[a-z][a-z0-9_]*$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Source": {
+      "description": "Analysed topic selection of a Direction B run.",
+      "type": "object",
+      "required": ["mode", "topicFilters"],
+      "properties": {
+        "mode": {
+          "description": "live: topics and values seen live. archive: last values of an archive group.",
+          "enum": ["live", "archive"]
+        },
+        "archiveGroup": {
+          "description": "mode archive only: archive group name.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "topicFilters": {
+          "description": "Analysed subtrees as MQTT topic filters, e.g. plant/line1/#.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/TopicFilter" }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "archive" } }, "required": ["mode"] },
+          "then": { "required": ["archiveGroup"], "properties": { "archiveGroup": true } },
+          "else": { "properties": { "archiveGroup": false } }
+        }
+      ]
+    },
+    "TypeProposal": {
+      "description": "A datapoint type to create (reuse false) or an existing type to reuse (reuse true). Existing types are never changed.",
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "description": "Type name without system prefix. New types must start with the device's oaPrefix.",
+          "$ref": "#/$defs/DptName"
+        },
+        "reuse": {
+          "description": "True: the type exists in WinCC OA and is used as is. Omit or false: the type is created.",
+          "type": "boolean"
+        },
+        "excluded": {
+          "description": "True: the user excluded this type and all its datapoints from creation. Set by the user in the review, not by the LLM.",
+          "type": "boolean"
+        },
+        "elements": {
+          "description": "Value elements in creation order. Nesting by dotted path; parent structures are implied and must not be listed. Required for new types; for reused types the elements this proposal uses, which must exist with the same element type. Metadata is the default for every datapoint created from the proposal (also for reused types); the type itself is never changed.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/TypeElement" }
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "reuse": { "const": true } }, "required": ["reuse"] },
+      "else": { "required": ["elements"], "properties": { "elements": true } }
+    },
+    "TypeElement": {
+      "description": "A value element of a datapoint type with optional metadata. Metadata is written as WinCC OA config of every created datapoint, never as extra elements.",
+      "type": "object",
+      "required": ["path", "elementType"],
+      "properties": {
+        "path": {
+          "description": "Dotted element path, e.g. motor.speed.",
+          "$ref": "#/$defs/ElementPathNonEmpty"
+        },
+        "elementType": { "$ref": "#/$defs/ElementType" },
+        "unit": { "$ref": "#/$defs/Unit" },
+        "description": { "$ref": "#/$defs/ElementDescription" },
+        "format": {
+          "description": "WinCC OA printf-style format with one conversion that fits elementType: d, i, u, o, x, X for int, uint and bit32; e, E, f, F, g, G for float; s for string; none for bool, time and blob.",
+          "type": "string",
+          "maxLength": 32
+        },
+        "pvRange": {
+          "description": "Value range written to _pv_range. int, uint and float only; integers for int and uint, not negative for uint.",
+          "$ref": "#/$defs/PvRange"
+        },
+        "alert": {
+          "description": "Alert handling written to _alert_hdl. analog for int, uint and float, binary for bool.",
+          "$ref": "#/$defs/Alert"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "elementType": { "const": "int" } }, "required": ["elementType"] },
+          "then": {
+            "properties": {
+              "format": { "$ref": "#/$defs/IntegerFormat" },
+              "pvRange": { "type": "object", "properties": { "min": { "type": "integer" }, "max": { "type": "integer" } } },
+              "alert": { "type": "object", "properties": { "kind": { "const": "analog" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "elementType": { "const": "uint" } }, "required": ["elementType"] },
+          "then": {
+            "properties": {
+              "format": { "$ref": "#/$defs/IntegerFormat" },
+              "pvRange": { "type": "object", "properties": { "min": { "type": "integer", "minimum": 0 }, "max": { "type": "integer", "minimum": 0 } } },
+              "alert": { "type": "object", "properties": { "kind": { "const": "analog" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "elementType": { "const": "float" } }, "required": ["elementType"] },
+          "then": {
+            "properties": {
+              "format": { "$ref": "#/$defs/FloatFormat" },
+              "alert": { "type": "object", "properties": { "kind": { "const": "analog" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "elementType": { "const": "bool" } }, "required": ["elementType"] },
+          "then": {
+            "properties": {
+              "unit": false, "format": false, "pvRange": false,
+              "alert": { "type": "object", "properties": { "kind": { "const": "binary" } } }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "elementType": { "const": "string" } }, "required": ["elementType"] },
+          "then": { "properties": { "format": { "$ref": "#/$defs/StringFormat" }, "pvRange": false, "alert": false } }
+        },
+        {
+          "if": { "properties": { "elementType": { "const": "bit32" } }, "required": ["elementType"] },
+          "then": { "properties": { "unit": false, "format": { "$ref": "#/$defs/IntegerFormat" }, "pvRange": false, "alert": false } }
+        },
+        {
+          "if": { "properties": { "elementType": { "enum": ["time", "blob"] } }, "required": ["elementType"] },
+          "then": { "properties": { "unit": false, "format": false, "pvRange": false, "alert": false } }
+        }
+      ]
+    },
+    "ElementType": {
+      "description": "WinCC OA element type to create. bool; int: 32-bit signed integer; uint: 32-bit unsigned integer; float: 64-bit floating point, the default for measurements; string: UTF-8 text (WinCC OA 'text'); time: timestamp; bit32: 32-bit pattern; blob: bytes. Prefer float unless the value is a count, enum or id that is always integral and within 32 bits.",
+      "enum": ["bool", "int", "uint", "float", "string", "time", "bit32", "blob"]
+    },
+    "Unit": {
+      "description": "Unit text, e.g. m³/h. Not for bool, bit32, time and blob.",
+      "type": "string",
+      "maxLength": 64
+    },
+    "ElementDescription": {
+      "description": "Element description text.",
+      "type": "string",
+      "maxLength": 1024
+    },
+    "Format": {
+      "description": "WinCC OA printf-style format with one conversion, e.g. %.1f, %d or %s.",
+      "type": "string",
+      "maxLength": 32,
+      "pattern": "^%[-+ #0]*[0-9]*(\\.[0-9]+)?((hh|h|ll|l)?[diouxX]|l?[eEfFgG]|s)$"
+    },
+    "IntegerFormat": {
+      "description": "printf-style format for int, uint and bit32, e.g. %d, %5u or %08X.",
+      "type": "string",
+      "pattern": "^%[-+ #0]*[0-9]*(\\.[0-9]+)?(hh|h|ll|l)?[diouxX]$"
+    },
+    "FloatFormat": {
+      "description": "printf-style format for float, e.g. %.1f, %8.3e or %g.",
+      "type": "string",
+      "pattern": "^%[-+ #0]*[0-9]*(\\.[0-9]+)?l?[eEfFgG]$"
+    },
+    "StringFormat": {
+      "description": "printf-style format for string, e.g. %s or %-20s.",
+      "type": "string",
+      "pattern": "^%-?[0-9]*(\\.[0-9]+)?s$"
+    },
+    "PvRange": {
+      "description": "Inclusive value range.",
+      "type": "object",
+      "required": ["min", "max"],
+      "properties": {
+        "min": { "description": "Lowest valid value.", "type": "number" },
+        "max": { "description": "Highest valid value; not below min.", "type": "number" }
+      },
+      "additionalProperties": false
+    },
+    "Alert": {
+      "description": "Alert handling. analog: limits on a numeric value. binary: alert while a bool element has alarmValue.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "description": "analog or binary.",
+          "enum": ["analog", "binary"]
+        },
+        "limits": {
+          "description": "analog only: limits; values between all below and all above limits are good.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/AlertLimit" }
+        },
+        "alarmValue": {
+          "description": "binary only: the value that raises the alert. Omit for true.",
+          "type": "boolean"
+        },
+        "class": {
+          "description": "binary only: alert class, the _AlertClass datapoint name without system and without '.', e.g. alert, warning. Written as '<system>:<class>.'.",
+          "$ref": "#/$defs/OaName"
+        },
+        "text": {
+          "description": "binary only: text of the alarm state; the text of the other state stays empty.",
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "analog" } }, "required": ["kind"] },
+          "then": {
+            "required": ["limits"],
+            "properties": { "limits": true, "alarmValue": false, "class": false, "text": false }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "binary" } }, "required": ["kind"] },
+          "then": { "required": ["class"], "properties": { "class": true, "limits": false } }
+        }
+      ]
+    },
+    "AlertLimit": {
+      "description": "One analog alert limit.",
+      "type": "object",
+      "required": ["when", "limit", "class"],
+      "properties": {
+        "when": {
+          "description": "above: alert while value > limit (a value equal to the limit is good). below: alert while value < limit.",
+          "enum": ["above", "below"]
+        },
+        "limit": { "description": "Limit value.", "type": "number" },
+        "class": {
+          "description": "Alert class, the _AlertClass datapoint name without system and without '.', e.g. warning, alert. Written as '<system>:<class>.'.",
+          "$ref": "#/$defs/OaName"
+        },
+        "text": {
+          "description": "Alert text for this limit.",
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "additionalProperties": false
+    },
+    "Datapoint": {
+      "description": "A datapoint to create, fed from MQTT topics. An existing datapoint of the same type is skipped and not changed.",
+      "type": "object",
+      "required": ["name", "type", "bindings"],
+      "properties": {
+        "name": {
+          "description": "Datapoint name without system prefix. Must start with the device's oaPrefix.",
+          "$ref": "#/$defs/DpName"
+        },
+        "type": {
+          "description": "Name of an entry in types.",
+          "$ref": "#/$defs/DptName"
+        },
+        "excluded": {
+          "description": "True: the user excluded this datapoint from creation. Set by the user in the review, not by the LLM.",
+          "type": "boolean"
+        },
+        "elements": {
+          "description": "Metadata of this datapoint that differs from its type's elements, e.g. an instance-specific description or range. At most one entry per element.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/DatapointElement" }
+        },
+        "bindings": {
+          "description": "Topic to element bindings. At most one binding per element.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/TopicBinding" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "DatapointElement": {
+      "description": "Metadata for one element of one datapoint. Each property replaces the type-level value (pvRange and alert as a whole); at least one is set. The elementType rules of TypeElement apply.",
+      "type": "object",
+      "required": ["path"],
+      "minProperties": 2,
+      "properties": {
+        "path": {
+          "description": "Dotted element path of a value element of the datapoint's type; empty string for a reused type whose root is a value element.",
+          "$ref": "#/$defs/ElementPath"
+        },
+        "unit": { "$ref": "#/$defs/Unit" },
+        "description": { "$ref": "#/$defs/ElementDescription" },
+        "format": { "$ref": "#/$defs/Format" },
+        "pvRange": { "$ref": "#/$defs/PvRange" },
+        "alert": { "$ref": "#/$defs/Alert" }
+      },
+      "additionalProperties": false
+    },
+    "TopicBinding": {
+      "description": "Writes values received on topic to one element of the datapoint, with broker receive time as source time.",
+      "type": "object",
+      "required": ["element", "topic"],
+      "properties": {
+        "element": {
+          "description": "Dotted element path of a value element of the datapoint's type; empty string for a reused type whose root is a value element.",
+          "$ref": "#/$defs/ElementPath"
+        },
+        "topic": { "$ref": "#/$defs/SourceTopic" },
+        "jsonPath": {
+          "description": "Field in a JSON payload: $ followed by .key, ['key'], [\"key\"] or [index] steps, e.g. $.motor.speed, $['motor current'] or $.values[0]. No wildcards or filters; a key that contains both quote characters cannot be addressed. Omit when the whole payload is the value.",
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^\\$(\\.[^.\\[\\]'\"\\x00-\\x20\\x7f-\\x9f*?()@$\\\\]+|\\[(0|[1-9][0-9]*)\\]|\\['[^'\\x00-\\x1f]+'\\]|\\[\"[^\"\\x00-\\x1f]+\"\\])+$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "AiRun": {
+      "description": "Provenance of an AI-generated document, stamped by the server.",
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": { "description": "GenAI provider name.", "type": "string", "minLength": 1, "maxLength": 128 },
+        "model": { "description": "Model reported by the provider.", "type": "string", "minLength": 1, "maxLength": 128 },
+        "finishedAt": {
+          "description": "End of the run, RFC 3339.",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "NodeId": {
+      "description": "Opaque node id: 1 to 64 letters, digits, '_' or '-'.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "Segment": {
+      "description": "One UNS topic level: no '/', '+', '#', control characters (C0, DEL, C1) or invisible formatting characters, no leading or trailing space of any kind.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿]([^/+#\\x00-\\x1f\\x7f-\\x9f​-‏ -‮⁠-⁤﻿￾￿]*[^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿])?$",
+      "not": { "description": "'..set' is reserved for write-through and cannot be a topic level", "const": "..set" }
+    },
+    "RelativeTopic": {
+      "description": "Zero or more UNS levels separated by '/', each a valid Segment: no empty level, no '+', '#', control or invisible characters, no leading or trailing space in a level.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^([^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿]([^/+#\\x00-\\x1f\\x7f-\\x9f​-‏ -‮⁠-⁤﻿￾￿]*[^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿])?(/[^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿]([^/+#\\x00-\\x1f\\x7f-\\x9f​-‏ -‮⁠-⁤﻿￾￿]*[^ /+#\\x00-\\x1f\\x7f-\\xa0  -‏ -  -⁤　﻿￾￿])?)*)?$",
+      "not": { "description": "'..set' is reserved for write-through and cannot be a topic level", "pattern": "(^|/)\\.\\.set(/|$)" }
+    },
+    "SourceTopic": {
+      "description": "Concrete MQTT source topic (absolute, not relative to unsRoot): no '+', '#' or control characters, not starting with '$', no '..set' level. Empty levels are allowed.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^+#\\x00-\\x1f\\x7f-\\x9f]+$",
+      "not": { "description": "topics starting with '$' and '..set' levels cannot be source topics", "pattern": "^\\$|(^|/)\\.\\.set(/|$)" }
+    },
+    "TopicFilter": {
+      "description": "MQTT topic filter; '+' is a whole level, '#' only as the last level; no control characters, not starting with '$', no '..set' level.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^(([^+#/\\x00-\\x1f\\x7f-\\x9f]*|\\+)/)*([^+#/\\x00-\\x1f\\x7f-\\x9f]*|\\+|#)$",
+      "not": { "description": "topic filters starting with '$' and '..set' levels cannot be analysed", "pattern": "^\\$|(^|/)\\.\\.set(/|$)" }
+    },
+    "OaName": {
+      "description": "WinCC OA name: no control characters, space, $ * , . : ; ? @ [ ] { }.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}]+$"
+    },
+    "SystemName": {
+      "description": "WinCC OA system name without ':': a WinCC OA name not starting with '_', without '/', quotes or backslash.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\/_][^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\/]*$"
+    },
+    "DpName": {
+      "description": "Datapoint name without system prefix (a remote system goes into system) and without element part: a WinCC OA name not starting with '_'.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}_][^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}]*$"
+    },
+    "DptName": {
+      "description": "Datapoint type name without system prefix: a WinCC OA name not starting with '_', without quotes or backslash.",
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}_'\"\\\\][^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\]*$"
+    },
+    "DpPattern": {
+      "description": "dpNames pattern over datapoint names without system prefix and element part: name characters plus '*', '?' and one level of {a,b}; no '.', ':', '[', ']', quotes or backslash; no alternative starting with '_'.",
+      "type": "string",
+      "maxLength": 256,
+      "pattern": "^([^\\x00-\\x20\\x7f-\\x9f$,.:;@\\[\\]{}'\"\\\\]|\\{[^\\x00-\\x20\\x7f-\\x9f$,.:;@\\[\\]{}'\"\\\\]+(,[^\\x00-\\x20\\x7f-\\x9f$,.:;@\\[\\]{}'\"\\\\]+)*\\})+$",
+      "not": { "description": "internal datapoints (names starting with '_') cannot be selected", "pattern": "(^|[{,])_" }
+    },
+    "ElementPath": {
+      "description": "Dotted element path without system, datapoint or config part; empty string is the datapoint root. Element names: no control characters, space, $ * , . : ; ? @ [ ] { }, quotes or backslash.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^([^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\]+(\\.[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\]+)*)?$"
+    },
+    "ElementPathNonEmpty": {
+      "description": "Dotted element path with at least one element name. Element names: no control characters, space, $ * , . : ; ? @ [ ] { }, quotes or backslash.",
+      "type": "string",
+      "maxLength": 1024,
+      "pattern": "^[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\]+(\\.[^\\x00-\\x20\\x7f-\\x9f$*,.:;?@\\[\\]{}'\"\\\\]+)*$"
+    },
+    "Isa95Level": {
+      "description": "ISA-95 role-based equipment hierarchy level (extended by ISA-88 modules).",
+      "enum": [
+        "enterprise", "site", "area",
+        "workCenter", "processCell", "productionUnit", "productionLine", "storageZone",
+        "workUnit", "unit", "workCell", "storageUnit",
+        "equipmentModule", "controlModule"
+      ]
+    }
+  }
+}

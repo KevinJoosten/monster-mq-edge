@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "aiRun": { "provider": "gemini-default", "model": "gemini-2.5-pro", "finishedAt": "2026-10-12T09:15:02.481Z" },
+  "tree": [
+    {
+      "name": "filling-1",
+      "level": "productionLine",
+      "aiGenerated": true,
+      "children": [
+        {
+          "name": "pump-p101",
+          "level": "equipmentModule",
+          "aiGenerated": true,
+          "binding": {
+            "kind": "element", "type": "PumpType", "datapoint": "Hall2_P101", "element": "flow"
+          },
+          "children": [
+            {
+              "name": "speed",
+              "description": "Added by hand below an element-bound node.",
+              "binding": { "kind": "element", "type": "PumpType", "datapoint": "Hall2_P101", "element": "motor.speed" }
+            }
+          ]
+        },
+        {
+          "name": "outlet-flow",
+          "description": "Same DPE as pump-p101, bound a second time.",
+          "binding": { "kind": "element", "type": "PumpType", "datapoint": "Hall2_P101", "element": "flow" }
+        }
+      ]
+    }
+  ]
+}

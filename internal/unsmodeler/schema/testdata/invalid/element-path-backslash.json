@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "line-1",
+      "level": "productionLine",
+      "children": [
+        {
+          "name": "outlet-flow",
+          "binding": {
+            "kind": "element",
+            "type": "PumpType",
+            "datapoint": "Hall2_P101",
+            "element": "flow"
+          }
+        },
+        {
+          "name": "pump-p101",
+          "binding": {
+            "kind": "datapoint",
+            "type": "PumpType",
+            "datapoint": "Hall2_P101",
+            "elements": [
+              {
+                "path": "a\\b",
+                "overrides": {
+                  "qos": 1
+                }
+              },
+              {
+                "path": "motor.speed",
+                "topic": "speed"
+              }
+            ]
+          }
+        },
+        {
+          "name": "pumps",
+          "binding": {
+            "kind": "pattern",
+            "type": "PumpType",
+            "pattern": "Hall2_L2_P*"
+          }
+        }
+      ]
+    }
+  ]
+}

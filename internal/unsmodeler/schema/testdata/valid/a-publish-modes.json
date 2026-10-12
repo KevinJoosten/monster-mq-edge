@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "modes",
+      "overrides": { "publishMode": "deadband", "deadband": 1, "qos": 2, "timestamp": "publish" },
+      "children": [
+        {
+          "name": "tank-level",
+          "overrides": { "publishMode": "deadband", "deadband": 0.25 },
+          "binding": { "kind": "element", "type": "TankType", "datapoint": "Tank1", "element": "level" }
+        },
+        {
+          "name": "on-change",
+          "binding": {
+            "kind": "element", "type": "TankType", "datapoint": "Tank1", "element": "level",
+            "overrides": { "publishMode": "onChange", "retain": true }
+          }
+        },
+        {
+          "name": "tank-1",
+          "binding": {
+            "kind": "datapoint",
+            "type": "TankType",
+            "datapoint": "Tank1",
+            "overrides": { "publishMode": "minInterval", "intervalMs": 1000 },
+            "elements": [
+              { "path": "level", "topic": "level/throttled", "overrides": { "publishMode": "minInterval", "intervalMs": 250 } },
+              { "path": "level", "topic": "level/cyclic", "overrides": { "publishMode": "cyclic", "intervalMs": 60000 } },
+              { "path": "temperature", "overrides": { "publishMode": "deadband", "deadband": 0.1 } },
+              { "path": "alarmBits", "overrides": { "encoding": "raw", "publishMode": "onChange" } }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

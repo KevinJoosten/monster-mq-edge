@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "direction": "mqtt_to_winccoa",
+  "source": {
+    "mode": "archive",
+    "archiveGroup": "Default",
+    "topicFilters": [
+      "plant/line1/#"
+    ]
+  },
+  "types": [
+    {
+      "name": "UNS_Pump",
+      "elements": [
+        {
+          "path": "flow",
+          "elementType": "float",
+          "unit": "m³/h",
+          "pvRange": {
+            "min": 0,
+            "max": "100%"
+          },
+          "alert": {
+            "kind": "analog",
+            "limits": [
+              {
+                "when": "above",
+                "limit": 180,
+                "class": "warning"
+              }
+            ]
+          }
+        },
+        {
+          "path": "motor.speed",
+          "elementType": "float"
+        },
+        {
+          "path": "running",
+          "elementType": "bool",
+          "alert": {
+            "kind": "binary",
+            "class": "alert"
+          }
+        }
+      ]
+    }
+  ],
+  "datapoints": [
+    {
+      "name": "UNS_Line1_Pump1",
+      "type": "UNS_Pump",
+      "bindings": [
+        {
+          "element": "flow",
+          "topic": "plant/line1/pump1/data",
+          "jsonPath": "$.flow"
+        },
+        {
+          "element": "running",
+          "topic": "plant/line1/pump1/state"
+        }
+      ]
+    }
+  ]
+}

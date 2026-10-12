@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "id": "n-1",
+      "name": "Halle Süd",
+      "level": "area",
+      "children": [
+        {
+          "id": "n_2",
+          "name": "泵-1",
+          "description": "Non-ASCII names and interior spaces are allowed.",
+          "binding": {
+            "kind": "datapoint", "type": "PumpType", "datapoint": "Hall2_P101",
+            "elements": [
+              { "path": "flow", "topic": "Durchfluss m³/h" },
+              { "path": "motor.speed", "topic": "..speed/.hidden" }
+            ]
+          }
+        },
+        { "name": "new-node-without-id" }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "direction": "mqtt_to_winccoa",
+  "source": { "mode": "live", "topicFilters": ["factory/#"] },
+  "types": [
+    { "name": "PumpType", "reuse": true },
+    {
+      "name": "MeterType",
+      "reuse": true,
+      "elements": [ { "path": "energy", "elementType": "float", "unit": "kWh" } ]
+    },
+    {
+      "name": "UNS_Sensor",
+      "reuse": false,
+      "elements": [
+        { "path": "value", "elementType": "float" },
+        { "path": "raw", "elementType": "uint" },
+        { "path": "image", "elementType": "blob" },
+        { "path": "counter", "elementType": "int" }
+      ]
+    }
+  ],
+  "datapoints": [
+    { "name": "UNS_Pump7", "type": "PumpType", "bindings": [ { "element": "flow", "topic": "factory/pump7/flow" } ] },
+    { "name": "UNS_Meter1", "type": "MeterType", "bindings": [ { "element": "energy", "topic": "factory/meter1", "jsonPath": "$.values[2].kWh" } ] },
+    {
+      "name": "UNS_Sensor1",
+      "type": "UNS_Sensor",
+      "bindings": [
+        { "element": "value", "topic": "factory//sensor1" },
+        { "element": "raw", "topic": "factory/sensor1/raw" }
+      ]
+    }
+  ]
+}

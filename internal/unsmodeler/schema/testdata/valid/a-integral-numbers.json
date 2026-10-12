@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1.0,
+  "direction": "winccoa_to_uns",
+  "tree": [
+    {
+      "name": "numbers",
+      "description": "JSON Schema treats 1.0 and 1e3 as integers; the Go document model must accept them too.",
+      "overrides": { "qos": 1.0, "publishMode": "cyclic", "intervalMs": 1e3 },
+      "binding": { "kind": "element", "type": "TankType", "datapoint": "Tank1", "element": "level" }
+    }
+  ]
+}

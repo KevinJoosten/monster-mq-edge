@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "direction": "mqtt_to_winccoa",
+  "aiRun": { "provider": "claude-default", "model": "claude-sonnet-4-5" },
+  "source": { "mode": "archive", "archiveGroup": "Default", "topicFilters": ["plant/line1/#", "plant/line2/+/data"] },
+  "types": [
+    {
+      "name": "UNS_Pump",
+      "elements": [
+        {
+          "path": "flow", "elementType": "float", "unit": "m³/h", "description": "Outlet flow", "format": "%.1f",
+          "pvRange": { "min": 0, "max": 200 },
+          "alert": {
+            "kind": "analog",
+            "limits": [
+              { "when": "below", "limit": 5, "class": "warning", "text": "Flow low" },
+              { "when": "above", "limit": 180, "class": "warning" },
+              { "when": "above", "limit": 195, "class": "alert", "text": "Flow high high" }
+            ]
+          }
+        },
+        { "path": "motor.speed", "elementType": "float", "unit": "rpm", "format": "%5.0f" },
+        { "path": "motor.current", "elementType": "float", "unit": "A" },
+        { "path": "motor.hours", "elementType": "uint", "unit": "h", "format": "%u" },
+        {
+          "path": "running", "elementType": "bool", "description": "Pump running",
+          "alert": { "kind": "binary", "alarmValue": false, "class": "information", "text": "Pump stopped" }
+        },
+        { "path": "fault", "elementType": "bool", "alert": { "kind": "binary", "class": "alert" } },
+        { "path": "state.mode", "elementType": "string" },
+        { "path": "state.since", "elementType": "time" },
+        { "path": "state.flags", "elementType": "bit32" }
+      ]
+    },
+    {
+      "name": "UNS_Tank",
+      "excluded": true,
+      "elements": [ { "path": "level", "elementType": "int", "pvRange": { "min": 0, "max": 100 } } ]
+    }
+  ],
+  "datapoints": [
+    {
+      "name": "UNS_Line1_Pump1",
+      "type": "UNS_Pump",
+      "bindings": [
+        { "element": "flow", "topic": "plant/line1/pump1/data", "jsonPath": "$.flow" },
+        { "element": "motor.speed", "topic": "plant/line1/pump1/data", "jsonPath": "$.motor.speed" },
+        { "element": "motor.current", "topic": "plant/line1/pump1/data", "jsonPath": "$['motor current']" },
+        { "element": "running", "topic": "plant/line1/pump1/state" },
+        { "element": "state.mode", "topic": "plant/line1/pump1/data", "jsonPath": "$.modes[0]" }
+      ]
+    },
+    {
+      "name": "UNS_Line1_Pump2",
+      "type": "UNS_Pump",
+      "excluded": true,
+      "bindings": [ { "element": "flow", "topic": "plant/line1/pump2/data", "jsonPath": "$.flow" } ]
+    },
+    {
+      "name": "UNS_Line1_Tank1",
+      "type": "UNS_Tank",
+      "bindings": [ { "element": "level", "topic": "plant/line1/tank1/level" } ]
+    }
+  ]
+}

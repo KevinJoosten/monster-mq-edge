@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "direction": "mqtt_to_winccoa",
+  "source": { "mode": "live", "topicFilters": ["plant/line1/#", "/legacy/+/value"] },
+  "types": [
+    {
+      "name": "UNS_Pump",
+      "elements": [
+        { "path": "flow", "elementType": "float", "unit": "m³/h", "format": "%.1f", "pvRange": { "min": 0, "max": 200 } },
+        { "path": "starts", "elementType": "uint", "format": "%u", "pvRange": { "min": 0, "max": 100000 } },
+        { "path": "stage", "elementType": "int", "format": "%d", "pvRange": { "min": -2, "max": 5 },
+          "alert": { "kind": "analog", "limits": [ { "when": "above", "limit": 4, "class": "warning" } ] } },
+        { "path": "flags", "elementType": "bit32", "format": "%08X" },
+        { "path": "label", "elementType": "string", "format": "%-20s" }
+      ]
+    },
+    { "name": "ExampleDP_Float", "reuse": true }
+  ],
+  "datapoints": [
+    {
+      "name": "UNS_Line1_P101",
+      "type": "UNS_Pump",
+      "elements": [
+        { "path": "flow", "description": "Pump P101 outlet flow", "pvRange": { "min": 0, "max": 150 } },
+        { "path": "stage", "alert": { "kind": "analog", "limits": [ { "when": "above", "limit": 3, "class": "alert", "text": "Stage high" } ] } }
+      ],
+      "bindings": [
+        { "element": "flow", "topic": "plant/line1/p101/data", "jsonPath": "$[\"flow rate\"]" },
+        { "element": "starts", "topic": "plant/line1/p101/data", "jsonPath": "$.counters[0]" },
+        { "element": "stage", "topic": "plant/line1/p101/data", "jsonPath": "$['stage']" },
+        { "element": "flags", "topic": "plant/line1/p101/flags" },
+        { "element": "label", "topic": "plant/line1/p101/label" }
+      ]
+    },
+    {
+      "name": "UNS_Line1_Ambient",
+      "type": "ExampleDP_Float",
+      "elements": [ { "path": "", "unit": "°C", "description": "Ambient temperature line 1" } ],
+      "bindings": [ { "element": "", "topic": "/legacy/ambient/value" } ]
+    }
+  ]
+}

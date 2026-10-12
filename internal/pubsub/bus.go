@@ -17,6 +17,16 @@ type Bus struct {
 	subs     map[int]*sub
 	count    atomic.Int32
 	observer Observer
+	interest InterestHook
+}
+
+// InterestHook gives bus subscribers the same side effects as an MQTT
+// SUBSCRIBE (e.g. connecting WinCC OA datapoints). Calls happen outside the
+// bus lock; the hook delivers current values with Deliver.
+type InterestHook interface {
+	Validate(filters []string) error
+	Subscribed(id int, filters []string)
+	Unsubscribed(id int, filters []string)
 }
 
 // Observer is told which filters bus subscribers hold (PeerLink interest routing). Calls happen
@@ -65,11 +75,59 @@ func (b *Bus) subscribe(filters []string, buffer int, local bool) (id int, ch <-
 	b.subs[id] = s
 	b.count.Store(int32(len(b.subs)))
 	o := b.observer
+	ih := b.interest
 	b.mu.Unlock()
 	if o != nil && !local && len(filters) > 0 {
 		o.FiltersAdded(filters)
 	}
+	if ih != nil && len(filters) > 0 {
+		ih.Subscribed(id, filters)
+	}
 	return id, c, s.overflow
+}
+
+// SetInterestHook installs h. Call it before subscribers exist.
+func (b *Bus) SetInterestHook(h InterestHook) {
+	b.mu.Lock()
+	b.interest = h
+	b.mu.Unlock()
+}
+
+// Validate reports an error when a filter would be rejected by an MQTT
+// SUBSCRIBE (e.g. an invalid WinCC OA native filter).
+func (b *Bus) Validate(filters []string) error {
+	b.mu.RLock()
+	ih := b.interest
+	b.mu.RUnlock()
+	if ih == nil {
+		return nil
+	}
+	return ih.Validate(filters)
+}
+
+// Deliver sends msg to one subscriber only, like a retained message at
+// subscribe time. It reports false when the subscriber is gone.
+func (b *Bus) Deliver(id int, msg stores.BrokerMessage) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	s, ok := b.subs[id]
+	if !ok {
+		return false
+	}
+	select {
+	case s.ch <- msg:
+	default:
+		s.once.Do(func() { close(s.overflow) })
+	}
+	return true
+}
+
+// Active reports whether subscriber id still exists.
+func (b *Bus) Active(id int) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	_, ok := b.subs[id]
+	return ok
 }
 
 // SetObserver installs o and reports the filters of the current subscribers to it.
@@ -102,9 +160,13 @@ func (b *Bus) Unsubscribe(id int) {
 		b.count.Store(int32(len(b.subs)))
 	}
 	o := b.observer
+	ih := b.interest
 	b.mu.Unlock()
 	if ok && o != nil && !s.local && len(s.filters) > 0 {
 		o.FiltersRemoved(s.filters)
+	}
+	if ok && ih != nil && len(s.filters) > 0 {
+		ih.Unsubscribed(id, s.filters)
 	}
 }
 

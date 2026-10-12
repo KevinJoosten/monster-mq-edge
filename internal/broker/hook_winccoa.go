@@ -3,6 +3,7 @@ package broker
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 
@@ -113,26 +114,52 @@ func (h *WinCCOaNativeHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packe
 	if cl.Net.Inline {
 		return pk, nil
 	}
+	return h.handlePublish(cl.ID, pk)
+}
+
+// inlinePublisher is the client id of in-process publishers (GraphQL, REST,
+// scripts, bridges) for native commands. U+0000 is not allowed in MQTT
+// strings, so no MQTT client id can collide.
+const inlinePublisher = "\x00inline"
+
+// InlinePublish applies the native publish rules to an in-process publish,
+// which the engine sends through the inline client that OnPublish skips (the
+// service publishes its own values through it). handled reports a publish
+// the native namespace consumed or rejected; the caller must not deliver it.
+func (h *WinCCOaNativeHook) InlinePublish(topic string, payload []byte, retain bool, qos byte) (handled bool, err error) {
+	pk := packets.Packet{
+		FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: qos, Retain: retain},
+		TopicName:   topic,
+		Payload:     payload,
+	}
+	_, err = h.handlePublish(inlinePublisher, pk)
+	if errors.Is(err, packets.CodeSuccessIgnore) {
+		return true, nil
+	}
+	return err != nil, err
+}
+
+func (h *WinCCOaNativeHook) handlePublish(clientID string, pk packets.Packet) (packets.Packet, error) {
 	switch kind := h.svc.Names().Classify(pk.TopicName); kind {
 	case winccoanative.KindOther:
 		return pk, nil
 	case winccoanative.KindTopics:
-		return h.publishTopic(cl, pk)
+		return h.publishTopic(clientID, pk)
 	case winccoanative.KindNative:
 	default:
 		if kind == winccoanative.KindStatus && h.svc.StaleStatusClear(pk.TopicName, pk.FixedHeader.Retain, pk.Payload) {
-			h.logger.Info("stale node status cleared", "client", cl.ID, "topic", pk.TopicName)
+			h.logger.Info("stale node status cleared", "client", clientID, "topic", pk.TopicName)
 			return pk, nil
 		}
-		h.logger.Info("publish to reserved topic rejected", "client", cl.ID, "topic", pk.TopicName)
+		h.logger.Info("publish to reserved topic rejected", "client", clientID, "topic", pk.TopicName)
 		return pk, packets.ErrNotAuthorized
 	}
 	reply := winccoanative.Reply{Topic: pk.Properties.ResponseTopic, Correlation: pk.Properties.CorrelationData}
-	v, why := h.svc.Command(cl.ID, pk.TopicName, pk.Payload, pk.FixedHeader.Retain, reply, h.sendReply)
+	v, why := h.svc.Command(clientID, pk.TopicName, pk.Payload, pk.FixedHeader.Retain, reply, h.sendReply)
 	if v == winccoanative.Accept {
 		return pk, packets.CodeSuccessIgnore
 	}
-	h.logger.Info("native command rejected", "client", cl.ID, "topic", pk.TopicName, "verdict", v.String(), "reason", why)
+	h.logger.Info("native command rejected", "client", clientID, "topic", pk.TopicName, "verdict", v.String(), "reason", why)
 	h.rejectReply(pk, reply, v, why)
 	code := verdictCode(v, why)
 	if v == winccoanative.Invalid {
@@ -145,12 +172,12 @@ func (h *WinCCOaNativeHook) OnPublish(cl *mqtt.Client, pk packets.Packet) (packe
 // publishTopic writes a publish of the topics branch to its datapoint. The
 // broker does not deliver or retain it itself: subscribers on every system
 // get it through their datapoint connection.
-func (h *WinCCOaNativeHook) publishTopic(cl *mqtt.Client, pk packets.Packet) (packets.Packet, error) {
+func (h *WinCCOaNativeHook) publishTopic(clientID string, pk packets.Packet) (packets.Packet, error) {
 	v, why := h.svc.PublishTopic(pk.TopicName, pk.Payload, pk.FixedHeader.Retain)
 	if v == winccoanative.Accept {
 		return pk, packets.CodeSuccessIgnore
 	}
-	h.logger.Info("topic publish rejected", "client", cl.ID, "topic", pk.TopicName, "verdict", v.String(), "reason", why)
+	h.logger.Info("topic publish rejected", "client", clientID, "topic", pk.TopicName, "verdict", v.String(), "reason", why)
 	code := verdictCode(v, why)
 	if v == winccoanative.Invalid {
 		code = packets.ErrTopicNameInvalid

@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"monstermq.io/edge/internal/stores"
@@ -189,4 +190,25 @@ func TestAllowAnonymousUserRecord(t *testing.T) {
 	if off := NewCache(nil, false, true); off.Validate("", "") || off.Allow("", "public/x", false) {
 		t.Error("AnonymousEnabled=false should deny regardless of the record")
 	}
+}
+
+// An alias must not widen access for in-process callers (GraphQL, REST):
+// its canonical form has to be allowed too.
+func TestAllowCanonicalAlias(t *testing.T) {
+	c := newTestCache(true,
+		stores.AclRule{TopicPattern: "oa/tags/secret/#", Priority: 100},
+		stores.AclRule{TopicPattern: "oa/#", CanPublish: true, CanSubscribe: true, Priority: 1},
+	)
+	c.SetCanonical(func(topic string) (string, bool) {
+		if rest, ok := strings.CutPrefix(topic, "oa/types/T/"); ok {
+			return "oa/tags/" + rest, true
+		}
+		return "", false
+	})
+	runACLCases(t, c, []aclCase{
+		{"oa/types/T/open/x", false, true},
+		{"oa/types/T/secret/x", false, false},
+		{"oa/types/T/secret/x", true, false},
+		{"oa/tags/secret/x", false, false},
+	})
 }

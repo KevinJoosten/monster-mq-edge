@@ -287,6 +287,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 			logger,
 		)
 		authHook.native = func() winccoanative.Names { return names }
+		authCache.SetCanonical(names.CanonicalOf)
 		if err := server.AddHook(authHook, nil); err != nil {
 			return nil, fmt.Errorf("add monstermq auth hook: %w", err)
 		}
@@ -325,8 +326,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	// commands are consumed (not archived or delivered) and rejected
 	// filters never reach persistence.
 	var native *winccoanative.Service
+	var nativeHook *WinCCOaNativeHook
 	if nativeOn && cfg.WinCCOaNative.Namespace {
-		native = winccoanative.NewService(oahost.API{C: opts.OA}, server, winccoanative.Options{
+		native = winccoanative.NewService(oahost.API{C: opts.OA}, nativeBroker{Server: server, bus: bus}, winccoanative.Options{
 			Names:             names,
 			NodeID:            cfg.NodeID,
 			NoSource:          cfg.WinCCOaNative.EchoPolicy == config.WinCCOaEchoNoSource,
@@ -349,6 +351,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 				return out
 			},
 			SessionExists: func(clientID string) bool {
+				if exists, isBus := busSessionExists(bus, clientID); isBus {
+					return exists
+				}
 				if _, ok := server.Clients.Get(clientID); ok {
 					return true
 				}
@@ -360,10 +365,15 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 			// The service adds the local system (known after its start,
 			// before any listener), which maps shortcut topics for ACLs.
 			authHook.native = native.Names
+			authCache.SetCanonical(func(t string) (string, bool) { return native.Names().CanonicalOf(t) })
 		}
-		if err := server.AddHook(NewWinCCOaNativeHook(native, server, logger), nil); err != nil {
+		nativeHook = NewWinCCOaNativeHook(native, server, logger)
+		if err := server.AddHook(nativeHook, nil); err != nil {
 			return nil, fmt.Errorf("add winccoa native hook: %w", err)
 		}
+		// Bus subscribers (GraphQL, SSE, scripts, bridges) register native
+		// interest like an MQTT SUBSCRIBE.
+		bus.SetInterestHook(nativeBusInterest{svc: native})
 	}
 
 	if opts.OA != nil {
@@ -538,7 +548,14 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	}
 
 	// 7. MQTT bridge manager
+	// In-process publishers follow the native publish rules like an MQTT
+	// client: commands are written to WinCC OA, value topics are protected.
 	publishFn := func(topic string, payload []byte, retain bool, qos byte) error {
+		if nativeHook != nil {
+			if handled, err := nativeHook.InlinePublish(topic, payload, retain, qos); handled {
+				return err
+			}
+		}
 		return server.Publish(topic, payload, retain, qos)
 	}
 	var bridges *mqttclient.Manager

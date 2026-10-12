@@ -1574,6 +1574,9 @@ func (r *subscriptionResolver) TopicUpdates(ctx context.Context, topicFilters []
 			return nil, err
 		}
 	}
+	if err := r.Bus.Validate(topicFilters); err != nil {
+		return nil, err
+	}
 	id, msgCh := r.Bus.Subscribe(topicFilters, 64)
 	out := make(chan *generated.TopicUpdate, 64)
 	go func() {
@@ -1614,6 +1617,9 @@ func (r *subscriptionResolver) TopicUpdatesBulk(ctx context.Context, topicFilter
 	max := maxSize
 	if max <= 0 {
 		max = 100
+	}
+	if err := r.Bus.Validate(topicFilters); err != nil {
+		return nil, err
 	}
 	id, msgCh := r.Bus.Subscribe(topicFilters, 256)
 	out := make(chan *generated.TopicUpdateBulk, 16)

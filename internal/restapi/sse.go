@@ -28,6 +28,10 @@ func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
 		fail(w, 500, "Streaming is unavailable")
 		return
 	}
+	if err := h.bus.Validate(filters); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	for {
 		active := h.activeSSE.Load()
 		if active >= maxSSEClients {

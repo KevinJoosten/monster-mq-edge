@@ -22,6 +22,7 @@ type Cache struct {
 	anonymousAllow      bool
 	aclCheckOnSubscribe bool
 	sessions            map[string]session
+	canonical           func(topic string) (string, bool)
 }
 
 type session struct {
@@ -184,7 +185,28 @@ func (c *Cache) lookup(username string) (stores.User, bool) {
 // topic) are still evaluated against ACL rules — the MQTT engine calls OnACLCheck in
 // publishToClient with the actual topic before delivering each message.
 func (c *Cache) Allow(username, topic string, write bool) bool {
-	return c.AllowClient(username, "", topic, write)
+	if !c.AllowClient(username, "", topic, write) {
+		return false
+	}
+	// An alias (e.g. a WinCC OA type path) must never widen access: its
+	// canonical form has to be allowed too, as for MQTT clients.
+	c.mu.RLock()
+	canonical := c.canonical
+	c.mu.RUnlock()
+	if canonical != nil {
+		if ct, ok := canonical(topic); ok && ct != topic {
+			return c.AllowClient(username, "", ct, write)
+		}
+	}
+	return true
+}
+
+// SetCanonical installs the alias mapping Allow applies to in-process
+// callers (GraphQL, REST). The MQTT auth hook applies it itself.
+func (c *Cache) SetCanonical(f func(topic string) (string, bool)) {
+	c.mu.Lock()
+	c.canonical = f
+	c.mu.Unlock()
 }
 
 // AllowClient is Allow with the MQTT client ID used for %c substitution in ACL

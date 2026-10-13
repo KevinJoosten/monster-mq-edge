@@ -141,8 +141,8 @@ func retainedPacket(msg stores.BrokerMessage) packets.Packet {
 	pk.Properties.ContentType = msg.ContentType
 	pk.Properties.ResponseTopic = msg.ResponseTopic
 	pk.Properties.CorrelationData = msg.CorrelationData
-	for k, v := range msg.UserProperties {
-		pk.Properties.User = append(pk.Properties.User, packets.UserProperty{Key: k, Val: v})
+	for _, u := range msg.UserProperties {
+		pk.Properties.User = append(pk.Properties.User, packets.UserProperty{Key: u.Key, Val: u.Value})
 	}
 	return pk
 }

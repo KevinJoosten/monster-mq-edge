@@ -322,4 +322,3 @@ func (fakeToken) Wait() bool                     { return true }
 func (fakeToken) WaitTimeout(time.Duration) bool { return true }
 func (fakeToken) Done() <-chan struct{}          { ch := make(chan struct{}); close(ch); return ch }
 func (fakeToken) Error() error                   { return nil }
-

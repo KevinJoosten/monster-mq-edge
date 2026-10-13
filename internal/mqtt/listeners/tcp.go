@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"log/slog"
 )
@@ -82,6 +83,7 @@ func tcpNetwork(address string) string {
 // Serve starts waiting for new TCP connections, and calls the establish
 // connection callback for any received.
 func (l *TCP) Serve(establish EstablishFn) {
+	var delay time.Duration
 	for {
 		if atomic.LoadUint32(&l.end) == 1 {
 			return
@@ -89,8 +91,12 @@ func (l *TCP) Serve(establish EstablishFn) {
 
 		conn, err := l.listen.Accept()
 		if err != nil {
-			return
+			if acceptFailed(err, &l.end, &delay, l.log) {
+				return
+			}
+			continue
 		}
+		delay = 0
 
 		if atomic.LoadUint32(&l.end) == 0 {
 			go func() {

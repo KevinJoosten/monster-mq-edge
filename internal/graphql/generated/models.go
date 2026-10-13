@@ -483,25 +483,32 @@ type MqttClientAddressInput struct {
 }
 
 type MqttClientConnectionConfig struct {
-	BrokerURL             string               `json:"brokerUrl"`
-	Username              *string              `json:"username,omitempty"`
-	ClientID              string               `json:"clientId"`
-	CleanSession          bool                 `json:"cleanSession"`
-	KeepAlive             int                  `json:"keepAlive"`
-	ReconnectDelay        int64                `json:"reconnectDelay"`
-	ConnectionTimeout     int64                `json:"connectionTimeout"`
-	Addresses             []*MqttClientAddress `json:"addresses"`
-	BufferEnabled         bool                 `json:"bufferEnabled"`
-	BufferImplementation  string               `json:"bufferImplementation"`
-	BufferSize            int                  `json:"bufferSize"`
-	PersistBuffer         bool                 `json:"persistBuffer"`
-	DeleteOldestMessages  bool                 `json:"deleteOldestMessages"`
-	SslVerifyCertificate  bool                 `json:"sslVerifyCertificate"`
-	ProtocolVersion       *int                 `json:"protocolVersion,omitempty"`
-	SessionExpiryInterval *int64               `json:"sessionExpiryInterval,omitempty"`
-	ReceiveMaximum        *int                 `json:"receiveMaximum,omitempty"`
-	MaximumPacketSize     *int64               `json:"maximumPacketSize,omitempty"`
-	TopicAliasMaximum     *int                 `json:"topicAliasMaximum,omitempty"`
+	BrokerURL               string               `json:"brokerUrl"`
+	Username                *string              `json:"username,omitempty"`
+	ClientID                string               `json:"clientId"`
+	CleanSession            bool                 `json:"cleanSession"`
+	KeepAlive               int                  `json:"keepAlive"`
+	ReconnectDelay          int64                `json:"reconnectDelay"`
+	ConnectionTimeout       int64                `json:"connectionTimeout"`
+	Addresses               []*MqttClientAddress `json:"addresses"`
+	BufferEnabled           bool                 `json:"bufferEnabled"`
+	BufferImplementation    string               `json:"bufferImplementation"`
+	BufferSize              int                  `json:"bufferSize"`
+	PersistBuffer           bool                 `json:"persistBuffer"`
+	DeleteOldestMessages    bool                 `json:"deleteOldestMessages"`
+	SslVerifyCertificate    bool                 `json:"sslVerifyCertificate"`
+	ProtocolVersion         *int                 `json:"protocolVersion,omitempty"`
+	SessionExpiryInterval   *int64               `json:"sessionExpiryInterval,omitempty"`
+	ReceiveMaximum          *int                 `json:"receiveMaximum,omitempty"`
+	MaximumPacketSize       *int64               `json:"maximumPacketSize,omitempty"`
+	TopicAliasMaximum       *int                 `json:"topicAliasMaximum,omitempty"`
+	TLSCaCertPath           *string              `json:"tlsCaCertPath,omitempty"`
+	TLSClientCertPath       *string              `json:"tlsClientCertPath,omitempty"`
+	TLSClientKeyPath        *string              `json:"tlsClientKeyPath,omitempty"`
+	TLSClientKeyPasswordSet bool                 `json:"tlsClientKeyPasswordSet"`
+	TLSClientKeyFormat      string               `json:"tlsClientKeyFormat"`
+	TLSAlpnProtocols        []string             `json:"tlsAlpnProtocols,omitempty"`
+	TLSServerName           *string              `json:"tlsServerName,omitempty"`
 }
 
 type MqttClientConnectionConfigInput struct {
@@ -525,6 +532,13 @@ type MqttClientConnectionConfigInput struct {
 	ReceiveMaximum        *int                      `json:"receiveMaximum,omitempty"`
 	MaximumPacketSize     *int64                    `json:"maximumPacketSize,omitempty"`
 	TopicAliasMaximum     *int                      `json:"topicAliasMaximum,omitempty"`
+	TLSCaCertPath         *string                   `json:"tlsCaCertPath,omitempty"`
+	TLSClientCertPath     *string                   `json:"tlsClientCertPath,omitempty"`
+	TLSClientKeyPath      *string                   `json:"tlsClientKeyPath,omitempty"`
+	TLSClientKeyPassword  *string                   `json:"tlsClientKeyPassword,omitempty"`
+	TLSClientKeyFormat    *string                   `json:"tlsClientKeyFormat,omitempty"`
+	TLSAlpnProtocols      []string                  `json:"tlsAlpnProtocols,omitempty"`
+	TLSServerName         *string                   `json:"tlsServerName,omitempty"`
 }
 
 type MqttClientInput struct {

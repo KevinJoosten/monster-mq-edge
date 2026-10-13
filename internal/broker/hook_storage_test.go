@@ -595,3 +595,20 @@ func TestStorageHookSelectRetainedSkipsExpired(t *testing.T) {
 		t.Errorf("message without expiry: present=%v interval=%d", ok, pk.Properties.MessageExpiryInterval)
 	}
 }
+
+// A retained message replayed from the store keeps its publisher as origin,
+// so No Local skips a client's own retained message, as on the in-memory path.
+func TestStorageHookSelectRetainedKeepsOrigin(t *testing.T) {
+	e := newPeerEnv(t, false)
+	msg := stores.BrokerMessage{TopicName: "t/own", Payload: []byte("a"), IsRetain: true, ClientID: "pub-x", Time: time.Now()}
+	if err := e.retained.MessageStore.AddAll(context.Background(), []stores.BrokerMessage{msg}); err != nil {
+		t.Fatal(err)
+	}
+	pks, err := e.hook.OnSelectRetainedMessages("t/#")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pks) != 1 || pks[0].Origin != "pub-x" {
+		t.Fatalf("replayed %+v, want one packet with origin pub-x", pks)
+	}
+}

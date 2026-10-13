@@ -48,6 +48,16 @@ type Config struct {
 	DeleteOldestMessages bool      `json:"deleteOldestMessages,omitempty"`
 	// Redundancy is the component mode of contract C6: ALWAYS (default), HOT_STANDBY or COLD_STANDBY.
 	Redundancy string `json:"redundancy,omitempty"`
+
+	// TLS, as MonsterMQ Core's MqttClientConnectionConfig (issue #20).
+	SslVerifyCertificate *bool    `json:"sslVerifyCertificate,omitempty"`
+	TlsCaCertPath        string   `json:"tlsCaCertPath,omitempty"`
+	TlsClientCertPath    string   `json:"tlsClientCertPath,omitempty"`
+	TlsClientKeyPath     string   `json:"tlsClientKeyPath,omitempty"`
+	TlsClientKeyPassword string   `json:"tlsClientKeyPassword,omitempty"`
+	TlsClientKeyFormat   string   `json:"tlsClientKeyFormat,omitempty"`
+	TlsAlpnProtocols     []string `json:"tlsAlpnProtocols,omitempty"`
+	TlsServerName        string   `json:"tlsServerName,omitempty"`
 }
 
 // Standby reports whether the bridge has a HOT_STANDBY or COLD_STANDBY mode.

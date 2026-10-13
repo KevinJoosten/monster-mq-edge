@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+
 	"monstermq.io/edge/internal/stores"
 )
 
@@ -168,5 +170,17 @@ func TestBridgeChainOverMQTT311DoesNotLoop(t *testing.T) {
 	// Each bridge stops its own echo there, so the counts are exact.
 	if before != [3]int{1, 2, 3} {
 		t.Errorf("copies (A, B, C) = %v, want (1, 2, 3)", before)
+	}
+}
+
+// A network client may not take a bridge's local client ID.
+func TestNetworkClientCannotConnectAsBridge(t *testing.T) {
+	srv := startNode(t, "a", 27881, filepath.Join(t.TempDir(), "a.db"))
+	t.Cleanup(func() { _ = srv.Close() })
+	client := mqtt.NewClient(mqttOpts(27881, "bridge:to-remote"))
+	tok := client.Connect()
+	if !tok.WaitTimeout(5*time.Second) || tok.Error() == nil {
+		client.Disconnect(0)
+		t.Fatal("a network client connected as bridge:to-remote")
 	}
 }

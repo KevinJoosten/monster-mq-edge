@@ -128,7 +128,10 @@ func NewConnector(name string, cfg Config, publisher LocalPublisher, subBus Loca
 
 // localClientID is the client ID this bridge publishes under locally, so it
 // can recognise — and not forward back — what it brought in itself.
-func (c *Connector) localClientID() string { return "bridge:" + c.name }
+// ClientIDPrefix starts the client ID a bridge publishes locally with.
+const ClientIDPrefix = "bridge:"
+
+func (c *Connector) localClientID() string { return ClientIDPrefix + c.name }
 
 // protocolVersion is the MQTT version to connect with: 3 and 4 mean 3.1.1,
 // 5 or unset mean MQTT 5.

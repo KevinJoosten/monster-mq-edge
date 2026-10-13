@@ -1,8 +1,11 @@
 package broker
 
 import (
+	"bytes"
+	"strings"
 	"sync"
 
+	"monstermq.io/edge/internal/bridge/mqttclient"
 	mqtt "monstermq.io/edge/internal/mqtt"
 	"monstermq.io/edge/internal/mqtt/packets"
 	"monstermq.io/edge/internal/stores"
@@ -44,4 +47,25 @@ func (p *InlinePublisher) client(id string) *mqtt.Client {
 		p.clients[id] = cl
 	}
 	return cl
+}
+
+// bridgeIDHook refuses network clients whose ID starts with the bridge prefix:
+// No Local would hide from them what the bridge of that name brings in.
+type bridgeIDHook struct {
+	mqtt.HookBase
+	srv *mqtt.Server
+}
+
+func (h *bridgeIDHook) ID() string { return "bridge-client-ids" }
+
+func (h *bridgeIDHook) Provides(b byte) bool { return bytes.Contains([]byte{mqtt.OnConnect}, []byte{b}) }
+
+func (h *bridgeIDHook) OnConnect(cl *mqtt.Client, _ packets.Packet) error {
+	if !strings.HasPrefix(cl.ID, mqttclient.ClientIDPrefix) {
+		return nil
+	}
+	if h.srv != nil {
+		_ = h.srv.SendConnack(cl, packets.ErrClientIdentifierNotValid, false, nil)
+	}
+	return packets.ErrClientIdentifierNotValid
 }

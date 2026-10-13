@@ -119,3 +119,15 @@ func TestInlinePublisherReusesOneClientPerID(t *testing.T) {
 		t.Errorf("inline clients = %d, want 2 (one per id)", len(p.clients))
 	}
 }
+
+// A network client named like a bridge's inline publisher would miss what the
+// bridge brings in under No Local, so the prefix is reserved.
+func TestNetworkClientsCannotTakeBridgeClientIDs(t *testing.T) {
+	h := &bridgeIDHook{}
+	for id, refused := range map[string]bool{"bridge:to-remote": true, "bridge:": true, "bridge-1": false, "sensor": false} {
+		cl := &mqtt.Client{ID: id}
+		if err := h.OnConnect(cl, packets.Packet{}); (err != nil) != refused {
+			t.Errorf("%q: err = %v, want refused=%v", id, err, refused)
+		}
+	}
+}

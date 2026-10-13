@@ -462,6 +462,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		warnPeerLinkDevices(ctx, cfg, storage, peerSetup, logger)
 	}
 
+	if err := server.AddHook(&bridgeIDHook{srv: server}, nil); err != nil {
+		return nil, fmt.Errorf("add bridge client id hook: %w", err)
+	}
 	if err := server.AddHook(storageHook, nil); err != nil {
 		return nil, fmt.Errorf("add storage hook: %w", err)
 	}

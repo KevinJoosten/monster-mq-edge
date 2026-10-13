@@ -344,6 +344,23 @@ func TestValidatorLimits(t *testing.T) {
 	if !hasIssue(res.Issues, SeverityError, "/tree", "pattern bindings") {
 		t.Fatalf("issues %v", res.Issues)
 	}
+	// The node limit is reachable within MaxDocumentBytes and reported.
+	b.Reset()
+	b.WriteString("[")
+	for i := 0; i < MaxNodes+1; i++ {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"id":"n%011d","name":"n%d"}`, i, i)
+	}
+	b.WriteString("]")
+	if doc := docA(b.String()); len(doc) > MaxDocumentBytes {
+		t.Fatalf("%d minimal nodes need %d bytes, more than MaxDocumentBytes", MaxNodes+1, len(doc))
+	}
+	res = runValidate(t, nil, settingsA("acme"), docA(b.String()))
+	if !hasIssue(res.Issues, SeverityError, "/tree", "nodes, more than the limit") {
+		t.Fatalf("node limit: %v", res.Issues)
+	}
 	// Too many issues are capped with a summary entry.
 	b.Reset()
 	b.WriteString("[")

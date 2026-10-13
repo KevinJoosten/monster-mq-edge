@@ -171,9 +171,11 @@ the same names as the config flags.
   session indefinitely, as before.
 - With `5`, a remote that answers with an MQTT 3.1.1 CONNACK makes the bridge
   fall back to 3.1.1 with a warning, until the bridge config changes or the
-  broker restarts. A remote that just closes the connection, or one behind
-  `ws://`/`wss://`, is not detected: set `4` there. With the PAHO buffer, messages
-  queued for MQTT 5 at the moment of the fallback can be lost.
+  broker restarts. A remote that just closes the connection, one that refuses
+  with reason 0x84 (MQTT 5 turned off), or one behind `ws://`/`wss://`, is not
+  detected: set `4` there. With the PAHO buffer, messages queued for MQTT 5 at
+  the moment of the fallback are not sent; persisted ones stay in the `v5`
+  subdirectory of the buffer.
 - Over MQTT 5, live messages keep their properties and retain flag on every
   hop, and remote subscriptions use No Local (except shared subscriptions,
   where MQTT 5 forbids it). Retained messages replayed at (re)subscribe keep
@@ -183,15 +185,26 @@ the same names as the config flags.
 - Locally, bridged messages are published by client `bridge:<bridge name>`, and
   the bridge never forwards what it brought in itself. So brokers can be chained
   (A <- B <- C) with overlapping outbound and inbound mappings (for example
-  `data/#` both ways) without loops or duplicates.
+  `data/#` both ways) without loops or duplicates. Exception: a shared inbound
+  subscription (`$share/...`, `$queue/...`) has no No Local, so the remote sends
+  the bridge's own messages back once; local subscribers see that copy, it is
+  not forwarded again. Network clients cannot use client IDs starting with
+  `bridge:`.
 - Use one bridge per pair of brokers, with the outbound and inbound mappings in
   that bridge, and bridge from one side only; the brokers must not form a
   cycle. Two bridges between the same brokers, or both sides bridging, loop:
   No Local and the skip work per bridge connection.
 - A message is requeued only while the remote is down. Over MQTT 5 a message
   the remote rejects (reason code 0x80 or higher) or one over its maximum
-  packet size is logged and dropped. Without buffering, a message published
-  while the remote is down is lost.
+  packet size is logged and dropped. Messages are sent at most at the remote's
+  Maximum QoS, and without retain flag when it announces no retained messages.
+  Time spent in the MONSTER buffer counts against Message Expiry; expired
+  messages are dropped. Without buffering, a message published while the remote
+  is down is lost.
+- Over MQTT 5, the PAHO buffer keeps a message until it is sent, not until the
+  remote acknowledges it: a QoS 1/2 message in flight during a crash is lost.
+  The MQTT 5 connection does not use proxy environment variables (`ALL_PROXY`).
+  Response Topic is forwarded unchanged, not rewritten by the topic mapping.
 
 ### WinCC bridge behavior
 

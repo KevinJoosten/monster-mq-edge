@@ -45,9 +45,13 @@ func freeAddr(t *testing.T) string {
 
 // startEngineAt runs an in-process broker on addr. Topics starting with
 // denyPrefix are refused ("" refuses nothing).
-func startEngineAt(t *testing.T, addr, denyPrefix string) *engine.Server {
+func startEngineAt(t *testing.T, addr, denyPrefix string, tune ...func(*engine.Options)) *engine.Server {
 	t.Helper()
-	srv := engine.New(&engine.Options{InlineClient: true, Logger: slog.New(slog.DiscardHandler)})
+	opts := &engine.Options{InlineClient: true, Logger: slog.New(slog.DiscardHandler)}
+	for _, f := range tune {
+		f(opts)
+	}
+	srv := engine.New(opts)
 	if err := srv.AddHook(&denyHook{deny: denyPrefix}, nil); err != nil {
 		t.Fatal(err)
 	}

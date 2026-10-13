@@ -18,6 +18,7 @@ import (
 	"github.com/eclipse/paho.golang/autopaho"
 	"github.com/eclipse/paho.golang/paho"
 
+	engine "monstermq.io/edge/internal/mqtt"
 	"monstermq.io/edge/internal/stores"
 )
 
@@ -387,5 +388,62 @@ func TestMQTT5FileQueueUsesOwnSubdirectory(t *testing.T) {
 	defer tr.Close()
 	if fi, err := os.Stat(filepath.Join(dir, "v5")); err != nil || !fi.IsDir() {
 		t.Fatalf("MQTT 5 queue directory %s/v5 missing: %v", dir, err)
+	}
+}
+
+// A message the remote refuses (reason >= 0x80) is dropped by the connector,
+// never retried as if the link were down, at QoS 1 as at QoS 2.
+func TestPublishRefusedByRemoteIsNotTransportDown(t *testing.T) {
+	addr := freeAddr(t)
+	startEngineAt(t, addr, "deny")
+	up, onUp := signal()
+	tr, err := newMQTT5Transport(context.Background(), withTestDefaults(transportOptions{
+		URL: "tcp://" + addr, ClientID: "bridge-refused", OnConnected: onUp,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	waitSignal(t, up)
+	for _, qos := range []byte{1, 2} {
+		err := tr.Publish(context.Background(), "deny/x", stores.BrokerMessage{Payload: []byte("x")}, qos, false)
+		if err == nil || errors.Is(err, errTransportDown) {
+			t.Errorf("QoS %d: err = %v, want a refusal that is not errTransportDown", qos, err)
+		}
+	}
+}
+
+// A remote with Maximum QoS 1 gets QoS 2 messages at QoS 1, as a broker
+// forwarding to a subscriber would do, instead of a refusal.
+func TestPublishAboveServerMaximumQoSIsDowngraded(t *testing.T) {
+	addr := freeAddr(t)
+	startEngineAt(t, addr, "", func(o *engine.Options) {
+		o.Capabilities = engine.NewDefaultServerCapabilities()
+		o.Capabilities.MaximumQos = 1
+	})
+	up, onUp := signal()
+	tr, err := newMQTT5Transport(context.Background(), withTestDefaults(transportOptions{
+		URL: "tcp://" + addr, ClientID: "bridge-maxqos", OnConnected: onUp,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	waitSignal(t, up)
+	if err := tr.Publish(context.Background(), "data/x", stores.BrokerMessage{Payload: []byte("x")}, 2, false); err != nil {
+		t.Errorf("QoS 2 to a QoS 1 remote: %v", err)
+	}
+}
+
+func TestFitToServerLimits(t *testing.T) {
+	p := &paho.Publish{QoS: 2, Retain: true}
+	fitToServer(p, 1, false)
+	if p.QoS != 1 || p.Retain {
+		t.Errorf("got QoS %d retain %v, want QoS 1 retain false", p.QoS, p.Retain)
+	}
+	p = &paho.Publish{QoS: 1, Retain: true}
+	fitToServer(p, 2, true)
+	if p.QoS != 1 || !p.Retain {
+		t.Errorf("got QoS %d retain %v, want it unchanged", p.QoS, p.Retain)
 	}
 }

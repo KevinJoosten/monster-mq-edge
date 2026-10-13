@@ -3,6 +3,7 @@ package mqttclient
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -30,6 +31,8 @@ type mqtt5Transport struct {
 	queued    bool // publishes go through the library's queue (PAHO buffer)
 	connected atomic.Bool
 	maxPacket atomic.Uint32 // the remote broker's Maximum Packet Size; 0 = none announced
+	maxQoS    atomic.Uint32 // the remote broker's Maximum QoS
+	noRetain  atomic.Bool   // the remote broker announced Retain Available 0
 	sawV3     atomic.Bool   // the last attempt got an MQTT 3.1.1 CONNACK
 }
 
@@ -42,6 +45,7 @@ func newMQTT5Transport(ctx context.Context, o transportOptions) (*mqtt5Transport
 		return nil, fmt.Errorf("broker url %q: unix sockets need protocolVersion 4 (MQTT 3.1.1)", o.URL)
 	}
 	t := &mqtt5Transport{queued: o.LibraryQueue != ""}
+	t.maxQoS.Store(2)
 	// Close cancels cctx, which also ends a subscribe still in flight.
 	cctx, cancel := context.WithCancel(ctx)
 	cfg, err := t.clientConfig(cctx, o, u)
@@ -74,6 +78,14 @@ func (t *mqtt5Transport) clientConfig(ctx context.Context, o transportOptions, u
 			t.maxPacket.Store(0)
 			if ca != nil && ca.Properties != nil && ca.Properties.MaximumPacketSize != nil {
 				t.maxPacket.Store(*ca.Properties.MaximumPacketSize)
+			}
+			t.maxQoS.Store(2)
+			t.noRetain.Store(false)
+			if ca != nil && ca.Properties != nil {
+				if ca.Properties.MaximumQoS != nil {
+					t.maxQoS.Store(uint32(*ca.Properties.MaximumQoS))
+				}
+				t.noRetain.Store(!ca.Properties.RetainAvailable)
 			}
 			t.connected.Store(true)
 			if len(o.Subscriptions) > 0 {
@@ -195,6 +207,7 @@ func (c *sniffConn) Read(b []byte) (int, error) {
 
 func (t *mqtt5Transport) Publish(ctx context.Context, topic string, msg stores.BrokerMessage, qos byte, retain bool) error {
 	p := toPahoPublish(topic, msg, qos, retain)
+	fitToServer(p, byte(t.maxQoS.Load()), !t.noRetain.Load())
 	if limit := t.maxPacket.Load(); limit > 0 {
 		if n, _ := p.Packet().WriteTo(io.Discard); uint32(n) > limit {
 			return errTooLarge
@@ -210,14 +223,25 @@ func (t *mqtt5Transport) Publish(ctx context.Context, topic string, msg stores.B
 		return errTransportDown
 	}
 	resp, err := t.cm.Publish(ctx, p)
+	// paho returns an error together with a QoS 1 refusal: check the reason first.
+	if resp != nil && resp.ReasonCode >= 0x80 {
+		return fmt.Errorf("remote broker refused publish: reason 0x%02x", resp.ReasonCode)
+	}
+	if errors.Is(err, paho.ErrInvalidArguments) {
+		return fmt.Errorf("remote broker cannot take publish: %v", err)
+	}
 	if err != nil {
 		// ConnectionDownError, or a write error on a dead socket before the library notices
 		return fmt.Errorf("%w: %v", errTransportDown, err)
 	}
-	if resp != nil && resp.ReasonCode >= 0x80 {
-		return fmt.Errorf("remote broker refused publish: reason 0x%02x", resp.ReasonCode)
-	}
 	return nil
+}
+
+// fitToServer lowers QoS and clears retain to what the remote broker
+// announced, as a broker does when it forwards to a subscriber.
+func fitToServer(p *paho.Publish, maxQoS byte, retainAvailable bool) {
+	p.QoS = min(p.QoS, maxQoS)
+	p.Retain = p.Retain && retainAvailable
 }
 
 func (t *mqtt5Transport) Connected() bool { return t.connected.Load() }

@@ -7,6 +7,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/bluenviron/gortsplib/v5 v5.6.6
 	github.com/coder/websocket v1.8.15
+	github.com/eclipse/paho.golang v0.23.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/jsonschema-go v0.4.3

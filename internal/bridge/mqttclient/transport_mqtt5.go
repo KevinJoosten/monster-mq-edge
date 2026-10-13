@@ -1,0 +1,214 @@
+package mqttclient
+
+import (
+	"context"
+	"crypto/tls"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"github.com/eclipse/paho.golang/autopaho"
+	"github.com/eclipse/paho.golang/autopaho/queue/file"
+	"github.com/eclipse/paho.golang/autopaho/queue/memory"
+	"github.com/eclipse/paho.golang/packets"
+	"github.com/eclipse/paho.golang/paho"
+
+	"monstermq.io/edge/internal/stores"
+)
+
+// mqtt5Transport connects to the remote broker with MQTT 5 and reconnects on
+// its own.
+type mqtt5Transport struct {
+	cm        *autopaho.ConnectionManager
+	cancel    context.CancelFunc
+	queued    bool // publishes go through the library's queue (PAHO buffer)
+	connected atomic.Bool
+	maxPacket atomic.Uint32 // the remote broker's Maximum Packet Size; 0 = none announced
+	sawV3     atomic.Bool   // the last attempt got an MQTT 3.1.1 CONNACK
+}
+
+func newMQTT5Transport(ctx context.Context, o transportOptions) (*mqtt5Transport, error) {
+	u, err := parseBrokerURL(o.URL)
+	if err != nil {
+		return nil, err
+	}
+	t := &mqtt5Transport{queued: o.LibraryQueue != ""}
+	cfg, err := t.clientConfig(ctx, o, u)
+	if err != nil {
+		return nil, err
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	cm, err := autopaho.NewConnection(cctx, cfg)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("bridge transport: %w", err)
+	}
+	t.cm, t.cancel = cm, cancel
+	return t, nil
+}
+
+func (t *mqtt5Transport) clientConfig(ctx context.Context, o transportOptions, u *url.URL) (autopaho.ClientConfig, error) {
+	cleanStart, expiry := sessionSettings(o.CleanSession)
+	cfg := autopaho.ClientConfig{
+		ServerUrls:                    []*url.URL{u},
+		TlsCfg:                        o.TLS,
+		KeepAlive:                     uint16(o.KeepAlive / time.Second),
+		CleanStartOnInitialConnection: cleanStart,
+		SessionExpiryInterval:         expiry,
+		ConnectTimeout:                o.ConnectTimeout,
+		ReconnectBackoff:              backoff(o.ReconnectDelay),
+		ConnectUsername:               o.Username,
+		OnConnectionUp: func(cm *autopaho.ConnectionManager, ca *paho.Connack) {
+			t.sawV3.Store(false)
+			t.maxPacket.Store(0)
+			if ca != nil && ca.Properties != nil && ca.Properties.MaximumPacketSize != nil {
+				t.maxPacket.Store(*ca.Properties.MaximumPacketSize)
+			}
+			t.connected.Store(true)
+			if len(o.Subscriptions) > 0 {
+				go t.subscribe(ctx, cm, o) // OnConnectionUp must not block
+			}
+			if o.OnConnected != nil {
+				o.OnConnected()
+			}
+		},
+		OnConnectionDown: func() bool {
+			t.connected.Store(false)
+			return true // keep reconnecting
+		},
+		OnConnectError: func(err error) {
+			if t.sawV3.Load() {
+				err = fmt.Errorf("%w: %v", ErrRemoteNotMQTT5, err)
+			}
+			if o.OnConnectError != nil {
+				o.OnConnectError(err)
+			}
+		},
+		ClientConfig: paho.ClientConfig{ClientID: o.ClientID},
+	}
+	if o.Password != "" {
+		cfg.ConnectPassword = []byte(o.Password)
+	}
+	if !isWebSocketScheme(u) {
+		cfg.AttemptConnection = t.dial // websockets keep the library's own dialer
+	}
+	if o.OnMessage != nil {
+		cfg.OnPublishReceived = []func(paho.PublishReceived) (bool, error){
+			func(pr paho.PublishReceived) (bool, error) {
+				o.OnMessage(pr.Packet.Topic, fromPahoPublish(pr.Packet))
+				return true, nil
+			},
+		}
+	}
+	switch o.LibraryQueue {
+	case "":
+	case memoryQueue:
+		cfg.Queue = memory.New()
+	default:
+		if err := os.MkdirAll(o.LibraryQueue, 0o755); err != nil {
+			return cfg, fmt.Errorf("bridge queue %s: %w", o.LibraryQueue, err)
+		}
+		q, err := file.New(o.LibraryQueue, "queue", ".msg")
+		if err != nil {
+			return cfg, fmt.Errorf("bridge queue %s: %w", o.LibraryQueue, err)
+		}
+		cfg.Queue = q
+	}
+	return cfg, nil
+}
+
+func (t *mqtt5Transport) subscribe(ctx context.Context, cm *autopaho.ConnectionManager, o transportOptions) {
+	opts := subscribeOptions(o.Subscriptions)
+	ack, err := cm.Subscribe(ctx, &paho.Subscribe{Subscriptions: opts})
+	if err != nil && o.Logger != nil {
+		o.Logger.Warn("bridge subscribe failed", "err", err)
+	}
+	if ack == nil || o.Logger == nil {
+		return
+	}
+	for i, code := range ack.Reasons {
+		if code >= 0x80 && i < len(opts) {
+			o.Logger.Warn("bridge subscription rejected by remote broker", "topic", opts[i].Topic, "reason", code)
+		}
+	}
+}
+
+// dial opens TCP or TLS itself, so the first bytes the server sends can be
+// checked for an MQTT 3.1.1 CONNACK; paho.golang reports that only as EOF.
+func (t *mqtt5Transport) dial(ctx context.Context, cfg autopaho.ClientConfig, u *url.URL) (net.Conn, error) {
+	t.sawV3.Store(false) // a v3 CONNACK on an earlier attempt must not label this one
+	d := &net.Dialer{Timeout: cfg.ConnectTimeout}
+	var (
+		conn net.Conn
+		err  error
+	)
+	if isTLSScheme(u) {
+		conn, err = (&tls.Dialer{NetDialer: d, Config: cfg.TlsCfg}).DialContext(ctx, "tcp", u.Host)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", u.Host)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &sniffConn{Conn: packets.NewThreadSafeConn(conn), sawV3: &t.sawV3}, nil
+}
+
+// sniffConn records whether the server's first two bytes are an MQTT 3.1.1
+// CONNACK. Only paho's single reader goroutine calls Read.
+type sniffConn struct {
+	net.Conn
+	sawV3 *atomic.Bool
+	head  []byte
+}
+
+func (c *sniffConn) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	if len(c.head) < 2 {
+		c.head = append(c.head, b[:min(n, 2-len(c.head))]...)
+		if isV3Connack(c.head) {
+			c.sawV3.Store(true)
+		}
+	}
+	return n, err
+}
+
+func (t *mqtt5Transport) Publish(ctx context.Context, topic string, msg stores.BrokerMessage, qos byte, retain bool) error {
+	p := toPahoPublish(topic, msg, qos, retain)
+	if limit := t.maxPacket.Load(); limit > 0 {
+		if n, _ := p.Packet().WriteTo(io.Discard); uint32(n) > limit {
+			return errTooLarge
+		}
+	}
+	if t.queued {
+		if err := t.cm.PublishViaQueue(ctx, &autopaho.QueuePublish{Publish: p}); err != nil {
+			return fmt.Errorf("%w: %v", errTransportDown, err)
+		}
+		return nil
+	}
+	if !t.connected.Load() {
+		return errTransportDown
+	}
+	resp, err := t.cm.Publish(ctx, p)
+	if err != nil {
+		// ConnectionDownError, or a write error on a dead socket before the library notices
+		return fmt.Errorf("%w: %v", errTransportDown, err)
+	}
+	if resp != nil && resp.ReasonCode >= 0x80 {
+		return fmt.Errorf("remote broker refused publish: reason 0x%02x", resp.ReasonCode)
+	}
+	return nil
+}
+
+func (t *mqtt5Transport) Connected() bool { return t.connected.Load() }
+
+func (t *mqtt5Transport) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = t.cm.Disconnect(ctx)
+	t.cancel()
+	t.connected.Store(false)
+}

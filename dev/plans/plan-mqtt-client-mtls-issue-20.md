@@ -114,24 +114,39 @@ Error messages, as Core (`<field>` is the field name, `<path>` its value):
 - `tlsClientKeyPath '<path>': no PEM private key found`
 - `tlsClientKeyPath '<key>' does not match the certificate in tlsClientCertPath '<cert>'`
 
-The TLS config is built once in `Connector.Start` for a TLS URL, before the
-client, queue and goroutines are created. A failing `tls*` rule makes `Start`
-return `Invalid MQTT client configuration: ...`, a TLS build error
-`Invalid MQTT client TLS configuration: ...`.
-The manager already logs a failed start (`bridge start failed`) and does not
-keep or retry the connector, which is Core's behaviour: a config error is not
-retried. The edge's `MqttClient` type has no error field, so the log is where
-the error shows; adding one would be a further schema change.
+Two kinds of error, handled differently (open point 1 below, approved on our side):
+
+- **Config errors** (a failing `tls*` validation rule) make `Start` return
+  `Invalid MQTT client configuration: ...`. The manager already logs a failed
+  start (`bridge start failed`) and does not keep or retry the connector, as in
+  Core: retrying cannot fix a config error.
+- **File errors** (a file missing, unreadable, unparsable, a wrong password, a
+  key that does not match) are retried. The CA file, certificate and key are
+  read on every connection attempt, so a file that appears later or a renewed
+  certificate is picked up without restarting the bridge. `Start` reads them
+  once and logs `Invalid MQTT client TLS configuration: ...` as a warning when
+  that fails, then starts anyway; every failed attempt after that logs the same
+  message through the bridge's connect-failure warning, and the reconnect
+  backoff applies.
+
+How: `tls.Config.GetClientCertificate` loads the client certificate per
+handshake. With a CA file, verification runs in `VerifyConnection` against the
+pool read for that handshake (host name from `tlsServerName`, else the URL
+host), with `InsecureSkipVerify` set only so Go's built-in check, which would
+use a pool fixed at build time, is skipped. Without a CA file the system roots
+apply as today.
+
+The edge's `MqttClient` type has no error field, so the log is where the error
+shows; adding one would be a further schema change.
 
 ## Open points (asked in #20, no answer yet)
 
-The implementation follows the contract. Both proposals stay out of the PR
-unless Andreas agrees:
-
 1. Retrying with backoff when a certificate file is missing or unreadable, and
-   re-reading the client certificate on every reconnect (renewal without a
-   restart). Core builds the TLS config once and does not retry.
-2. Reading the old edge field names `caFile`, `clientCertFile` and
+   re-reading the files on every reconnect (renewal without a restart). Core
+   builds the TLS config once and does not retry. Implemented (see Runtime):
+   we need it for certificate renewal on edge devices. The PR states it as a
+   deviation from Core, so Andreas can still decide.
+2. Not implemented: reading the old edge field names `caFile`, `clientCertFile` and
    `clientKeyFile` as a fallback. These exist only in our fork; the fork keeps
    that fallback on its own side.
 
@@ -151,12 +166,15 @@ unless Andreas agrees:
   - without a client certificate the bridge does not get in;
   - ALPN and SNI reach the server (checked on a TLS listener that records the
     ClientHello);
-  - a bridge with an invalid TLS config does not start (and is not retried).
+  - a bridge with an invalid TLS config (validation rule) does not start;
+  - a bridge whose client certificate file is missing at start connects once
+    the file appears, without a restart (open point 1).
 - Existing bridge tests pass unchanged.
 
 ## Docs
 
 README section "MQTT bridge TLS": the fields, a private-CA example, AWS IoT
 Core on 8883 and on 443 with ALPN `x-amzn-mqtt-ca`, and a parity note
-(same fields and messages as Core; certificates are read at bridge start, a
-renewed certificate needs a bridge restart or a toggle of the device).
+(same fields and messages as Core; unlike Core, certificate files are read on
+every connection attempt, so a renewed certificate needs no restart, and a
+missing file is retried).

@@ -163,6 +163,56 @@ Features:
 Enabled features are also reported through GraphQL as `enabledFeatures`, using
 the same names as the config flags.
 
+### MQTT bridge TLS
+
+For `ssl://`, `tls://`, `mqtts://` and `wss://` URLs a bridge can verify the
+remote broker against a private CA and log in with a client certificate
+(mutual TLS). The fields are the same as in MonsterMQ Core, in the bridge
+config and in GraphQL:
+
+| Field | Meaning |
+|---|---|
+| `sslVerifyCertificate` | `false` skips all server certificate checks (default `true`) |
+| `tlsCaCertPath` | PEM file with the trusted CA certificates; replaces the system roots |
+| `tlsClientCertPath` | client certificate: PEM (with chain) or a PKCS12 bundle |
+| `tlsClientKeyPath` | PEM private key (PKCS#1, EC, PKCS#8, encrypted PKCS#8 or legacy encrypted PEM); not used with PKCS12 |
+| `tlsClientKeyPassword` | password of the key or the PKCS12 bundle; never returned, GraphQL reports `tlsClientKeyPasswordSet` |
+| `tlsClientKeyFormat` | `PEM` (default) or `PKCS12` |
+| `tlsServerName` | SNI and the name the server certificate must carry; defaults to the URL host |
+| `tlsAlpnProtocols` | ALPN protocols |
+
+Private CA with a client certificate:
+
+```json
+{
+  "brokerUrl": "ssl://mqtt.plant.local:8883",
+  "tlsCaCertPath": "/etc/monstermq/certs/plant-ca.pem",
+  "tlsClientCertPath": "/etc/monstermq/certs/edge-01.pem",
+  "tlsClientKeyPath": "/etc/monstermq/certs/edge-01.key"
+}
+```
+
+AWS IoT Core uses port 8883 with the device certificate and the Amazon root
+CA. Where only port 443 is open, add ALPN:
+
+```json
+{
+  "brokerUrl": "ssl://<prefix>-ats.iot.<region>.amazonaws.com:443",
+  "tlsCaCertPath": "/etc/monstermq/certs/AmazonRootCA1.pem",
+  "tlsClientCertPath": "/etc/monstermq/certs/device.pem.crt",
+  "tlsClientKeyPath": "/etc/monstermq/certs/private.pem.key",
+  "tlsAlpnProtocols": ["x-amzn-mqtt-ca"]
+}
+```
+
+A config error (a `tls*` field on a `tcp://` or `ws://` URL, a missing key for
+a PEM certificate, a key path with PKCS12, an unknown format, an invalid ALPN
+entry) is refused when saving and stops the bridge at start, with the same
+messages as Core. Unlike Core, certificate files are read on every connection
+attempt: a file that is missing or unreadable is logged and retried, and a
+renewed certificate is used on the next connection without restarting the
+bridge.
+
 ### WinCC bridge behavior
 
 WinCC client configurations are stored in the device config store, so they

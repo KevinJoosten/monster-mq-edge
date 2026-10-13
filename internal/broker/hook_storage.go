@@ -730,6 +730,7 @@ func (h *StorageHook) OnSelectRetainedMessages(filter string) ([]packets.Packet,
 			},
 			TopicName: msg.TopicName,
 			Payload:   msg.Payload,
+			Origin:    msg.ClientID, // as on the in-memory path: No Local skips a client's own retained message
 		}
 		pk.Created = msg.Time.Unix()
 		if msg.MessageExpiryInterval != nil && *msg.MessageExpiryInterval > 0 {

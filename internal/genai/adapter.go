@@ -10,7 +10,10 @@ import (
 
 // LangChainAdapter adapts a LangChainGo llms.Model to the genai.Provider interface.
 type LangChainAdapter struct {
-	model        llms.Model
+	model llms.Model
+	// toolModel serves tool calling when the main client cannot (Ollama:
+	// its OpenAI-compatible /v1 endpoint through the openai client).
+	toolModel    llms.Model
 	providerName string
 	modelName    string
 	docsPath     string

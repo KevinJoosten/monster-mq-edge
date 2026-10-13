@@ -33,7 +33,10 @@ import (
 	"monstermq.io/edge/internal/redfish"
 	"monstermq.io/edge/internal/scripting"
 	"monstermq.io/edge/internal/stores"
+	"monstermq.io/edge/internal/unsmodeler"
 	"monstermq.io/edge/internal/version"
+	"monstermq.io/edge/internal/winccoabrowse"
+	"monstermq.io/edge/internal/winccoanative"
 )
 
 // Resolver is the root resolver. Built once at startup with handles to every
@@ -60,6 +63,13 @@ type Resolver struct {
 	GenAi       genai.Provider
 	// PeerLinkMgr is nil while PeerLink is disabled.
 	PeerLinkMgr *peerlink.Manager
+	// Browse is the WinCC OA browse service; nil unless the broker runs
+	// embedded in WinCC OA.
+	Browse *winccoabrowse.Service
+	// UnsModeler runs the UNS Modeler devices; nil unless embedded.
+	UnsMgr *unsmodeler.Manager
+	// NativeNames returns the native namespace names (nil: defaults).
+	NativeNames func() winccoanative.Names
 
 	// Publish injects a message into the local broker (used by the publish mutation).
 	Publish func(topic string, payload []byte, retain bool, qos byte) error
@@ -132,6 +142,9 @@ func (r *Resolver) enabledFeatures() []string {
 	}
 	if r.Cfg.Features.GenAi || r.Cfg.GenAI.Enabled {
 		out = append(out, "GenAi")
+	}
+	if r.UnsMgr != nil {
+		out = append(out, "UnsModeler")
 	}
 	return out
 }
@@ -2614,6 +2627,7 @@ func (r *Resolver) reloadDeviceManagers(ctx context.Context, reason string) {
 	r.reloadBridges(ctx, reason)
 	r.reloadWinCCUa(ctx, reason)
 	r.reloadWinCCOa(ctx, reason)
+	r.reloadUns(ctx)
 }
 
 // AddAddress / UpdateAddress / DeleteAddress mutate the addresses array

@@ -165,3 +165,30 @@ models:
       proposeDataCatalog: { resolver: true }
 
 
+  WinCCOaQuery:
+    fields:
+      systems:       { resolver: true }
+      types:         { resolver: true }
+      typeStructure: { resolver: true }
+      datapoints:    { resolver: true }
+      elements:      { resolver: true }
+      elementInfo:   { resolver: true }
+  UnsModelerMutations:
+    fields:
+      create:    { resolver: true }
+      update:    { resolver: true }
+      delete:    { resolver: true }
+      toggle:    { resolver: true }
+      saveDraft: { resolver: true }
+      apply:     { resolver: true }
+      startAiRun: { resolver: true }
+      createInWinCCOa: { resolver: true }
+      importProposal: { resolver: true }
+  UnsModelerDevice:
+    fields:
+      status:     { resolver: true }
+      draft:      { resolver: true }
+      applied:    { resolver: true }
+      liveTopics: { resolver: true }
+      aiRun:      { resolver: true }
+      createPlan: { resolver: true }

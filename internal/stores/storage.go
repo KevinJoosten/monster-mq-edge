@@ -18,6 +18,7 @@ type Storage struct {
 	Users         UserStore
 	ArchiveConfig ArchiveConfigStore
 	DeviceConfig  DeviceConfigStore
+	UnsMappings   UnsMappingStore
 	Metrics       MetricsStore
 
 	// Closer is invoked on shutdown to release the underlying database handles.

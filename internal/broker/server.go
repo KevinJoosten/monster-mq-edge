@@ -44,7 +44,9 @@ import (
 	storepg "monstermq.io/edge/internal/stores/postgres"
 	storesqlite "monstermq.io/edge/internal/stores/sqlite"
 	"monstermq.io/edge/internal/topic"
+	"monstermq.io/edge/internal/unsmodeler"
 	"monstermq.io/edge/internal/version"
+	"monstermq.io/edge/internal/winccoabrowse"
 	"monstermq.io/edge/internal/winccoanative"
 )
 
@@ -63,6 +65,7 @@ type Server struct {
 	winCCUa     *winccua.Manager
 	winCCOa     *winccoa.Manager
 	rtspCameras *rtspcamera.Manager
+	unsModeler  *unsmodeler.Manager
 	scripts     *scripting.Manager
 	gqlSrv      *gql.Server
 	mcpSrv      *mcp.Server
@@ -550,7 +553,13 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	// 7. MQTT bridge manager
 	// In-process publishers follow the native publish rules like an MQTT
 	// client: commands are written to WinCC OA, value topics are protected.
+	var unsHook *UnsModelerHook
 	publishFn := func(topic string, payload []byte, retain bool, qos byte) error {
+		if unsHook != nil {
+			if handled, err := unsHook.InlinePublish(topic, payload); handled {
+				return err
+			}
+		}
 		if nativeHook != nil {
 			if handled, err := nativeHook.InlinePublish(topic, payload, retain, qos); handled {
 				return err
@@ -584,6 +593,27 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var winCCUa *winccua.Manager
 	if cfg.Features.WinCCUa {
 		winCCUa = winccua.NewManager(storage.DeviceConfig, publishFn, cfg.NodeID, logger)
+	}
+
+	// UNS Modeler devices (WinCC OA native; only inside WCCOAmmq).
+	var unsMgr *unsmodeler.Manager
+	var browse *winccoabrowse.Service
+	if nativeOn {
+		browse = winccoabrowse.New(opts.OA)
+		if storage.UnsMappings != nil {
+			unsMgr = unsmodeler.NewManager(storage.DeviceConfig, storage.UnsMappings, browse, publishFn, unsmodeler.AlwaysActive{},
+				unsmodeler.TopicRoots{Native: names.Root}, cfg.NodeID, logger)
+			unsMgr.SetProviders(func(ctx context.Context, name string) (genai.Provider, error) {
+				return genai.ProviderByName(ctx, cfg.GenAI, storage.DeviceConfig, name)
+			})
+			unsMgr.SetTopicSource(&unsTopicSource{cfg: cfg, server: server, storage: storage, archives: archives, bus: bus, sample: 2 * time.Second})
+			unsMgr.SetSubscriber(unsSubscriber{bus: bus})
+			unsHook = NewUnsModelerHook(unsMgr, logger)
+			if err := server.AddHook(unsHook, nil); err != nil {
+				return nil, fmt.Errorf("add uns modeler hook: %w", err)
+			}
+			server.AddSysTopics(unsMgr.SysTopics)
+		}
 	}
 
 	var winCCOa *winccoa.Manager
@@ -653,6 +683,15 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if cfg.GraphQL.Enabled && (cfg.GraphQL.HTTPEnabled() || cfg.GraphQL.TLSEnabled()) {
 		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn, hmiMgr, redfishMgr, rtspCameras, scripts)
 		resolver.PeerLinkMgr = pl
+		if nativeOn {
+			resolver.Browse = browse
+			resolver.UnsMgr = unsMgr
+			if native != nil {
+				resolver.NativeNames = native.Names
+			} else {
+				resolver.NativeNames = func() winccoanative.Names { return names }
+			}
+		}
 		if cfg.Features.GenAi || cfg.GenAI.Enabled {
 			genAiProv, err := genai.CreateAssistantProvider(ctx, cfg.GenAI)
 			if err != nil {
@@ -689,7 +728,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	return &Server{
 		cfg: cfg, logger: logger, mqtt: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
-		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv,
+		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
 		mcpSrv: mcpSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
 		storageHook: storageHook, native: native, peer: pl, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
@@ -750,6 +789,7 @@ func useOAStores(ctx context.Context, cfg *config.Config, storage *stores.Storag
 	if needCfg {
 		storage.DeviceConfig = st.Device
 		storage.ArchiveConfig = st.Archive
+		storage.UnsMappings = st.Mappings
 	}
 	if needSes {
 		storage.Sessions = st.Sessions
@@ -958,6 +998,11 @@ func (s *Server) Serve() error {
 			s.logger.Warn("winccoa start error", "err", err)
 		}
 	}
+	if s.unsModeler != nil {
+		if err := s.unsModeler.Start(context.Background()); err != nil {
+			s.logger.Warn("uns modeler start error", "err", err)
+		}
+	}
 	if s.rtspCameras != nil {
 		if err := s.rtspCameras.Start(context.Background()); err != nil {
 			s.logger.Warn("rtsp cameras start error", "err", err)
@@ -1066,6 +1111,9 @@ func (s *Server) stopPublishers() {
 	}
 	if s.winCCOa != nil {
 		s.winCCOa.Stop()
+	}
+	if s.unsModeler != nil {
+		s.unsModeler.Stop()
 	}
 	if s.rtspCameras != nil {
 		s.rtspCameras.Stop()

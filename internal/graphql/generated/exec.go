@@ -44,10 +44,13 @@ type ResolverRoot interface {
 	SessionMutations() SessionMutationsResolver
 	Subscription() SubscriptionResolver
 	Topic() TopicResolver
+	UnsModelerDevice() UnsModelerDeviceResolver
+	UnsModelerMutations() UnsModelerMutationsResolver
 	UserInfo() UserInfoResolver
 	UserManagementMutations() UserManagementMutationsResolver
 	WinCCOaClient() WinCCOaClientResolver
 	WinCCOaDeviceMutations() WinCCOaDeviceMutationsResolver
+	WinCCOaQuery() WinCCOaQueryResolver
 	WinCCUaClient() WinCCUaClientResolver
 	WinCCUaDeviceMutations() WinCCUaDeviceMutationsResolver
 }
@@ -135,6 +138,7 @@ type MutationResolver interface {
 	ToggleRedfishMapping(ctx context.Context, name string, enabled bool) (*RedfishResult, error)
 	RtspCamera(ctx context.Context) (*RtspCameraDeviceMutations, error)
 	Script(ctx context.Context) (*ScriptMutations, error)
+	UnsModeler(ctx context.Context) (*UnsModelerMutations, error)
 	WinCCOaDevice(ctx context.Context) (*WinCCOaDeviceMutations, error)
 	WinCCUaDevice(ctx context.Context) (*WinCCUaDeviceMutations, error)
 }
@@ -181,6 +185,11 @@ type QueryResolver interface {
 	ScriptLanguages(ctx context.Context) ([]*ScriptLanguage, error)
 	ScriptDocumentation(ctx context.Context, language *string) (string, error)
 	ScriptSkill(ctx context.Context, language *string) (string, error)
+	UnsModelers(ctx context.Context, name *string) ([]*UnsModelerDevice, error)
+	UnsModelerValidate(ctx context.Context, name string, document string) ([]*UnsModelerIssue, error)
+	UnsModelerSchema(ctx context.Context, direction *UnsModelerDirection) (string, error)
+	UnsModelerDefaultPrompt(ctx context.Context, direction UnsModelerDirection) (string, error)
+	Winccoa(ctx context.Context) (*WinCCOaQuery, error)
 	WinCCOaClients(ctx context.Context, name *string, node *string) ([]*WinCCOaClient, error)
 	WinCCUaClients(ctx context.Context, name *string, node *string) ([]*WinCCUaClient, error)
 }
@@ -224,6 +233,25 @@ type SubscriptionResolver interface {
 type TopicResolver interface {
 	Value(ctx context.Context, obj *Topic, format *DataFormat) (*TopicValue, error)
 }
+type UnsModelerDeviceResolver interface {
+	Status(ctx context.Context, obj *UnsModelerDevice) (*UnsModelerStatus, error)
+	Draft(ctx context.Context, obj *UnsModelerDevice) (*string, error)
+	Applied(ctx context.Context, obj *UnsModelerDevice) (*string, error)
+	LiveTopics(ctx context.Context, obj *UnsModelerDevice) ([]*UnsModelerTopicStatus, error)
+	AiRun(ctx context.Context, obj *UnsModelerDevice) (*UnsModelerAiRun, error)
+	CreatePlan(ctx context.Context, obj *UnsModelerDevice) (*UnsModelerCreatePlan, error)
+}
+type UnsModelerMutationsResolver interface {
+	Create(ctx context.Context, obj *UnsModelerMutations, input UnsModelerDeviceInput) (*UnsModelerResult, error)
+	Update(ctx context.Context, obj *UnsModelerMutations, name string, input UnsModelerDeviceInput) (*UnsModelerResult, error)
+	Delete(ctx context.Context, obj *UnsModelerMutations, name string) (bool, error)
+	Toggle(ctx context.Context, obj *UnsModelerMutations, name string, enabled bool) (*UnsModelerResult, error)
+	SaveDraft(ctx context.Context, obj *UnsModelerMutations, name string, document string) (*UnsModelerMappingResult, error)
+	Apply(ctx context.Context, obj *UnsModelerMutations, name string) (*UnsModelerMappingResult, error)
+	CreateInWinCCOa(ctx context.Context, obj *UnsModelerMutations, name string) (*UnsModelerCreateResult, error)
+	ImportProposal(ctx context.Context, obj *UnsModelerMutations, name string, document string, topicMode *string, archiveGroup *string, topicFilters []string) (*UnsModelerMappingResult, error)
+	StartAiRun(ctx context.Context, obj *UnsModelerMutations, name string, input UnsModelerAiRunInput) (*UnsModelerAiRunResult, error)
+}
 type UserInfoResolver interface {
 	ACLRules(ctx context.Context, obj *UserInfo) ([]*ACLRuleInfo, error)
 }
@@ -251,6 +279,14 @@ type WinCCOaDeviceMutationsResolver interface {
 	AddAddress(ctx context.Context, obj *WinCCOaDeviceMutations, deviceName string, input WinCCOaAddressInput) (*WinCCOaClientResult, error)
 	UpdateAddress(ctx context.Context, obj *WinCCOaDeviceMutations, deviceName string, query string, input WinCCOaAddressInput) (*WinCCOaClientResult, error)
 	DeleteAddress(ctx context.Context, obj *WinCCOaDeviceMutations, deviceName string, query string) (*WinCCOaClientResult, error)
+}
+type WinCCOaQueryResolver interface {
+	Systems(ctx context.Context, obj *WinCCOaQuery) ([]*WinCCOaSystem, error)
+	Types(ctx context.Context, obj *WinCCOaQuery, system *string, pattern *string) ([]string, error)
+	TypeStructure(ctx context.Context, obj *WinCCOaQuery, system *string, typeArg string) (*WinCCOaTypeStructure, error)
+	Datapoints(ctx context.Context, obj *WinCCOaQuery, system *string, pattern *string, typeArg *string, limit *int, offset *int) (*WinCCOaDatapointPage, error)
+	Elements(ctx context.Context, obj *WinCCOaQuery, dp string) ([]*WinCCOaElement, error)
+	ElementInfo(ctx context.Context, obj *WinCCOaQuery, dpes []string) ([]*WinCCOaElementInfo, error)
 }
 type WinCCUaClientResolver interface {
 	Metrics(ctx context.Context, obj *WinCCUaClient) ([]*WinCCUaClientMetrics, error)
@@ -313,6 +349,10 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputScriptInput,
 		ec.unmarshalInputSetPasswordInput,
 		ec.unmarshalInputTopicDataInput,
+		ec.unmarshalInputUnsModelerAiRunInput,
+		ec.unmarshalInputUnsModelerConfigInput,
+		ec.unmarshalInputUnsModelerDeviceInput,
+		ec.unmarshalInputUnsModelerSelectionItemInput,
 		ec.unmarshalInputUpdateAclRuleInput,
 		ec.unmarshalInputUpdateArchiveGroupInput,
 		ec.unmarshalInputUpdateDatabaseConnectionInput,
@@ -1852,6 +1892,374 @@ extend type Query {
 
 extend type Mutation {
     script: ScriptMutations!
+}
+`, BuiltIn: false},
+	{Name: "../schema/unsmodeler.graphqls", Input: `# UNS Modeler devices (plan-uns-modeler-design.md). WinCC OA native: devices
+# run only when the broker is embedded in WinCC OA (WCCOAmmq). Mapping
+# documents are JSON text (schema: unsModelerSchema).
+
+enum UnsModelerDirection {
+    "Direction A: WinCC OA datapoints published into the UNS"
+    WINCCOA_TO_UNS
+    "Direction B: MQTT topics into new WinCC OA datapoints"
+    MQTT_TO_WINCCOA
+}
+
+enum UnsModelerApprovalMode {
+    REVIEW
+    AUTO
+}
+
+enum UnsModelerRedundancy {
+    HOT_STANDBY
+    COLD_STANDBY
+    ALWAYS
+}
+
+enum UnsModelerSeverity {
+    ERROR
+    WARNING
+    INFO
+}
+
+type UnsModelerConfig {
+    direction: UnsModelerDirection!
+    "GenAI provider name; empty: manual modelling (A) or JSON import (B) only."
+    aiProvider: String
+    approvalMode: UnsModelerApprovalMode!
+    "Editable prompt of the device's direction; empty uses the built-in prompt."
+    systemPrompt: String
+    aiMaxSteps: Int!
+    aiTimeoutSec: Int!
+    aiTokenBudget: Int!
+    redundancy: UnsModelerRedundancy!
+    "Direction A: UNS subtree of the device."
+    unsRoot: String
+    "Direction A: <uns-topic>/..set writes to WinCC OA."
+    allowWrite: Boolean!
+    "Direction A: default topic semantics as JSON text ($defs/TopicSemantics)."
+    topicDefaults: String
+    "Direction A: default payload fields as JSON text ($defs/PayloadFields)."
+    payloadDefaults: String
+    "Direction B: mandatory prefix of created types and datapoints."
+    oaPrefix: String
+    "Direction B: write values after create."
+    flowEnabled: Boolean!
+}
+
+type UnsModelerIssue {
+    severity: UnsModelerSeverity!
+    "JSON Pointer into the document (or the device settings); empty is the whole document."
+    path: String!
+    message: String!
+}
+
+type UnsModelerStatus {
+    "The device runs on this node (enabled, embedded, Direction A with a runtime)."
+    running: Boolean!
+    "The broker is ACTIVE for this device (role gate)."
+    active: Boolean!
+    topics: Int!
+    dpes: Long!
+    published: Long!
+    writes: Long!
+    errors: Long!
+    lastApplied: String
+    applyError: String
+}
+
+type UnsModelerTopicStatus {
+    topic: String!
+    dpe: String!
+    "Current value as JSON text."
+    value: String
+    status: Long
+    published: Long!
+    lastPublish: String
+    lastError: String
+    lastErrorAt: String
+}
+
+type UnsModelerDevice {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    enabled: Boolean!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    config: UnsModelerConfig!
+    status: UnsModelerStatus!
+    "Current draft mapping document as JSON text."
+    draft: String
+    "Applied mapping document as JSON text."
+    applied: String
+    "Live state per published topic (A3 live monitor)."
+    liveTopics: [UnsModelerTopicStatus!]!
+    "The running or last AI run since broker start; details are in systemLogs."
+    aiRun: UnsModelerAiRun
+    "Direction B: what Create in WinCC OA would do with the draft."
+    createPlan: UnsModelerCreatePlan
+}
+
+type UnsModelerCreatePlan {
+    types: Int!
+    datapoints: Int!
+    configWrites: Int!
+    excluded: Int!
+}
+
+type UnsModelerObjectResult {
+    "type or datapoint"
+    kind: String!
+    name: String!
+    "created, skipped, failed or excluded"
+    status: String!
+    message: String
+    configWrites: Int!
+}
+
+type UnsModelerCreateResult {
+    success: Boolean!
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+    objects: [UnsModelerObjectResult!]!
+    configWrites: Int!
+}
+
+type UnsModelerAiEvent {
+    time: String!
+    "start, tool_call, tool_result, text, feedback"
+    kind: String!
+    name: String
+    detail: String
+    error: String
+}
+
+type UnsModelerAiRun {
+    id: String!
+    "RUNNING, SUCCEEDED or FAILED"
+    status: String!
+    provider: String!
+    model: String
+    startedAt: String!
+    finishedAt: String
+    steps: Int!
+    toolCalls: Int!
+    inputTokens: Int!
+    outputTokens: Int!
+    error: String
+    "The proposal was applied (Direction A) or created (Direction B) by approval mode AUTO."
+    applied: Boolean!
+    issues: [UnsModelerIssue!]!
+    events: [UnsModelerAiEvent!]!
+}
+
+extend type Query {
+    unsModelers(name: String): [UnsModelerDevice!]!
+    "Validates a mapping document for a device without storing it (stage 1 or stage 2 issues)."
+    unsModelerValidate(name: String!, document: String!): [UnsModelerIssue!]!
+    "The mapping JSON Schema; with a direction the prompt view of that direction."
+    unsModelerSchema(direction: UnsModelerDirection): String!
+    "The built-in system prompt of a direction."
+    unsModelerDefaultPrompt(direction: UnsModelerDirection!): String!
+}
+
+input UnsModelerConfigInput {
+    "Fixed at creation; an update with a different direction is rejected."
+    direction: UnsModelerDirection!
+    aiProvider: String
+    approvalMode: UnsModelerApprovalMode
+    systemPrompt: String
+    aiMaxSteps: Int
+    aiTimeoutSec: Int
+    aiTokenBudget: Int
+    redundancy: UnsModelerRedundancy
+    unsRoot: String
+    allowWrite: Boolean
+    topicDefaults: String
+    payloadDefaults: String
+    oaPrefix: String
+    flowEnabled: Boolean
+}
+
+input UnsModelerDeviceInput {
+    name: String!
+    namespace: String
+    nodeId: String
+    enabled: Boolean = true
+    config: UnsModelerConfigInput!
+}
+
+type UnsModelerResult {
+    success: Boolean!
+    device: UnsModelerDevice
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+}
+
+type UnsModelerMappingResult {
+    success: Boolean!
+    "The document was stored (drafts are stored with issues unless too large or not JSON)."
+    stored: Boolean!
+    document: String
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+}
+
+"One item of the WinCC OA browser selection (Direction A)."
+input UnsModelerSelectionItemInput {
+    "type, datapoint or element"
+    kind: String!
+    system: String
+    type: String!
+    datapoint: String
+    path: String
+    pattern: String
+}
+
+input UnsModelerAiRunInput {
+    prompt: String
+    "Context document: text, Markdown, PDF or DOCX, base64 encoded."
+    documentBase64: String
+    documentName: String
+    "Direction A: scope of the analysis."
+    selection: [UnsModelerSelectionItemInput!]
+    "Direction A: allow browsing beyond the selection (bindings stay inside it)."
+    allowBeyondSelection: Boolean
+    "Direction B: LIVE or ARCHIVE topic source."
+    topicMode: String
+    archiveGroup: String
+    topicFilters: [String!]
+    maxTopics: Int
+}
+
+type UnsModelerAiRunResult {
+    success: Boolean!
+    errors: [String!]!
+    run: UnsModelerAiRun
+}
+
+type UnsModelerMutations {
+    create(input: UnsModelerDeviceInput!): UnsModelerResult!
+    update(name: String!, input: UnsModelerDeviceInput!): UnsModelerResult!
+    delete(name: String!): Boolean!
+    toggle(name: String!, enabled: Boolean!): UnsModelerResult!
+    "Stores the draft; nodes without id get one."
+    saveDraft(name: String!, document: String!): UnsModelerMappingResult!
+    "Validates the draft and applies it when it has no errors."
+    apply(name: String!): UnsModelerMappingResult!
+    "Direction B: validates the draft and creates its types and datapoints in WinCC OA; then the value flow starts."
+    createInWinCCOa(name: String!): UnsModelerCreateResult!
+    "Direction B: imports a hand-written proposal; source is stamped from the topic selection, then it is validated like an AI answer and stored as the draft."
+    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!): UnsModelerMappingResult!
+    "Starts an AI run that proposes a full mapping document (stored as the draft)."
+    startAiRun(name: String!, input: UnsModelerAiRunInput!): UnsModelerAiRunResult!
+}
+
+extend type Mutation {
+    unsModeler: UnsModelerMutations!
+}
+`, BuiltIn: false},
+	{Name: "../schema/winccoa-browse.graphqls", Input: `# WinCC OA browsing of the embedded broker (UNS Modeler, plan-uns-modeler-design.md
+# §6.1). Backed by the native WinCC OA API of WCCOAmmq; null when the broker
+# does not run embedded in WinCC OA. The dashboard's WinCC OA browser and
+# the UNS Modeler LLM tools use the same service.
+
+type WinCCOaSystem {
+    name: String!
+    local: Boolean!
+    connected: Boolean!
+}
+
+"One node of a datapoint type or datapoint, listed depth-first (parents before children)."
+type WinCCOaTypeElement {
+    "Dotted path below the root; empty for the root."
+    path: String!
+    "Last path level; the type (or datapoint) name for the root."
+    name: String!
+    "Path of the parent node; empty for the root and its direct children."
+    parent: String!
+    depth: Int!
+    "WinCC OA element type, e.g. float, int, struct, dyn_string, langString, typeref."
+    elementType: String!
+    "True for a value element (not a structure node)."
+    valueElement: Boolean!
+    "Referenced type of a typeref node."
+    typeReference: String
+    childCount: Int!
+}
+
+type WinCCOaTypeStructure {
+    system: String!
+    type: String!
+    elements: [WinCCOaTypeElement!]!
+}
+
+type WinCCOaDatapoint {
+    "Datapoint name without system prefix."
+    name: String!
+    system: String!
+    type: String!
+}
+
+type WinCCOaDatapointPage {
+    items: [WinCCOaDatapoint!]!
+    total: Int!
+    offset: Int!
+    limit: Int!
+}
+
+type WinCCOaElement {
+    "Full DPE name, System:DP.path (the root as System:DP.)."
+    dpe: String!
+    path: String!
+    name: String!
+    parent: String!
+    depth: Int!
+    elementType: String!
+    valueElement: Boolean!
+    typeReference: String
+    childCount: Int!
+}
+
+type WinCCOaElementInfo {
+    dpe: String!
+    exists: Boolean!
+    "Why the element could not be read (missing DPE, unavailable system)."
+    error: String
+    "Datapoint type of the datapoint."
+    type: String
+    elementType: String
+    valueElement: Boolean!
+    unit: String
+    description: String
+    format: String
+    "Current online value as JSON text (blob as base64 string, NaN as null)."
+    value: String
+    "Source time of the value, RFC 3339 with milliseconds."
+    stime: String
+    "Raw _online.._status bits."
+    status: Long
+}
+
+type WinCCOaQuery {
+    "Local system and the connected or known remote systems."
+    systems: [WinCCOaSystem!]!
+    "Datapoint type names (dpTypes pattern); internal and MMQ store types are left out."
+    types(system: String, pattern: String = "*"): [String!]!
+    typeStructure(system: String, type: String!): WinCCOaTypeStructure!
+    "Datapoints (dpNames pattern without system and element part), sorted, paged; limit at most 1000."
+    datapoints(system: String, pattern: String = "*", type: String, limit: Int = 500, offset: Int = 0): WinCCOaDatapointPage!
+    "Element tree of a datapoint (name with optional system prefix)."
+    elements(dp: String!): [WinCCOaElement!]!
+    "Metadata and current value of at most 200 DPEs; a missing DPE is reported per item."
+    elementInfo(dpes: [String!]!): [WinCCOaElementInfo!]!
+}
+
+extend type Query {
+    "WinCC OA browsing; null when the broker does not run inside WCCOAmmq."
+    winccoa: WinCCOaQuery
 }
 `, BuiltIn: false},
 	{Name: "../schema/winccoa.graphqls", Input: `# WinCC Open Architecture bridge. Names and casing follow the Java broker
@@ -3614,6 +4022,294 @@ func (ec *executionContext) childFields_TopicValue(ctx context.Context, field gr
 	return nil, fmt.Errorf("no field named %q was found under type TopicValue", field.Name)
 }
 
+func (ec *executionContext) childFields_UnsModelerAiEvent(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "time":
+		return ec.fieldContext_UnsModelerAiEvent_time(ctx, field)
+	case "kind":
+		return ec.fieldContext_UnsModelerAiEvent_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_UnsModelerAiEvent_name(ctx, field)
+	case "detail":
+		return ec.fieldContext_UnsModelerAiEvent_detail(ctx, field)
+	case "error":
+		return ec.fieldContext_UnsModelerAiEvent_error(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerAiEvent", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerAiRun(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "id":
+		return ec.fieldContext_UnsModelerAiRun_id(ctx, field)
+	case "status":
+		return ec.fieldContext_UnsModelerAiRun_status(ctx, field)
+	case "provider":
+		return ec.fieldContext_UnsModelerAiRun_provider(ctx, field)
+	case "model":
+		return ec.fieldContext_UnsModelerAiRun_model(ctx, field)
+	case "startedAt":
+		return ec.fieldContext_UnsModelerAiRun_startedAt(ctx, field)
+	case "finishedAt":
+		return ec.fieldContext_UnsModelerAiRun_finishedAt(ctx, field)
+	case "steps":
+		return ec.fieldContext_UnsModelerAiRun_steps(ctx, field)
+	case "toolCalls":
+		return ec.fieldContext_UnsModelerAiRun_toolCalls(ctx, field)
+	case "inputTokens":
+		return ec.fieldContext_UnsModelerAiRun_inputTokens(ctx, field)
+	case "outputTokens":
+		return ec.fieldContext_UnsModelerAiRun_outputTokens(ctx, field)
+	case "error":
+		return ec.fieldContext_UnsModelerAiRun_error(ctx, field)
+	case "applied":
+		return ec.fieldContext_UnsModelerAiRun_applied(ctx, field)
+	case "issues":
+		return ec.fieldContext_UnsModelerAiRun_issues(ctx, field)
+	case "events":
+		return ec.fieldContext_UnsModelerAiRun_events(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerAiRun", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerAiRunResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "success":
+		return ec.fieldContext_UnsModelerAiRunResult_success(ctx, field)
+	case "errors":
+		return ec.fieldContext_UnsModelerAiRunResult_errors(ctx, field)
+	case "run":
+		return ec.fieldContext_UnsModelerAiRunResult_run(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerAiRunResult", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerConfig(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "direction":
+		return ec.fieldContext_UnsModelerConfig_direction(ctx, field)
+	case "aiProvider":
+		return ec.fieldContext_UnsModelerConfig_aiProvider(ctx, field)
+	case "approvalMode":
+		return ec.fieldContext_UnsModelerConfig_approvalMode(ctx, field)
+	case "systemPrompt":
+		return ec.fieldContext_UnsModelerConfig_systemPrompt(ctx, field)
+	case "aiMaxSteps":
+		return ec.fieldContext_UnsModelerConfig_aiMaxSteps(ctx, field)
+	case "aiTimeoutSec":
+		return ec.fieldContext_UnsModelerConfig_aiTimeoutSec(ctx, field)
+	case "aiTokenBudget":
+		return ec.fieldContext_UnsModelerConfig_aiTokenBudget(ctx, field)
+	case "redundancy":
+		return ec.fieldContext_UnsModelerConfig_redundancy(ctx, field)
+	case "unsRoot":
+		return ec.fieldContext_UnsModelerConfig_unsRoot(ctx, field)
+	case "allowWrite":
+		return ec.fieldContext_UnsModelerConfig_allowWrite(ctx, field)
+	case "topicDefaults":
+		return ec.fieldContext_UnsModelerConfig_topicDefaults(ctx, field)
+	case "payloadDefaults":
+		return ec.fieldContext_UnsModelerConfig_payloadDefaults(ctx, field)
+	case "oaPrefix":
+		return ec.fieldContext_UnsModelerConfig_oaPrefix(ctx, field)
+	case "flowEnabled":
+		return ec.fieldContext_UnsModelerConfig_flowEnabled(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerConfig", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerCreatePlan(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "types":
+		return ec.fieldContext_UnsModelerCreatePlan_types(ctx, field)
+	case "datapoints":
+		return ec.fieldContext_UnsModelerCreatePlan_datapoints(ctx, field)
+	case "configWrites":
+		return ec.fieldContext_UnsModelerCreatePlan_configWrites(ctx, field)
+	case "excluded":
+		return ec.fieldContext_UnsModelerCreatePlan_excluded(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerCreatePlan", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerCreateResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "success":
+		return ec.fieldContext_UnsModelerCreateResult_success(ctx, field)
+	case "errors":
+		return ec.fieldContext_UnsModelerCreateResult_errors(ctx, field)
+	case "issues":
+		return ec.fieldContext_UnsModelerCreateResult_issues(ctx, field)
+	case "objects":
+		return ec.fieldContext_UnsModelerCreateResult_objects(ctx, field)
+	case "configWrites":
+		return ec.fieldContext_UnsModelerCreateResult_configWrites(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerCreateResult", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerDevice(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_UnsModelerDevice_name(ctx, field)
+	case "namespace":
+		return ec.fieldContext_UnsModelerDevice_namespace(ctx, field)
+	case "nodeId":
+		return ec.fieldContext_UnsModelerDevice_nodeId(ctx, field)
+	case "enabled":
+		return ec.fieldContext_UnsModelerDevice_enabled(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_UnsModelerDevice_createdAt(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_UnsModelerDevice_updatedAt(ctx, field)
+	case "isOnCurrentNode":
+		return ec.fieldContext_UnsModelerDevice_isOnCurrentNode(ctx, field)
+	case "config":
+		return ec.fieldContext_UnsModelerDevice_config(ctx, field)
+	case "status":
+		return ec.fieldContext_UnsModelerDevice_status(ctx, field)
+	case "draft":
+		return ec.fieldContext_UnsModelerDevice_draft(ctx, field)
+	case "applied":
+		return ec.fieldContext_UnsModelerDevice_applied(ctx, field)
+	case "liveTopics":
+		return ec.fieldContext_UnsModelerDevice_liveTopics(ctx, field)
+	case "aiRun":
+		return ec.fieldContext_UnsModelerDevice_aiRun(ctx, field)
+	case "createPlan":
+		return ec.fieldContext_UnsModelerDevice_createPlan(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerDevice", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerIssue(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "severity":
+		return ec.fieldContext_UnsModelerIssue_severity(ctx, field)
+	case "path":
+		return ec.fieldContext_UnsModelerIssue_path(ctx, field)
+	case "message":
+		return ec.fieldContext_UnsModelerIssue_message(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerIssue", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerMappingResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "success":
+		return ec.fieldContext_UnsModelerMappingResult_success(ctx, field)
+	case "stored":
+		return ec.fieldContext_UnsModelerMappingResult_stored(ctx, field)
+	case "document":
+		return ec.fieldContext_UnsModelerMappingResult_document(ctx, field)
+	case "errors":
+		return ec.fieldContext_UnsModelerMappingResult_errors(ctx, field)
+	case "issues":
+		return ec.fieldContext_UnsModelerMappingResult_issues(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerMappingResult", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerMutations(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "create":
+		return ec.fieldContext_UnsModelerMutations_create(ctx, field)
+	case "update":
+		return ec.fieldContext_UnsModelerMutations_update(ctx, field)
+	case "delete":
+		return ec.fieldContext_UnsModelerMutations_delete(ctx, field)
+	case "toggle":
+		return ec.fieldContext_UnsModelerMutations_toggle(ctx, field)
+	case "saveDraft":
+		return ec.fieldContext_UnsModelerMutations_saveDraft(ctx, field)
+	case "apply":
+		return ec.fieldContext_UnsModelerMutations_apply(ctx, field)
+	case "createInWinCCOa":
+		return ec.fieldContext_UnsModelerMutations_createInWinCCOa(ctx, field)
+	case "importProposal":
+		return ec.fieldContext_UnsModelerMutations_importProposal(ctx, field)
+	case "startAiRun":
+		return ec.fieldContext_UnsModelerMutations_startAiRun(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerMutations", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerObjectResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "kind":
+		return ec.fieldContext_UnsModelerObjectResult_kind(ctx, field)
+	case "name":
+		return ec.fieldContext_UnsModelerObjectResult_name(ctx, field)
+	case "status":
+		return ec.fieldContext_UnsModelerObjectResult_status(ctx, field)
+	case "message":
+		return ec.fieldContext_UnsModelerObjectResult_message(ctx, field)
+	case "configWrites":
+		return ec.fieldContext_UnsModelerObjectResult_configWrites(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerObjectResult", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "success":
+		return ec.fieldContext_UnsModelerResult_success(ctx, field)
+	case "device":
+		return ec.fieldContext_UnsModelerResult_device(ctx, field)
+	case "errors":
+		return ec.fieldContext_UnsModelerResult_errors(ctx, field)
+	case "issues":
+		return ec.fieldContext_UnsModelerResult_issues(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerResult", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "running":
+		return ec.fieldContext_UnsModelerStatus_running(ctx, field)
+	case "active":
+		return ec.fieldContext_UnsModelerStatus_active(ctx, field)
+	case "topics":
+		return ec.fieldContext_UnsModelerStatus_topics(ctx, field)
+	case "dpes":
+		return ec.fieldContext_UnsModelerStatus_dpes(ctx, field)
+	case "published":
+		return ec.fieldContext_UnsModelerStatus_published(ctx, field)
+	case "writes":
+		return ec.fieldContext_UnsModelerStatus_writes(ctx, field)
+	case "errors":
+		return ec.fieldContext_UnsModelerStatus_errors(ctx, field)
+	case "lastApplied":
+		return ec.fieldContext_UnsModelerStatus_lastApplied(ctx, field)
+	case "applyError":
+		return ec.fieldContext_UnsModelerStatus_applyError(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerStatus", field.Name)
+}
+
+func (ec *executionContext) childFields_UnsModelerTopicStatus(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "topic":
+		return ec.fieldContext_UnsModelerTopicStatus_topic(ctx, field)
+	case "dpe":
+		return ec.fieldContext_UnsModelerTopicStatus_dpe(ctx, field)
+	case "value":
+		return ec.fieldContext_UnsModelerTopicStatus_value(ctx, field)
+	case "status":
+		return ec.fieldContext_UnsModelerTopicStatus_status(ctx, field)
+	case "published":
+		return ec.fieldContext_UnsModelerTopicStatus_published(ctx, field)
+	case "lastPublish":
+		return ec.fieldContext_UnsModelerTopicStatus_lastPublish(ctx, field)
+	case "lastError":
+		return ec.fieldContext_UnsModelerTopicStatus_lastError(ctx, field)
+	case "lastErrorAt":
+		return ec.fieldContext_UnsModelerTopicStatus_lastErrorAt(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type UnsModelerTopicStatus", field.Name)
+}
+
 func (ec *executionContext) childFields_UserInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "username":
@@ -3770,6 +4466,32 @@ func (ec *executionContext) childFields_WinCCOaConnectionConfig(ctx context.Cont
 	return nil, fmt.Errorf("no field named %q was found under type WinCCOaConnectionConfig", field.Name)
 }
 
+func (ec *executionContext) childFields_WinCCOaDatapoint(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_WinCCOaDatapoint_name(ctx, field)
+	case "system":
+		return ec.fieldContext_WinCCOaDatapoint_system(ctx, field)
+	case "type":
+		return ec.fieldContext_WinCCOaDatapoint_type(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaDatapoint", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaDatapointPage(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "items":
+		return ec.fieldContext_WinCCOaDatapointPage_items(ctx, field)
+	case "total":
+		return ec.fieldContext_WinCCOaDatapointPage_total(ctx, field)
+	case "offset":
+		return ec.fieldContext_WinCCOaDatapointPage_offset(ctx, field)
+	case "limit":
+		return ec.fieldContext_WinCCOaDatapointPage_limit(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaDatapointPage", field.Name)
+}
+
 func (ec *executionContext) childFields_WinCCOaDeviceMutations(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "create":
@@ -3796,6 +4518,90 @@ func (ec *executionContext) childFields_WinCCOaDeviceMutations(ctx context.Conte
 	return nil, fmt.Errorf("no field named %q was found under type WinCCOaDeviceMutations", field.Name)
 }
 
+func (ec *executionContext) childFields_WinCCOaElement(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "dpe":
+		return ec.fieldContext_WinCCOaElement_dpe(ctx, field)
+	case "path":
+		return ec.fieldContext_WinCCOaElement_path(ctx, field)
+	case "name":
+		return ec.fieldContext_WinCCOaElement_name(ctx, field)
+	case "parent":
+		return ec.fieldContext_WinCCOaElement_parent(ctx, field)
+	case "depth":
+		return ec.fieldContext_WinCCOaElement_depth(ctx, field)
+	case "elementType":
+		return ec.fieldContext_WinCCOaElement_elementType(ctx, field)
+	case "valueElement":
+		return ec.fieldContext_WinCCOaElement_valueElement(ctx, field)
+	case "typeReference":
+		return ec.fieldContext_WinCCOaElement_typeReference(ctx, field)
+	case "childCount":
+		return ec.fieldContext_WinCCOaElement_childCount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaElement", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaElementInfo(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "dpe":
+		return ec.fieldContext_WinCCOaElementInfo_dpe(ctx, field)
+	case "exists":
+		return ec.fieldContext_WinCCOaElementInfo_exists(ctx, field)
+	case "error":
+		return ec.fieldContext_WinCCOaElementInfo_error(ctx, field)
+	case "type":
+		return ec.fieldContext_WinCCOaElementInfo_type(ctx, field)
+	case "elementType":
+		return ec.fieldContext_WinCCOaElementInfo_elementType(ctx, field)
+	case "valueElement":
+		return ec.fieldContext_WinCCOaElementInfo_valueElement(ctx, field)
+	case "unit":
+		return ec.fieldContext_WinCCOaElementInfo_unit(ctx, field)
+	case "description":
+		return ec.fieldContext_WinCCOaElementInfo_description(ctx, field)
+	case "format":
+		return ec.fieldContext_WinCCOaElementInfo_format(ctx, field)
+	case "value":
+		return ec.fieldContext_WinCCOaElementInfo_value(ctx, field)
+	case "stime":
+		return ec.fieldContext_WinCCOaElementInfo_stime(ctx, field)
+	case "status":
+		return ec.fieldContext_WinCCOaElementInfo_status(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaElementInfo", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaQuery(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "systems":
+		return ec.fieldContext_WinCCOaQuery_systems(ctx, field)
+	case "types":
+		return ec.fieldContext_WinCCOaQuery_types(ctx, field)
+	case "typeStructure":
+		return ec.fieldContext_WinCCOaQuery_typeStructure(ctx, field)
+	case "datapoints":
+		return ec.fieldContext_WinCCOaQuery_datapoints(ctx, field)
+	case "elements":
+		return ec.fieldContext_WinCCOaQuery_elements(ctx, field)
+	case "elementInfo":
+		return ec.fieldContext_WinCCOaQuery_elementInfo(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaQuery", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaSystem(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_WinCCOaSystem_name(ctx, field)
+	case "local":
+		return ec.fieldContext_WinCCOaSystem_local(ctx, field)
+	case "connected":
+		return ec.fieldContext_WinCCOaSystem_connected(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaSystem", field.Name)
+}
+
 func (ec *executionContext) childFields_WinCCOaTransformConfig(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "removeSystemName":
@@ -3810,6 +4616,40 @@ func (ec *executionContext) childFields_WinCCOaTransformConfig(ctx context.Conte
 		return ec.fieldContext_WinCCOaTransformConfig_regexReplacement(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WinCCOaTransformConfig", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaTypeElement(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "path":
+		return ec.fieldContext_WinCCOaTypeElement_path(ctx, field)
+	case "name":
+		return ec.fieldContext_WinCCOaTypeElement_name(ctx, field)
+	case "parent":
+		return ec.fieldContext_WinCCOaTypeElement_parent(ctx, field)
+	case "depth":
+		return ec.fieldContext_WinCCOaTypeElement_depth(ctx, field)
+	case "elementType":
+		return ec.fieldContext_WinCCOaTypeElement_elementType(ctx, field)
+	case "valueElement":
+		return ec.fieldContext_WinCCOaTypeElement_valueElement(ctx, field)
+	case "typeReference":
+		return ec.fieldContext_WinCCOaTypeElement_typeReference(ctx, field)
+	case "childCount":
+		return ec.fieldContext_WinCCOaTypeElement_childCount(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaTypeElement", field.Name)
+}
+
+func (ec *executionContext) childFields_WinCCOaTypeStructure(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "system":
+		return ec.fieldContext_WinCCOaTypeStructure_system(ctx, field)
+	case "type":
+		return ec.fieldContext_WinCCOaTypeStructure_type(ctx, field)
+	case "elements":
+		return ec.fieldContext_WinCCOaTypeStructure_elements(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaTypeStructure", field.Name)
 }
 
 func (ec *executionContext) childFields_WinCCUaAddress(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
@@ -5828,6 +6668,70 @@ func (ec *executionContext) field_Query_systemLogs_args(ctx context.Context, raw
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_unsModelerDefaultPrompt_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "direction",
+		func(ctx context.Context, v any) (UnsModelerDirection, error) {
+			return ec.unmarshalNUnsModelerDirection2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["direction"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_unsModelerSchema_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "direction",
+		func(ctx context.Context, v any) (*UnsModelerDirection, error) {
+			return ec.unmarshalOUnsModelerDirection2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["direction"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_unsModelerValidate_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "document",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["document"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_unsModelers_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_users_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -6348,6 +7252,196 @@ func (ec *executionContext) field_Topic_value_args(ctx context.Context, rawArgs 
 	return args, nil
 }
 
+func (ec *executionContext) field_UnsModelerMutations_apply_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_createInWinCCOa_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_create_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (UnsModelerDeviceInput, error) {
+			return ec.unmarshalNUnsModelerDeviceInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDeviceInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_delete_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_importProposal_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "document",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["document"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "topicMode",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["topicMode"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "archiveGroup",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["archiveGroup"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "topicFilters",
+		func(ctx context.Context, v any) ([]string, error) {
+			return ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["topicFilters"] = arg4
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_saveDraft_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "document",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["document"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_startAiRun_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (UnsModelerAiRunInput, error) {
+			return ec.unmarshalNUnsModelerAiRunInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRunInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_toggle_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "enabled",
+		func(ctx context.Context, v any) (bool, error) {
+			return ec.unmarshalNBoolean2bool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["enabled"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_UnsModelerMutations_update_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (UnsModelerDeviceInput, error) {
+			return ec.unmarshalNUnsModelerDeviceInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDeviceInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+
 func (ec *executionContext) field_UserManagementMutations_createAclRule_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -6669,6 +7763,124 @@ func (ec *executionContext) field_WinCCOaDeviceMutations_update_args(ctx context
 		return nil, err
 	}
 	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_datapoints_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "system",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["system"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "pattern",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["pattern"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "type",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["type"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "limit",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["limit"] = arg3
+	arg4, err := graphql.ProcessArgField(ctx, rawArgs, "offset",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["offset"] = arg4
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_elementInfo_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "dpes",
+		func(ctx context.Context, v any) ([]string, error) {
+			return ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["dpes"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_elements_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "dp",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["dp"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_typeStructure_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "system",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["system"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "type",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["type"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_types_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "system",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["system"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "pattern",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["pattern"] = arg1
 	return args, nil
 }
 
@@ -15283,6 +16495,38 @@ func (ec *executionContext) fieldContext_Mutation_script(_ context.Context, fiel
 	return fc, nil
 }
 
+func (ec *executionContext) _Mutation_unsModeler(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_unsModeler(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().UnsModeler(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerMutations) graphql.Marshaler {
+			return ec.marshalNUnsModelerMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMutations(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_unsModeler(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerMutations(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Mutation_winCCOaDevice(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -17932,6 +19176,214 @@ func (ec *executionContext) fieldContext_Query_scriptSkill(ctx context.Context, 
 	if fc.Args, err = ec.field_Query_scriptSkill_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_unsModelers(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_unsModelers(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().UnsModelers(ctx, fc.Args["name"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerDevice) graphql.Marshaler {
+			return ec.marshalNUnsModelerDevice2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDeviceᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_unsModelers(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerDevice(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_unsModelers_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_unsModelerValidate(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_unsModelerValidate(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().UnsModelerValidate(ctx, fc.Args["name"].(string), fc.Args["document"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+			return ec.marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_unsModelerValidate(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerIssue(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_unsModelerValidate_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_unsModelerSchema(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_unsModelerSchema(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().UnsModelerSchema(ctx, fc.Args["direction"].(*UnsModelerDirection))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_unsModelerSchema(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_unsModelerSchema_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_unsModelerDefaultPrompt(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_unsModelerDefaultPrompt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().UnsModelerDefaultPrompt(ctx, fc.Args["direction"].(UnsModelerDirection))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_unsModelerDefaultPrompt(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_unsModelerDefaultPrompt_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_winccoa(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_winccoa(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Query().Winccoa(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WinCCOaQuery) graphql.Marshaler {
+			return ec.marshalOWinCCOaQuery2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaQuery(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_Query_winccoa(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaQuery(ctx, field)
+		},
 	}
 	return fc, nil
 }
@@ -23216,6 +24668,2658 @@ func (ec *executionContext) fieldContext_TopicValue_userProperties(_ context.Con
 	return fc, nil
 }
 
+func (ec *executionContext) _UnsModelerAiEvent_time(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiEvent_time(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Time, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiEvent_time(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiEvent_kind(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiEvent_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiEvent_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiEvent_name(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiEvent_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiEvent_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiEvent_detail(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiEvent_detail(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Detail, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiEvent_detail(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiEvent_error(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiEvent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiEvent_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiEvent_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiEvent", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_id(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_id(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_status(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_provider(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_provider(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Provider, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_model(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_model(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Model, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_model(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_startedAt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_startedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.StartedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_startedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_finishedAt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_finishedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FinishedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_finishedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_steps(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_steps(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Steps, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_steps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_toolCalls(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_toolCalls(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ToolCalls, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_toolCalls(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_inputTokens(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_inputTokens(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.InputTokens, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_inputTokens(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_outputTokens(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_outputTokens(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutputTokens, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_outputTokens(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_error(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_applied(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_applied(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Applied, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_applied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRun", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRun_issues(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_issues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Issues, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+			return ec.marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_issues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerAiRun",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerIssue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerAiRun_events(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRun) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRun_events(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Events, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerAiEvent) graphql.Marshaler {
+			return ec.marshalNUnsModelerAiEvent2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiEventᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRun_events(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerAiRun",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerAiEvent(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerAiRunResult_success(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRunResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRunResult_success(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRunResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRunResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRunResult_errors(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRunResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRunResult_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRunResult_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerAiRunResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerAiRunResult_run(ctx context.Context, field graphql.CollectedField, obj *UnsModelerAiRunResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerAiRunResult_run(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Run, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerAiRun) graphql.Marshaler {
+			return ec.marshalOUnsModelerAiRun2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRun(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerAiRunResult_run(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerAiRunResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerAiRun(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerConfig_direction(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_direction(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Direction, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v UnsModelerDirection) graphql.Marshaler {
+			return ec.marshalNUnsModelerDirection2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_direction(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type UnsModelerDirection does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_aiProvider(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_aiProvider(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AiProvider, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_aiProvider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_approvalMode(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_approvalMode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ApprovalMode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v UnsModelerApprovalMode) graphql.Marshaler {
+			return ec.marshalNUnsModelerApprovalMode2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_approvalMode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type UnsModelerApprovalMode does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_systemPrompt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_systemPrompt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SystemPrompt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_systemPrompt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_aiMaxSteps(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_aiMaxSteps(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AiMaxSteps, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_aiMaxSteps(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_aiTimeoutSec(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_aiTimeoutSec(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AiTimeoutSec, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_aiTimeoutSec(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_aiTokenBudget(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_aiTokenBudget(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AiTokenBudget, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_aiTokenBudget(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_redundancy(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_redundancy(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Redundancy, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v UnsModelerRedundancy) graphql.Marshaler {
+			return ec.marshalNUnsModelerRedundancy2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_redundancy(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type UnsModelerRedundancy does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_unsRoot(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_unsRoot(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UnsRoot, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_unsRoot(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_allowWrite(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_allowWrite(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.AllowWrite, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_allowWrite(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_topicDefaults(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_topicDefaults(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TopicDefaults, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_topicDefaults(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_payloadDefaults(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_payloadDefaults(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PayloadDefaults, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_payloadDefaults(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_oaPrefix(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_oaPrefix(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OaPrefix, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_oaPrefix(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_flowEnabled(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_flowEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.FlowEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_flowEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreatePlan_types(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreatePlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreatePlan_types(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Types, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreatePlan_types(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreatePlan", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreatePlan_datapoints(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreatePlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreatePlan_datapoints(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Datapoints, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreatePlan_datapoints(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreatePlan", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreatePlan_configWrites(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreatePlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreatePlan_configWrites(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConfigWrites, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreatePlan_configWrites(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreatePlan", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreatePlan_excluded(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreatePlan) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreatePlan_excluded(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Excluded, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreatePlan_excluded(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreatePlan", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreateResult_success(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreateResult_success(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreateResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreateResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreateResult_errors(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreateResult_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreateResult_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreateResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerCreateResult_issues(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreateResult_issues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Issues, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+			return ec.marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreateResult_issues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerCreateResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerIssue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerCreateResult_objects(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreateResult_objects(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Objects, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerObjectResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerObjectResult2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerObjectResultᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreateResult_objects(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerCreateResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerObjectResult(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerCreateResult_configWrites(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreateResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerCreateResult_configWrites(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConfigWrites, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerCreateResult_configWrites(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerCreateResult", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_name(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_namespace(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_nodeId(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_nodeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_enabled(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_enabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_createdAt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_updatedAt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_isOnCurrentNode(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_isOnCurrentNode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.IsOnCurrentNode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_isOnCurrentNode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_config(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_config(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Config, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerConfig) graphql.Marshaler {
+			return ec.marshalNUnsModelerConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerConfig(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_config(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerDevice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerConfig(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerDevice_status(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().Status(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerStatus) graphql.Marshaler {
+			return ec.marshalNUnsModelerStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerStatus(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerDevice",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerDevice_draft(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_draft(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().Draft(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_draft(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_applied(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_applied(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().Applied(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_applied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerDevice", field, true, true, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerDevice_liveTopics(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_liveTopics(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().LiveTopics(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerTopicStatus) graphql.Marshaler {
+			return ec.marshalNUnsModelerTopicStatus2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerTopicStatusᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_liveTopics(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerDevice",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerTopicStatus(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerDevice_aiRun(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_aiRun(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().AiRun(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerAiRun) graphql.Marshaler {
+			return ec.marshalOUnsModelerAiRun2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRun(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_aiRun(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerDevice",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerAiRun(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerDevice_createPlan(ctx context.Context, field graphql.CollectedField, obj *UnsModelerDevice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerDevice_createPlan(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.UnsModelerDevice().CreatePlan(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerCreatePlan) graphql.Marshaler {
+			return ec.marshalOUnsModelerCreatePlan2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerCreatePlan(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerDevice_createPlan(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerDevice",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerCreatePlan(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerIssue_severity(ctx context.Context, field graphql.CollectedField, obj *UnsModelerIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerIssue_severity(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Severity, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v UnsModelerSeverity) graphql.Marshaler {
+			return ec.marshalNUnsModelerSeverity2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSeverity(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerIssue_severity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerIssue", field, false, false, errors.New("field of type UnsModelerSeverity does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerIssue_path(ctx context.Context, field graphql.CollectedField, obj *UnsModelerIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerIssue_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerIssue_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerIssue_message(ctx context.Context, field graphql.CollectedField, obj *UnsModelerIssue) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerIssue_message(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerIssue_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerIssue", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerMappingResult_success(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMappingResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMappingResult_success(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMappingResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerMappingResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerMappingResult_stored(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMappingResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMappingResult_stored(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Stored, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMappingResult_stored(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerMappingResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerMappingResult_document(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMappingResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMappingResult_document(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Document, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMappingResult_document(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerMappingResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerMappingResult_errors(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMappingResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMappingResult_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMappingResult_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerMappingResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerMappingResult_issues(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMappingResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMappingResult_issues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Issues, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+			return ec.marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMappingResult_issues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMappingResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerIssue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_create(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_create(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().Create(ctx, obj, fc.Args["input"].(UnsModelerDeviceInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_create(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_create_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_update(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_update(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().Update(ctx, obj, fc.Args["name"].(string), fc.Args["input"].(UnsModelerDeviceInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_update(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_update_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_delete(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_delete(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().Delete(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_delete(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_delete_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_toggle(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_toggle(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().Toggle(ctx, obj, fc.Args["name"].(string), fc.Args["enabled"].(bool))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_toggle(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_toggle_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_saveDraft(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_saveDraft(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().SaveDraft(ctx, obj, fc.Args["name"].(string), fc.Args["document"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerMappingResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerMappingResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMappingResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_saveDraft(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerMappingResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_saveDraft_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_apply(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_apply(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().Apply(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerMappingResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerMappingResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMappingResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_apply(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerMappingResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_apply_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_createInWinCCOa(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_createInWinCCOa(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().CreateInWinCCOa(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerCreateResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerCreateResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerCreateResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_createInWinCCOa(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerCreateResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_createInWinCCOa_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_importProposal(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_importProposal(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().ImportProposal(ctx, obj, fc.Args["name"].(string), fc.Args["document"].(string), fc.Args["topicMode"].(*string), fc.Args["archiveGroup"].(*string), fc.Args["topicFilters"].([]string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerMappingResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerMappingResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMappingResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_importProposal(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerMappingResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_importProposal_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerMutations_startAiRun(ctx context.Context, field graphql.CollectedField, obj *UnsModelerMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerMutations_startAiRun(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.UnsModelerMutations().StartAiRun(ctx, obj, fc.Args["name"].(string), fc.Args["input"].(UnsModelerAiRunInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerAiRunResult) graphql.Marshaler {
+			return ec.marshalNUnsModelerAiRunResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRunResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerMutations_startAiRun(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerAiRunResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_UnsModelerMutations_startAiRun_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerObjectResult_kind(ctx context.Context, field graphql.CollectedField, obj *UnsModelerObjectResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerObjectResult_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerObjectResult_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerObjectResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerObjectResult_name(ctx context.Context, field graphql.CollectedField, obj *UnsModelerObjectResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerObjectResult_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerObjectResult_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerObjectResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerObjectResult_status(ctx context.Context, field graphql.CollectedField, obj *UnsModelerObjectResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerObjectResult_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerObjectResult_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerObjectResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerObjectResult_message(ctx context.Context, field graphql.CollectedField, obj *UnsModelerObjectResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerObjectResult_message(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerObjectResult_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerObjectResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerObjectResult_configWrites(ctx context.Context, field graphql.CollectedField, obj *UnsModelerObjectResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerObjectResult_configWrites(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ConfigWrites, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerObjectResult_configWrites(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerObjectResult", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerResult_success(ctx context.Context, field graphql.CollectedField, obj *UnsModelerResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerResult_success(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerResult_device(ctx context.Context, field graphql.CollectedField, obj *UnsModelerResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerResult_device(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Device, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerDevice) graphql.Marshaler {
+			return ec.marshalOUnsModelerDevice2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDevice(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerResult_device(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerDevice(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerResult_errors(ctx context.Context, field graphql.CollectedField, obj *UnsModelerResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerResult_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerResult_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerResult_issues(ctx context.Context, field graphql.CollectedField, obj *UnsModelerResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerResult_issues(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Issues, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+			return ec.marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerResult_issues(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "UnsModelerResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_UnsModelerIssue(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _UnsModelerStatus_running(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_running(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Running, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_running(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_active(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_active(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Active, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_active(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_topics(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_topics(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Topics, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_topics(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_dpes(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_dpes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dpes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_dpes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_published(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_published(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Published, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_published(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_writes(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_writes(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Writes, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_writes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_errors(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_lastApplied(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_lastApplied(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastApplied, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_lastApplied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerStatus_applyError(ctx context.Context, field graphql.CollectedField, obj *UnsModelerStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerStatus_applyError(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ApplyError, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerStatus_applyError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_topic(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_topic(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Topic, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_topic(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_dpe(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_dpe(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dpe, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_dpe(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_value(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_value(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Value, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_status(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int64) graphql.Marshaler {
+			return ec.marshalOLong2ᚖint64(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_published(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_published(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Published, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_published(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_lastPublish(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_lastPublish(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastPublish, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_lastPublish(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_lastError(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_lastError(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastError, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_lastError(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerTopicStatus_lastErrorAt(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_lastErrorAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.LastErrorAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_lastErrorAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _UserInfo_username(ctx context.Context, field graphql.CollectedField, obj *UserInfo) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -24629,6 +28733,176 @@ func (ec *executionContext) fieldContext_WinCCOaConnectionConfig_addresses(_ con
 	return fc, nil
 }
 
+func (ec *executionContext) _WinCCOaDatapoint_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapoint_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapoint_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapoint", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaDatapoint_system(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapoint_system(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.System, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapoint_system(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapoint", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaDatapoint_type(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapoint) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapoint_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapoint_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapoint", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaDatapointPage_items(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapointPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapointPage_items(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Items, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaDatapoint) graphql.Marshaler {
+			return ec.marshalNWinCCOaDatapoint2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapointᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapointPage_items(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaDatapointPage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaDatapoint(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaDatapointPage_total(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapointPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapointPage_total(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Total, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapointPage_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapointPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaDatapointPage_offset(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapointPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapointPage_offset(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Offset, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapointPage_offset(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapointPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaDatapointPage_limit(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDatapointPage) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaDatapointPage_limit(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Limit, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaDatapointPage_limit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaDatapointPage", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
 func (ec *executionContext) _WinCCOaDeviceMutations_create(ctx context.Context, field graphql.CollectedField, obj *WinCCOaDeviceMutations) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -25069,6 +29343,810 @@ func (ec *executionContext) fieldContext_WinCCOaDeviceMutations_deleteAddress(ct
 	return fc, nil
 }
 
+func (ec *executionContext) _WinCCOaElement_dpe(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_dpe(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dpe, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_dpe(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_path(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_parent(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_parent(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Parent, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_parent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_depth(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_depth(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Depth, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_depth(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_elementType(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_elementType(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ElementType, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_elementType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_valueElement(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_valueElement(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ValueElement, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_valueElement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_typeReference(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_typeReference(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TypeReference, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_typeReference(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElement_childCount(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElement_childCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChildCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElement_childCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElement", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_dpe(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_dpe(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Dpe, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_dpe(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_exists(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_exists(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Exists, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_exists(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_error(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_error(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Error, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_error(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_type(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_elementType(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_elementType(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ElementType, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_elementType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_valueElement(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_valueElement(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ValueElement, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_valueElement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_unit(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_unit(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Unit, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_unit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_description(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_description(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Description, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_description(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_format(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_format(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Format, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_format(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_value(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_value(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Value, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_value(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_stime(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_stime(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Stime, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_stime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaElementInfo_status(ctx context.Context, field graphql.CollectedField, obj *WinCCOaElementInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaElementInfo_status(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int64) graphql.Marshaler {
+			return ec.marshalOLong2ᚖint64(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaElementInfo_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaElementInfo", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaQuery_systems(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_systems(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.WinCCOaQuery().Systems(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaSystem) graphql.Marshaler {
+			return ec.marshalNWinCCOaSystem2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaSystemᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_systems(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaSystem(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_types(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_types(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().Types(ctx, obj, fc.Args["system"].(*string), fc.Args["pattern"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_types(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_types_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_typeStructure(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_typeStructure(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().TypeStructure(ctx, obj, fc.Args["system"].(*string), fc.Args["type"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WinCCOaTypeStructure) graphql.Marshaler {
+			return ec.marshalNWinCCOaTypeStructure2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeStructure(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_typeStructure(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaTypeStructure(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_typeStructure_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_datapoints(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_datapoints(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().Datapoints(ctx, obj, fc.Args["system"].(*string), fc.Args["pattern"].(*string), fc.Args["type"].(*string), fc.Args["limit"].(*int), fc.Args["offset"].(*int))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *WinCCOaDatapointPage) graphql.Marshaler {
+			return ec.marshalNWinCCOaDatapointPage2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapointPage(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_datapoints(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaDatapointPage(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_datapoints_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_elements(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_elements(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().Elements(ctx, obj, fc.Args["dp"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaElement) graphql.Marshaler {
+			return ec.marshalNWinCCOaElement2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_elements(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaElement(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_elements_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_elementInfo(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_elementInfo(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().ElementInfo(ctx, obj, fc.Args["dpes"].([]string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaElementInfo) graphql.Marshaler {
+			return ec.marshalNWinCCOaElementInfo2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementInfoᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_elementInfo(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaElementInfo(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_elementInfo_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaSystem_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaSystem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaSystem_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaSystem_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaSystem", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaSystem_local(ctx context.Context, field graphql.CollectedField, obj *WinCCOaSystem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaSystem_local(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Local, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaSystem_local(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaSystem", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaSystem_connected(ctx context.Context, field graphql.CollectedField, obj *WinCCOaSystem) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaSystem_connected(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Connected, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaSystem_connected(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaSystem", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
 func (ec *executionContext) _WinCCOaTransformConfig_removeSystemName(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTransformConfig) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -25182,6 +30260,268 @@ func (ec *executionContext) _WinCCOaTransformConfig_regexReplacement(ctx context
 }
 func (ec *executionContext) fieldContext_WinCCOaTransformConfig_regexReplacement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("WinCCOaTransformConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_path(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_path(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_parent(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_parent(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Parent, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_parent(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_depth(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_depth(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Depth, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_depth(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_elementType(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_elementType(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ElementType, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_elementType(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_valueElement(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_valueElement(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ValueElement, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_valueElement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_typeReference(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_typeReference(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TypeReference, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_typeReference(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeElement_childCount(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeElement) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeElement_childCount(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ChildCount, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int) graphql.Marshaler {
+			return ec.marshalNInt2int(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeElement_childCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeElement", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeStructure_system(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeStructure) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeStructure_system(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.System, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeStructure_system(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeStructure", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeStructure_type(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeStructure) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeStructure_type(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Type, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeStructure_type(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaTypeStructure", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaTypeStructure_elements(ctx context.Context, field graphql.CollectedField, obj *WinCCOaTypeStructure) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaTypeStructure_elements(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Elements, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaTypeElement) graphql.Marshaler {
+			return ec.marshalNWinCCOaTypeElement2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeElementᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaTypeStructure_elements(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaTypeStructure",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaTypeElement(ctx, field)
+		},
+	}
+	return fc, nil
 }
 
 func (ec *executionContext) _WinCCUaAddress_type(ctx context.Context, field graphql.CollectedField, obj *WinCCUaAddress) (ret graphql.Marshaler) {
@@ -29379,6 +34719,340 @@ func (ec *executionContext) unmarshalInputTopicDataInput(ctx context.Context, ob
 				return it, err
 			}
 			it.Value = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUnsModelerAiRunInput(ctx context.Context, obj any) (UnsModelerAiRunInput, error) {
+	var it UnsModelerAiRunInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"prompt", "documentBase64", "documentName", "selection", "allowBeyondSelection", "topicMode", "archiveGroup", "topicFilters", "maxTopics"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "prompt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("prompt"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Prompt = data
+		case "documentBase64":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("documentBase64"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DocumentBase64 = data
+		case "documentName":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("documentName"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DocumentName = data
+		case "selection":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("selection"))
+			data, err := ec.unmarshalOUnsModelerSelectionItemInput2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSelectionItemInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Selection = data
+		case "allowBeyondSelection":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowBeyondSelection"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowBeyondSelection = data
+		case "topicMode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicMode"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicMode = data
+		case "archiveGroup":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("archiveGroup"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ArchiveGroup = data
+		case "topicFilters":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicFilters"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicFilters = data
+		case "maxTopics":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxTopics"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxTopics = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUnsModelerConfigInput(ctx context.Context, obj any) (UnsModelerConfigInput, error) {
+	var it UnsModelerConfigInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"direction", "aiProvider", "approvalMode", "systemPrompt", "aiMaxSteps", "aiTimeoutSec", "aiTokenBudget", "redundancy", "unsRoot", "allowWrite", "topicDefaults", "payloadDefaults", "oaPrefix", "flowEnabled"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "direction":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("direction"))
+			data, err := ec.unmarshalNUnsModelerDirection2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Direction = data
+		case "aiProvider":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aiProvider"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AiProvider = data
+		case "approvalMode":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("approvalMode"))
+			data, err := ec.unmarshalOUnsModelerApprovalMode2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ApprovalMode = data
+		case "systemPrompt":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("systemPrompt"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SystemPrompt = data
+		case "aiMaxSteps":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aiMaxSteps"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AiMaxSteps = data
+		case "aiTimeoutSec":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aiTimeoutSec"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AiTimeoutSec = data
+		case "aiTokenBudget":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aiTokenBudget"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AiTokenBudget = data
+		case "redundancy":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("redundancy"))
+			data, err := ec.unmarshalOUnsModelerRedundancy2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Redundancy = data
+		case "unsRoot":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("unsRoot"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.UnsRoot = data
+		case "allowWrite":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowWrite"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowWrite = data
+		case "topicDefaults":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicDefaults"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicDefaults = data
+		case "payloadDefaults":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadDefaults"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PayloadDefaults = data
+		case "oaPrefix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("oaPrefix"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OaPrefix = data
+		case "flowEnabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("flowEnabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.FlowEnabled = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUnsModelerDeviceInput(ctx context.Context, obj any) (UnsModelerDeviceInput, error) {
+	var it UnsModelerDeviceInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["enabled"]; !present {
+		asMap["enabled"] = true
+	}
+
+	fieldsInOrder := [...]string{"name", "namespace", "nodeId", "enabled", "config"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "nodeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeID = data
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "config":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("config"))
+			data, err := ec.unmarshalNUnsModelerConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerConfigInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Config = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputUnsModelerSelectionItemInput(ctx context.Context, obj any) (UnsModelerSelectionItemInput, error) {
+	var it UnsModelerSelectionItemInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"kind", "system", "type", "datapoint", "path", "pattern"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "system":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("system"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.System = data
+		case "type":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("type"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Type = data
+		case "datapoint":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("datapoint"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Datapoint = data
+		case "path":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("path"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Path = data
+		case "pattern":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("pattern"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Pattern = data
 		}
 	}
 	return it, nil
@@ -34615,6 +40289,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "unsModeler":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_unsModeler(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "winCCOaDevice":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_winCCOaDevice(ctx, field)
@@ -35928,6 +41609,116 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				}()
 				res = ec._Query_scriptSkill(ctx, field)
 				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "unsModelers":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_unsModelers(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "unsModelerValidate":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_unsModelerValidate(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "unsModelerSchema":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_unsModelerSchema(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "unsModelerDefaultPrompt":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_unsModelerDefaultPrompt(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "winccoa":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_winccoa(ctx, field)
+				if res == graphql.RequiredNull {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
 				return res
@@ -38695,6 +44486,1473 @@ func (ec *executionContext) _TopicValue(ctx context.Context, sel ast.SelectionSe
 	return out
 }
 
+var unsModelerAiEventImplementors = []string{"UnsModelerAiEvent"}
+
+func (ec *executionContext) _UnsModelerAiEvent(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerAiEvent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerAiEventImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerAiEvent")
+		case "time":
+			out.Values[i] = ec._UnsModelerAiEvent_time(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._UnsModelerAiEvent_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._UnsModelerAiEvent_name(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "detail":
+			out.Values[i] = ec._UnsModelerAiEvent_detail(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._UnsModelerAiEvent_error(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerAiRunImplementors = []string{"UnsModelerAiRun"}
+
+func (ec *executionContext) _UnsModelerAiRun(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerAiRun) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerAiRunImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerAiRun")
+		case "id":
+			out.Values[i] = ec._UnsModelerAiRun_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._UnsModelerAiRun_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "provider":
+			out.Values[i] = ec._UnsModelerAiRun_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "model":
+			out.Values[i] = ec._UnsModelerAiRun_model(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "startedAt":
+			out.Values[i] = ec._UnsModelerAiRun_startedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "finishedAt":
+			out.Values[i] = ec._UnsModelerAiRun_finishedAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "steps":
+			out.Values[i] = ec._UnsModelerAiRun_steps(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "toolCalls":
+			out.Values[i] = ec._UnsModelerAiRun_toolCalls(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "inputTokens":
+			out.Values[i] = ec._UnsModelerAiRun_inputTokens(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "outputTokens":
+			out.Values[i] = ec._UnsModelerAiRun_outputTokens(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._UnsModelerAiRun_error(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "applied":
+			out.Values[i] = ec._UnsModelerAiRun_applied(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "issues":
+			out.Values[i] = ec._UnsModelerAiRun_issues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "events":
+			out.Values[i] = ec._UnsModelerAiRun_events(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerAiRunResultImplementors = []string{"UnsModelerAiRunResult"}
+
+func (ec *executionContext) _UnsModelerAiRunResult(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerAiRunResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerAiRunResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerAiRunResult")
+		case "success":
+			out.Values[i] = ec._UnsModelerAiRunResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._UnsModelerAiRunResult_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "run":
+			out.Values[i] = ec._UnsModelerAiRunResult_run(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerConfigImplementors = []string{"UnsModelerConfig"}
+
+func (ec *executionContext) _UnsModelerConfig(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerConfig) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerConfigImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerConfig")
+		case "direction":
+			out.Values[i] = ec._UnsModelerConfig_direction(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "aiProvider":
+			out.Values[i] = ec._UnsModelerConfig_aiProvider(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "approvalMode":
+			out.Values[i] = ec._UnsModelerConfig_approvalMode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "systemPrompt":
+			out.Values[i] = ec._UnsModelerConfig_systemPrompt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "aiMaxSteps":
+			out.Values[i] = ec._UnsModelerConfig_aiMaxSteps(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "aiTimeoutSec":
+			out.Values[i] = ec._UnsModelerConfig_aiTimeoutSec(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "aiTokenBudget":
+			out.Values[i] = ec._UnsModelerConfig_aiTokenBudget(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "redundancy":
+			out.Values[i] = ec._UnsModelerConfig_redundancy(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unsRoot":
+			out.Values[i] = ec._UnsModelerConfig_unsRoot(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "allowWrite":
+			out.Values[i] = ec._UnsModelerConfig_allowWrite(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topicDefaults":
+			out.Values[i] = ec._UnsModelerConfig_topicDefaults(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "payloadDefaults":
+			out.Values[i] = ec._UnsModelerConfig_payloadDefaults(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "oaPrefix":
+			out.Values[i] = ec._UnsModelerConfig_oaPrefix(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "flowEnabled":
+			out.Values[i] = ec._UnsModelerConfig_flowEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerCreatePlanImplementors = []string{"UnsModelerCreatePlan"}
+
+func (ec *executionContext) _UnsModelerCreatePlan(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerCreatePlan) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerCreatePlanImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerCreatePlan")
+		case "types":
+			out.Values[i] = ec._UnsModelerCreatePlan_types(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "datapoints":
+			out.Values[i] = ec._UnsModelerCreatePlan_datapoints(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "configWrites":
+			out.Values[i] = ec._UnsModelerCreatePlan_configWrites(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "excluded":
+			out.Values[i] = ec._UnsModelerCreatePlan_excluded(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerCreateResultImplementors = []string{"UnsModelerCreateResult"}
+
+func (ec *executionContext) _UnsModelerCreateResult(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerCreateResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerCreateResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerCreateResult")
+		case "success":
+			out.Values[i] = ec._UnsModelerCreateResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._UnsModelerCreateResult_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "issues":
+			out.Values[i] = ec._UnsModelerCreateResult_issues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "objects":
+			out.Values[i] = ec._UnsModelerCreateResult_objects(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "configWrites":
+			out.Values[i] = ec._UnsModelerCreateResult_configWrites(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerDeviceImplementors = []string{"UnsModelerDevice"}
+
+func (ec *executionContext) _UnsModelerDevice(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerDevice) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerDeviceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerDevice")
+		case "name":
+			out.Values[i] = ec._UnsModelerDevice_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "namespace":
+			out.Values[i] = ec._UnsModelerDevice_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "nodeId":
+			out.Values[i] = ec._UnsModelerDevice_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "enabled":
+			out.Values[i] = ec._UnsModelerDevice_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "createdAt":
+			out.Values[i] = ec._UnsModelerDevice_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "updatedAt":
+			out.Values[i] = ec._UnsModelerDevice_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "isOnCurrentNode":
+			out.Values[i] = ec._UnsModelerDevice_isOnCurrentNode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "config":
+			out.Values[i] = ec._UnsModelerDevice_config(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "status":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_status(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "draft":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_draft(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "applied":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_applied(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "liveTopics":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_liveTopics(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "aiRun":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_aiRun(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "createPlan":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerDevice_createPlan(ctx, field, obj)
+				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerIssueImplementors = []string{"UnsModelerIssue"}
+
+func (ec *executionContext) _UnsModelerIssue(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerIssue) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerIssueImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerIssue")
+		case "severity":
+			out.Values[i] = ec._UnsModelerIssue_severity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "path":
+			out.Values[i] = ec._UnsModelerIssue_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._UnsModelerIssue_message(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerMappingResultImplementors = []string{"UnsModelerMappingResult"}
+
+func (ec *executionContext) _UnsModelerMappingResult(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerMappingResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerMappingResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerMappingResult")
+		case "success":
+			out.Values[i] = ec._UnsModelerMappingResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stored":
+			out.Values[i] = ec._UnsModelerMappingResult_stored(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "document":
+			out.Values[i] = ec._UnsModelerMappingResult_document(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._UnsModelerMappingResult_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "issues":
+			out.Values[i] = ec._UnsModelerMappingResult_issues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerMutationsImplementors = []string{"UnsModelerMutations"}
+
+func (ec *executionContext) _UnsModelerMutations(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerMutations) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerMutationsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerMutations")
+		case "create":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_create(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "update":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_update(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "delete":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_delete(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "toggle":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_toggle(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "saveDraft":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_saveDraft(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "apply":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_apply(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "createInWinCCOa":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_createInWinCCOa(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "importProposal":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_importProposal(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "startAiRun":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._UnsModelerMutations_startAiRun(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerObjectResultImplementors = []string{"UnsModelerObjectResult"}
+
+func (ec *executionContext) _UnsModelerObjectResult(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerObjectResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerObjectResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerObjectResult")
+		case "kind":
+			out.Values[i] = ec._UnsModelerObjectResult_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._UnsModelerObjectResult_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._UnsModelerObjectResult_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._UnsModelerObjectResult_message(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "configWrites":
+			out.Values[i] = ec._UnsModelerObjectResult_configWrites(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerResultImplementors = []string{"UnsModelerResult"}
+
+func (ec *executionContext) _UnsModelerResult(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerResult")
+		case "success":
+			out.Values[i] = ec._UnsModelerResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "device":
+			out.Values[i] = ec._UnsModelerResult_device(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._UnsModelerResult_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "issues":
+			out.Values[i] = ec._UnsModelerResult_issues(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerStatusImplementors = []string{"UnsModelerStatus"}
+
+func (ec *executionContext) _UnsModelerStatus(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerStatus")
+		case "running":
+			out.Values[i] = ec._UnsModelerStatus_running(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "active":
+			out.Values[i] = ec._UnsModelerStatus_active(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topics":
+			out.Values[i] = ec._UnsModelerStatus_topics(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dpes":
+			out.Values[i] = ec._UnsModelerStatus_dpes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "published":
+			out.Values[i] = ec._UnsModelerStatus_published(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "writes":
+			out.Values[i] = ec._UnsModelerStatus_writes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._UnsModelerStatus_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastApplied":
+			out.Values[i] = ec._UnsModelerStatus_lastApplied(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "applyError":
+			out.Values[i] = ec._UnsModelerStatus_applyError(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var unsModelerTopicStatusImplementors = []string{"UnsModelerTopicStatus"}
+
+func (ec *executionContext) _UnsModelerTopicStatus(ctx context.Context, sel ast.SelectionSet, obj *UnsModelerTopicStatus) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, unsModelerTopicStatusImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("UnsModelerTopicStatus")
+		case "topic":
+			out.Values[i] = ec._UnsModelerTopicStatus_topic(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dpe":
+			out.Values[i] = ec._UnsModelerTopicStatus_dpe(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "value":
+			out.Values[i] = ec._UnsModelerTopicStatus_value(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._UnsModelerTopicStatus_status(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "published":
+			out.Values[i] = ec._UnsModelerTopicStatus_published(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastPublish":
+			out.Values[i] = ec._UnsModelerTopicStatus_lastPublish(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "lastError":
+			out.Values[i] = ec._UnsModelerTopicStatus_lastError(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "lastErrorAt":
+			out.Values[i] = ec._UnsModelerTopicStatus_lastErrorAt(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var userInfoImplementors = []string{"UserInfo"}
 
 func (ec *executionContext) _UserInfo(ctx context.Context, sel ast.SelectionSet, obj *UserInfo) graphql.Marshaler {
@@ -39577,6 +46835,107 @@ func (ec *executionContext) _WinCCOaConnectionConfig(ctx context.Context, sel as
 	return out
 }
 
+var winCCOaDatapointImplementors = []string{"WinCCOaDatapoint"}
+
+func (ec *executionContext) _WinCCOaDatapoint(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaDatapoint) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaDatapointImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaDatapoint")
+		case "name":
+			out.Values[i] = ec._WinCCOaDatapoint_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "system":
+			out.Values[i] = ec._WinCCOaDatapoint_system(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._WinCCOaDatapoint_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaDatapointPageImplementors = []string{"WinCCOaDatapointPage"}
+
+func (ec *executionContext) _WinCCOaDatapointPage(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaDatapointPage) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaDatapointPageImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaDatapointPage")
+		case "items":
+			out.Values[i] = ec._WinCCOaDatapointPage_items(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "total":
+			out.Values[i] = ec._WinCCOaDatapointPage_total(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "offset":
+			out.Values[i] = ec._WinCCOaDatapointPage_offset(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "limit":
+			out.Values[i] = ec._WinCCOaDatapointPage_limit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var winCCOaDeviceMutationsImplementors = []string{"WinCCOaDeviceMutations"}
 
 func (ec *executionContext) _WinCCOaDeviceMutations(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaDeviceMutations) graphql.Marshaler {
@@ -39990,6 +47349,486 @@ func (ec *executionContext) _WinCCOaDeviceMutations(ctx context.Context, sel ast
 	return out
 }
 
+var winCCOaElementImplementors = []string{"WinCCOaElement"}
+
+func (ec *executionContext) _WinCCOaElement(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaElement) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaElementImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaElement")
+		case "dpe":
+			out.Values[i] = ec._WinCCOaElement_dpe(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "path":
+			out.Values[i] = ec._WinCCOaElement_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._WinCCOaElement_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "parent":
+			out.Values[i] = ec._WinCCOaElement_parent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "depth":
+			out.Values[i] = ec._WinCCOaElement_depth(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "elementType":
+			out.Values[i] = ec._WinCCOaElement_elementType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "valueElement":
+			out.Values[i] = ec._WinCCOaElement_valueElement(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "typeReference":
+			out.Values[i] = ec._WinCCOaElement_typeReference(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "childCount":
+			out.Values[i] = ec._WinCCOaElement_childCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaElementInfoImplementors = []string{"WinCCOaElementInfo"}
+
+func (ec *executionContext) _WinCCOaElementInfo(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaElementInfo) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaElementInfoImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaElementInfo")
+		case "dpe":
+			out.Values[i] = ec._WinCCOaElementInfo_dpe(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "exists":
+			out.Values[i] = ec._WinCCOaElementInfo_exists(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "error":
+			out.Values[i] = ec._WinCCOaElementInfo_error(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._WinCCOaElementInfo_type(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "elementType":
+			out.Values[i] = ec._WinCCOaElementInfo_elementType(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "valueElement":
+			out.Values[i] = ec._WinCCOaElementInfo_valueElement(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unit":
+			out.Values[i] = ec._WinCCOaElementInfo_unit(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "description":
+			out.Values[i] = ec._WinCCOaElementInfo_description(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "format":
+			out.Values[i] = ec._WinCCOaElementInfo_format(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "value":
+			out.Values[i] = ec._WinCCOaElementInfo_value(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "stime":
+			out.Values[i] = ec._WinCCOaElementInfo_stime(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._WinCCOaElementInfo_status(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaQueryImplementors = []string{"WinCCOaQuery"}
+
+func (ec *executionContext) _WinCCOaQuery(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaQuery) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaQueryImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaQuery")
+		case "systems":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_systems(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "types":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_types(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "typeStructure":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_typeStructure(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "datapoints":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_datapoints(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "elements":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_elements(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "elementInfo":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_elementInfo(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaSystemImplementors = []string{"WinCCOaSystem"}
+
+func (ec *executionContext) _WinCCOaSystem(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaSystem) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaSystemImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaSystem")
+		case "name":
+			out.Values[i] = ec._WinCCOaSystem_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "local":
+			out.Values[i] = ec._WinCCOaSystem_local(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "connected":
+			out.Values[i] = ec._WinCCOaSystem_connected(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var winCCOaTransformConfigImplementors = []string{"WinCCOaTransformConfig"}
 
 func (ec *executionContext) _WinCCOaTransformConfig(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaTransformConfig) graphql.Marshaler {
@@ -40025,6 +47864,127 @@ func (ec *executionContext) _WinCCOaTransformConfig(ctx context.Context, sel ast
 		case "regexReplacement":
 			out.Values[i] = ec._WinCCOaTransformConfig_regexReplacement(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaTypeElementImplementors = []string{"WinCCOaTypeElement"}
+
+func (ec *executionContext) _WinCCOaTypeElement(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaTypeElement) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaTypeElementImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaTypeElement")
+		case "path":
+			out.Values[i] = ec._WinCCOaTypeElement_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._WinCCOaTypeElement_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "parent":
+			out.Values[i] = ec._WinCCOaTypeElement_parent(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "depth":
+			out.Values[i] = ec._WinCCOaTypeElement_depth(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "elementType":
+			out.Values[i] = ec._WinCCOaTypeElement_elementType(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "valueElement":
+			out.Values[i] = ec._WinCCOaTypeElement_valueElement(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "typeReference":
+			out.Values[i] = ec._WinCCOaTypeElement_typeReference(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "childCount":
+			out.Values[i] = ec._WinCCOaTypeElement_childCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var winCCOaTypeStructureImplementors = []string{"WinCCOaTypeStructure"}
+
+func (ec *executionContext) _WinCCOaTypeStructure(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaTypeStructure) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaTypeStructureImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaTypeStructure")
+		case "system":
+			out.Values[i] = ec._WinCCOaTypeStructure_system(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "type":
+			out.Values[i] = ec._WinCCOaTypeStructure_type(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "elements":
+			out.Values[i] = ec._WinCCOaTypeStructure_elements(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
 		default:
@@ -43015,6 +50975,266 @@ func (ec *executionContext) marshalNTopicValue2ᚖmonstermqᚗioᚋedgeᚋintern
 	return ec._TopicValue(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalNUnsModelerAiEvent2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*UnsModelerAiEvent) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnsModelerAiEvent2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiEvent(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnsModelerAiEvent2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiEvent(ctx context.Context, sel ast.SelectionSet, v *UnsModelerAiEvent) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerAiEvent(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerAiRunInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRunInput(ctx context.Context, v any) (UnsModelerAiRunInput, error) {
+	res, err := ec.unmarshalInputUnsModelerAiRunInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerAiRunResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRunResult(ctx context.Context, sel ast.SelectionSet, v *UnsModelerAiRunResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerAiRunResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerApprovalMode2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx context.Context, v any) (UnsModelerApprovalMode, error) {
+	var res UnsModelerApprovalMode
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerApprovalMode2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx context.Context, sel ast.SelectionSet, v UnsModelerApprovalMode) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNUnsModelerConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerConfig(ctx context.Context, sel ast.SelectionSet, v *UnsModelerConfig) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerConfig(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerConfigInput(ctx context.Context, v any) (*UnsModelerConfigInput, error) {
+	res, err := ec.unmarshalInputUnsModelerConfigInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerCreateResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerCreateResult(ctx context.Context, sel ast.SelectionSet, v *UnsModelerCreateResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerCreateResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNUnsModelerDevice2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDeviceᚄ(ctx context.Context, sel ast.SelectionSet, v []*UnsModelerDevice) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnsModelerDevice2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDevice(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnsModelerDevice2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDevice(ctx context.Context, sel ast.SelectionSet, v *UnsModelerDevice) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerDevice(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerDeviceInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDeviceInput(ctx context.Context, v any) (UnsModelerDeviceInput, error) {
+	res, err := ec.unmarshalInputUnsModelerDeviceInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerDirection2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx context.Context, v any) (UnsModelerDirection, error) {
+	var res UnsModelerDirection
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerDirection2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx context.Context, sel ast.SelectionSet, v UnsModelerDirection) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNUnsModelerIssue2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssueᚄ(ctx context.Context, sel ast.SelectionSet, v []*UnsModelerIssue) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnsModelerIssue2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssue(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnsModelerIssue2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerIssue(ctx context.Context, sel ast.SelectionSet, v *UnsModelerIssue) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerIssue(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNUnsModelerMappingResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMappingResult(ctx context.Context, sel ast.SelectionSet, v *UnsModelerMappingResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerMappingResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNUnsModelerMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerMutations(ctx context.Context, sel ast.SelectionSet, v *UnsModelerMutations) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerMutations(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNUnsModelerObjectResult2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerObjectResultᚄ(ctx context.Context, sel ast.SelectionSet, v []*UnsModelerObjectResult) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnsModelerObjectResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerObjectResult(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnsModelerObjectResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerObjectResult(ctx context.Context, sel ast.SelectionSet, v *UnsModelerObjectResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerObjectResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerRedundancy2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx context.Context, v any) (UnsModelerRedundancy, error) {
+	var res UnsModelerRedundancy
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerRedundancy2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx context.Context, sel ast.SelectionSet, v UnsModelerRedundancy) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNUnsModelerResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerResult(ctx context.Context, sel ast.SelectionSet, v *UnsModelerResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerSelectionItemInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSelectionItemInput(ctx context.Context, v any) (*UnsModelerSelectionItemInput, error) {
+	res, err := ec.unmarshalInputUnsModelerSelectionItemInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNUnsModelerSeverity2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSeverity(ctx context.Context, v any) (UnsModelerSeverity, error) {
+	var res UnsModelerSeverity
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNUnsModelerSeverity2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSeverity(ctx context.Context, sel ast.SelectionSet, v UnsModelerSeverity) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNUnsModelerStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerStatus(ctx context.Context, sel ast.SelectionSet, v *UnsModelerStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerStatus(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNUnsModelerTopicStatus2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerTopicStatusᚄ(ctx context.Context, sel ast.SelectionSet, v []*UnsModelerTopicStatus) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNUnsModelerTopicStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerTopicStatus(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNUnsModelerTopicStatus2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerTopicStatus(ctx context.Context, sel ast.SelectionSet, v *UnsModelerTopicStatus) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._UnsModelerTopicStatus(ctx, sel, v)
+}
+
 func (ec *executionContext) unmarshalNUpdateAclRuleInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUpdateACLRuleInput(ctx context.Context, v any) (UpdateACLRuleInput, error) {
 	res, err := ec.unmarshalInputUpdateAclRuleInput(ctx, v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -43214,6 +51434,42 @@ func (ec *executionContext) unmarshalNWinCCOaConnectionConfigInput2ᚖmonstermq�
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
+func (ec *executionContext) marshalNWinCCOaDatapoint2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapointᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaDatapoint) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaDatapoint2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapoint(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaDatapoint2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapoint(ctx context.Context, sel ast.SelectionSet, v *WinCCOaDatapoint) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaDatapoint(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWinCCOaDatapointPage2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDatapointPage(ctx context.Context, sel ast.SelectionSet, v *WinCCOaDatapointPage) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaDatapointPage(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNWinCCOaDeviceMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaDeviceMutations(ctx context.Context, sel ast.SelectionSet, v *WinCCOaDeviceMutations) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -43222,6 +51478,58 @@ func (ec *executionContext) marshalNWinCCOaDeviceMutations2ᚖmonstermqᚗioᚋe
 		return graphql.Null
 	}
 	return ec._WinCCOaDeviceMutations(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWinCCOaElement2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaElement) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaElement2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElement(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaElement2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElement(ctx context.Context, sel ast.SelectionSet, v *WinCCOaElement) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaElement(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWinCCOaElementInfo2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementInfoᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaElementInfo) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaElementInfo2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementInfo(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaElementInfo2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaElementInfo(ctx context.Context, sel ast.SelectionSet, v *WinCCOaElementInfo) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaElementInfo(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalNWinCCOaMessageFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaMessageFormat(ctx context.Context, v any) (WinCCOaMessageFormat, error) {
@@ -43234,6 +51542,32 @@ func (ec *executionContext) marshalNWinCCOaMessageFormat2monstermqᚗioᚋedge�
 	return v
 }
 
+func (ec *executionContext) marshalNWinCCOaSystem2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaSystemᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaSystem) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaSystem2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaSystem(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaSystem2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaSystem(ctx context.Context, sel ast.SelectionSet, v *WinCCOaSystem) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaSystem(ctx, sel, v)
+}
+
 func (ec *executionContext) marshalNWinCCOaTransformConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTransformConfig(ctx context.Context, sel ast.SelectionSet, v *WinCCOaTransformConfig) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
@@ -43242,6 +51576,42 @@ func (ec *executionContext) marshalNWinCCOaTransformConfig2ᚖmonstermqᚗioᚋe
 		return graphql.Null
 	}
 	return ec._WinCCOaTransformConfig(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWinCCOaTypeElement2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeElementᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaTypeElement) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaTypeElement2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeElement(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaTypeElement2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeElement(ctx context.Context, sel ast.SelectionSet, v *WinCCOaTypeElement) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaTypeElement(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNWinCCOaTypeStructure2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTypeStructure(ctx context.Context, sel ast.SelectionSet, v *WinCCOaTypeStructure) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaTypeStructure(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNWinCCUaAddress2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCUaAddressᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCUaAddress) graphql.Marshaler {
@@ -44098,6 +52468,92 @@ func (ec *executionContext) marshalOTopicValue2ᚖmonstermqᚗioᚋedgeᚋintern
 	return ec._TopicValue(ctx, sel, v)
 }
 
+func (ec *executionContext) marshalOUnsModelerAiRun2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerAiRun(ctx context.Context, sel ast.SelectionSet, v *UnsModelerAiRun) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._UnsModelerAiRun(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOUnsModelerApprovalMode2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx context.Context, v any) (*UnsModelerApprovalMode, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(UnsModelerApprovalMode)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOUnsModelerApprovalMode2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx context.Context, sel ast.SelectionSet, v *UnsModelerApprovalMode) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) marshalOUnsModelerCreatePlan2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerCreatePlan(ctx context.Context, sel ast.SelectionSet, v *UnsModelerCreatePlan) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._UnsModelerCreatePlan(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOUnsModelerDevice2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDevice(ctx context.Context, sel ast.SelectionSet, v *UnsModelerDevice) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._UnsModelerDevice(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOUnsModelerDirection2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx context.Context, v any) (*UnsModelerDirection, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(UnsModelerDirection)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOUnsModelerDirection2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerDirection(ctx context.Context, sel ast.SelectionSet, v *UnsModelerDirection) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOUnsModelerRedundancy2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx context.Context, v any) (*UnsModelerRedundancy, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(UnsModelerRedundancy)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOUnsModelerRedundancy2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerRedundancy(ctx context.Context, sel ast.SelectionSet, v *UnsModelerRedundancy) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOUnsModelerSelectionItemInput2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSelectionItemInputᚄ(ctx context.Context, v any) ([]*UnsModelerSelectionItemInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	vSlice := graphql.CoerceList(v)
+	var err error
+	res := make([]*UnsModelerSelectionItemInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNUnsModelerSelectionItemInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerSelectionItemInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
 func (ec *executionContext) marshalOUserInfo2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUserInfo(ctx context.Context, sel ast.SelectionSet, v *UserInfo) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -44179,6 +52635,13 @@ func (ec *executionContext) marshalOWinCCOaMessageFormat2ᚖmonstermqᚗioᚋedg
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) marshalOWinCCOaQuery2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaQuery(ctx context.Context, sel ast.SelectionSet, v *WinCCOaQuery) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._WinCCOaQuery(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOWinCCOaTransformConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaTransformConfigInput(ctx context.Context, v any) (*WinCCOaTransformConfigInput, error) {

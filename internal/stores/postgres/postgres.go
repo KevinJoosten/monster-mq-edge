@@ -61,11 +61,12 @@ func Build(ctx context.Context, cfg *config.Config) (*stores.Storage, *DB, error
 	users := &UserStore{db: db}
 	archives := &ArchiveConfigStore{db: db}
 	devices := &DeviceConfigStore{db: db}
+	mappings := &UnsMappingStore{db: db}
 	var metricsStore stores.MetricsStore
 	if cfg.MetricsStore() == config.StorePostgres {
 		metricsStore = &MetricsStore{db: db}
 	}
-	toEnsure := []interface{ EnsureTable(context.Context) error }{retained, sessions, queue, users, archives, devices}
+	toEnsure := []interface{ EnsureTable(context.Context) error }{retained, sessions, queue, users, archives, devices, mappings}
 	if metricsStore != nil {
 		toEnsure = append(toEnsure, metricsStore.(interface{ EnsureTable(context.Context) error }))
 	}
@@ -79,7 +80,7 @@ func Build(ctx context.Context, cfg *config.Config) (*stores.Storage, *DB, error
 		Backend:  config.StorePostgres,
 		Sessions: sessions, Subscriptions: sessions,
 		Queue: queue, Retained: retained, Users: users,
-		ArchiveConfig: archives, DeviceConfig: devices, Metrics: metricsStore,
+		ArchiveConfig: archives, DeviceConfig: devices, UnsMappings: mappings, Metrics: metricsStore,
 		Closer: db.Close,
 	}, db, nil
 }

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"monstermq.io/edge/internal/loadgen"
@@ -17,6 +18,7 @@ func main() {
 	system := flag.String("system", "System1", "WinCC OA system name of the datapoints")
 	prefix := flag.String("prefix", "MMQLoad", "datapoint name prefix (DPs are <prefix>00000..)")
 	element := flag.String("element", "value", "float element written and read")
+	systems := flag.String("systems", "systems", "WinCCOaNative.SystemsName of the broker")
 	flag.StringVar(&cfg.Broker, "broker", "tcp://127.0.0.1:1883", "broker URL")
 	flag.StringVar(&cfg.Username, "user", "", "MQTT username")
 	flag.StringVar(&cfg.Password, "pass", "", "MQTT password")
@@ -28,8 +30,9 @@ func main() {
 	flag.DurationVar(&cfg.Settle, "settle", 3*time.Second, "wait for late values")
 	flag.StringVar(&cfg.SubBroker, "sub-broker", "", "subscribe on this broker instead (e.g. a query bridge output)")
 	flag.StringVar(&cfg.SubFilter, "sub-filter", "", "single filter every subscriber uses (e.g. ns/q/#)")
+	flag.StringVar(&cfg.SubTopicFmt, "sub-topic-fmt", "", "per-element subscribe topic with %05d, e.g. the UNS topics acme/load/MMQLoad%05d/value of a UNS Modeler pattern binding")
 	flag.Parse()
-	cfg.TopicFmt = loadgen.TopicFmtFor(*system, *prefix, *element)
+	cfg.TopicFmt = strings.Replace(loadgen.TopicFmtFor(*system, *prefix, *element), "/systems/", "/"+*systems+"/", 1)
 	res, err := loadgen.Run(cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "mmqload:", err)

@@ -363,6 +363,10 @@ func (s *Service) Validate(filter string) (Verdict, string) {
 // never exposed as tags.
 var protectedTypes = map[string]bool{"MMQConfigs": true, "MMQSessions": true, "MMQRetained": true, "MMQUsers": true, TopicType: true}
 
+// ProtectedType reports datapoint types that are never exposed: internal
+// types (leading underscore) and the native store types.
+func ProtectedType(name string) bool { return strings.HasPrefix(name, "_") || protectedTypes[name] }
+
 // Protected reports datapoints that the namespace never exposes: OA
 // internal datapoints (leading underscore, e.g. _Users) and the native
 // store datapoints.

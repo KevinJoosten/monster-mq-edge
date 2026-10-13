@@ -1,0 +1,100 @@
+# WinCC OA browsing of the embedded broker (UNS Modeler, plan-uns-modeler-design.md
+# §6.1). Backed by the native WinCC OA API of WCCOAmmq; null when the broker
+# does not run embedded in WinCC OA. The dashboard's WinCC OA browser and
+# the UNS Modeler LLM tools use the same service.
+
+type WinCCOaSystem {
+    name: String!
+    local: Boolean!
+    connected: Boolean!
+}
+
+"One node of a datapoint type or datapoint, listed depth-first (parents before children)."
+type WinCCOaTypeElement {
+    "Dotted path below the root; empty for the root."
+    path: String!
+    "Last path level; the type (or datapoint) name for the root."
+    name: String!
+    "Path of the parent node; empty for the root and its direct children."
+    parent: String!
+    depth: Int!
+    "WinCC OA element type, e.g. float, int, struct, dyn_string, langString, typeref."
+    elementType: String!
+    "True for a value element (not a structure node)."
+    valueElement: Boolean!
+    "Referenced type of a typeref node."
+    typeReference: String
+    childCount: Int!
+}
+
+type WinCCOaTypeStructure {
+    system: String!
+    type: String!
+    elements: [WinCCOaTypeElement!]!
+}
+
+type WinCCOaDatapoint {
+    "Datapoint name without system prefix."
+    name: String!
+    system: String!
+    type: String!
+}
+
+type WinCCOaDatapointPage {
+    items: [WinCCOaDatapoint!]!
+    total: Int!
+    offset: Int!
+    limit: Int!
+}
+
+type WinCCOaElement {
+    "Full DPE name, System:DP.path (the root as System:DP.)."
+    dpe: String!
+    path: String!
+    name: String!
+    parent: String!
+    depth: Int!
+    elementType: String!
+    valueElement: Boolean!
+    typeReference: String
+    childCount: Int!
+}
+
+type WinCCOaElementInfo {
+    dpe: String!
+    exists: Boolean!
+    "Why the element could not be read (missing DPE, unavailable system)."
+    error: String
+    "Datapoint type of the datapoint."
+    type: String
+    elementType: String
+    valueElement: Boolean!
+    unit: String
+    description: String
+    format: String
+    "Current online value as JSON text (blob as base64 string, NaN as null)."
+    value: String
+    "Source time of the value, RFC 3339 with milliseconds."
+    stime: String
+    "Raw _online.._status bits."
+    status: Long
+}
+
+type WinCCOaQuery {
+    "Local system and the connected or known remote systems."
+    systems: [WinCCOaSystem!]!
+    "Datapoint type names (dpTypes pattern); internal and MMQ store types are left out."
+    types(system: String, pattern: String = "*"): [String!]!
+    typeStructure(system: String, type: String!): WinCCOaTypeStructure!
+    "Datapoints (dpNames pattern without system and element part), sorted, paged; limit at most 1000."
+    datapoints(system: String, pattern: String = "*", type: String, limit: Int = 500, offset: Int = 0): WinCCOaDatapointPage!
+    "Element tree of a datapoint (name with optional system prefix)."
+    elements(dp: String!): [WinCCOaElement!]!
+    "Metadata and current value of at most 200 DPEs; a missing DPE is reported per item."
+    elementInfo(dpes: [String!]!): [WinCCOaElementInfo!]!
+}
+
+extend type Query {
+    "WinCC OA browsing; null when the broker does not run inside WCCOAmmq."
+    winccoa: WinCCOaQuery
+}

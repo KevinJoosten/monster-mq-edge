@@ -993,6 +993,231 @@ type TopicValue struct {
 	UserProperties         []*UserProperty `json:"userProperties,omitempty"`
 }
 
+type UnsModelerAiEvent struct {
+	Time string `json:"time"`
+	// start, tool_call, tool_result, text, feedback
+	Kind   string  `json:"kind"`
+	Name   *string `json:"name,omitempty"`
+	Detail *string `json:"detail,omitempty"`
+	Error  *string `json:"error,omitempty"`
+}
+
+type UnsModelerAiRun struct {
+	ID string `json:"id"`
+	// RUNNING, SUCCEEDED or FAILED
+	Status       string  `json:"status"`
+	Provider     string  `json:"provider"`
+	Model        *string `json:"model,omitempty"`
+	StartedAt    string  `json:"startedAt"`
+	FinishedAt   *string `json:"finishedAt,omitempty"`
+	Steps        int     `json:"steps"`
+	ToolCalls    int     `json:"toolCalls"`
+	InputTokens  int     `json:"inputTokens"`
+	OutputTokens int     `json:"outputTokens"`
+	Error        *string `json:"error,omitempty"`
+	// The proposal was applied (Direction A) or created (Direction B) by approval mode AUTO.
+	Applied bool                 `json:"applied"`
+	Issues  []*UnsModelerIssue   `json:"issues"`
+	Events  []*UnsModelerAiEvent `json:"events"`
+}
+
+type UnsModelerAiRunInput struct {
+	Prompt *string `json:"prompt,omitempty"`
+	// Context document: text, Markdown, PDF or DOCX, base64 encoded.
+	DocumentBase64 *string `json:"documentBase64,omitempty"`
+	DocumentName   *string `json:"documentName,omitempty"`
+	// Direction A: scope of the analysis.
+	Selection []*UnsModelerSelectionItemInput `json:"selection,omitempty"`
+	// Direction A: allow browsing beyond the selection (bindings stay inside it).
+	AllowBeyondSelection *bool `json:"allowBeyondSelection,omitempty"`
+	// Direction B: LIVE or ARCHIVE topic source.
+	TopicMode    *string  `json:"topicMode,omitempty"`
+	ArchiveGroup *string  `json:"archiveGroup,omitempty"`
+	TopicFilters []string `json:"topicFilters,omitempty"`
+	MaxTopics    *int     `json:"maxTopics,omitempty"`
+}
+
+type UnsModelerAiRunResult struct {
+	Success bool             `json:"success"`
+	Errors  []string         `json:"errors"`
+	Run     *UnsModelerAiRun `json:"run,omitempty"`
+}
+
+type UnsModelerConfig struct {
+	Direction UnsModelerDirection `json:"direction"`
+	// GenAI provider name; empty: manual modelling (A) or JSON import (B) only.
+	AiProvider   *string                `json:"aiProvider,omitempty"`
+	ApprovalMode UnsModelerApprovalMode `json:"approvalMode"`
+	// Editable prompt of the device's direction; empty uses the built-in prompt.
+	SystemPrompt  *string              `json:"systemPrompt,omitempty"`
+	AiMaxSteps    int                  `json:"aiMaxSteps"`
+	AiTimeoutSec  int                  `json:"aiTimeoutSec"`
+	AiTokenBudget int                  `json:"aiTokenBudget"`
+	Redundancy    UnsModelerRedundancy `json:"redundancy"`
+	// Direction A: UNS subtree of the device.
+	UnsRoot *string `json:"unsRoot,omitempty"`
+	// Direction A: <uns-topic>/..set writes to WinCC OA.
+	AllowWrite bool `json:"allowWrite"`
+	// Direction A: default topic semantics as JSON text ($defs/TopicSemantics).
+	TopicDefaults *string `json:"topicDefaults,omitempty"`
+	// Direction A: default payload fields as JSON text ($defs/PayloadFields).
+	PayloadDefaults *string `json:"payloadDefaults,omitempty"`
+	// Direction B: mandatory prefix of created types and datapoints.
+	OaPrefix *string `json:"oaPrefix,omitempty"`
+	// Direction B: write values after create.
+	FlowEnabled bool `json:"flowEnabled"`
+}
+
+type UnsModelerConfigInput struct {
+	// Fixed at creation; an update with a different direction is rejected.
+	Direction       UnsModelerDirection     `json:"direction"`
+	AiProvider      *string                 `json:"aiProvider,omitempty"`
+	ApprovalMode    *UnsModelerApprovalMode `json:"approvalMode,omitempty"`
+	SystemPrompt    *string                 `json:"systemPrompt,omitempty"`
+	AiMaxSteps      *int                    `json:"aiMaxSteps,omitempty"`
+	AiTimeoutSec    *int                    `json:"aiTimeoutSec,omitempty"`
+	AiTokenBudget   *int                    `json:"aiTokenBudget,omitempty"`
+	Redundancy      *UnsModelerRedundancy   `json:"redundancy,omitempty"`
+	UnsRoot         *string                 `json:"unsRoot,omitempty"`
+	AllowWrite      *bool                   `json:"allowWrite,omitempty"`
+	TopicDefaults   *string                 `json:"topicDefaults,omitempty"`
+	PayloadDefaults *string                 `json:"payloadDefaults,omitempty"`
+	OaPrefix        *string                 `json:"oaPrefix,omitempty"`
+	FlowEnabled     *bool                   `json:"flowEnabled,omitempty"`
+}
+
+type UnsModelerCreatePlan struct {
+	Types        int `json:"types"`
+	Datapoints   int `json:"datapoints"`
+	ConfigWrites int `json:"configWrites"`
+	Excluded     int `json:"excluded"`
+}
+
+type UnsModelerCreateResult struct {
+	Success      bool                      `json:"success"`
+	Errors       []string                  `json:"errors"`
+	Issues       []*UnsModelerIssue        `json:"issues"`
+	Objects      []*UnsModelerObjectResult `json:"objects"`
+	ConfigWrites int                       `json:"configWrites"`
+}
+
+type UnsModelerDevice struct {
+	Name            string            `json:"name"`
+	Namespace       string            `json:"namespace"`
+	NodeID          string            `json:"nodeId"`
+	Enabled         bool              `json:"enabled"`
+	CreatedAt       string            `json:"createdAt"`
+	UpdatedAt       string            `json:"updatedAt"`
+	IsOnCurrentNode bool              `json:"isOnCurrentNode"`
+	Config          *UnsModelerConfig `json:"config"`
+	Status          *UnsModelerStatus `json:"status"`
+	// Current draft mapping document as JSON text.
+	Draft *string `json:"draft,omitempty"`
+	// Applied mapping document as JSON text.
+	Applied *string `json:"applied,omitempty"`
+	// Live state per published topic (A3 live monitor).
+	LiveTopics []*UnsModelerTopicStatus `json:"liveTopics"`
+	// The running or last AI run since broker start; details are in systemLogs.
+	AiRun *UnsModelerAiRun `json:"aiRun,omitempty"`
+	// Direction B: what Create in WinCC OA would do with the draft.
+	CreatePlan *UnsModelerCreatePlan `json:"createPlan,omitempty"`
+}
+
+type UnsModelerDeviceInput struct {
+	Name      string                 `json:"name"`
+	Namespace *string                `json:"namespace,omitempty"`
+	NodeID    *string                `json:"nodeId,omitempty"`
+	Enabled   *bool                  `json:"enabled,omitempty"`
+	Config    *UnsModelerConfigInput `json:"config"`
+}
+
+type UnsModelerIssue struct {
+	Severity UnsModelerSeverity `json:"severity"`
+	// JSON Pointer into the document (or the device settings); empty is the whole document.
+	Path    string `json:"path"`
+	Message string `json:"message"`
+}
+
+type UnsModelerMappingResult struct {
+	Success bool `json:"success"`
+	// The document was stored (drafts are stored with issues unless too large or not JSON).
+	Stored   bool               `json:"stored"`
+	Document *string            `json:"document,omitempty"`
+	Errors   []string           `json:"errors"`
+	Issues   []*UnsModelerIssue `json:"issues"`
+}
+
+type UnsModelerMutations struct {
+	Create *UnsModelerResult `json:"create"`
+	Update *UnsModelerResult `json:"update"`
+	Delete bool              `json:"delete"`
+	Toggle *UnsModelerResult `json:"toggle"`
+	// Stores the draft; nodes without id get one.
+	SaveDraft *UnsModelerMappingResult `json:"saveDraft"`
+	// Validates the draft and applies it when it has no errors.
+	Apply *UnsModelerMappingResult `json:"apply"`
+	// Direction B: validates the draft and creates its types and datapoints in WinCC OA; then the value flow starts.
+	CreateInWinCCOa *UnsModelerCreateResult `json:"createInWinCCOa"`
+	// Direction B: imports a hand-written proposal; source is stamped from the topic selection, then it is validated like an AI answer and stored as the draft.
+	ImportProposal *UnsModelerMappingResult `json:"importProposal"`
+	// Starts an AI run that proposes a full mapping document (stored as the draft).
+	StartAiRun *UnsModelerAiRunResult `json:"startAiRun"`
+}
+
+type UnsModelerObjectResult struct {
+	// type or datapoint
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+	// created, skipped, failed or excluded
+	Status       string  `json:"status"`
+	Message      *string `json:"message,omitempty"`
+	ConfigWrites int     `json:"configWrites"`
+}
+
+type UnsModelerResult struct {
+	Success bool               `json:"success"`
+	Device  *UnsModelerDevice  `json:"device,omitempty"`
+	Errors  []string           `json:"errors"`
+	Issues  []*UnsModelerIssue `json:"issues"`
+}
+
+// One item of the WinCC OA browser selection (Direction A).
+type UnsModelerSelectionItemInput struct {
+	// type, datapoint or element
+	Kind      string  `json:"kind"`
+	System    *string `json:"system,omitempty"`
+	Type      string  `json:"type"`
+	Datapoint *string `json:"datapoint,omitempty"`
+	Path      *string `json:"path,omitempty"`
+	Pattern   *string `json:"pattern,omitempty"`
+}
+
+type UnsModelerStatus struct {
+	// The device runs on this node (enabled, embedded, Direction A with a runtime).
+	Running bool `json:"running"`
+	// The broker is ACTIVE for this device (role gate).
+	Active      bool    `json:"active"`
+	Topics      int     `json:"topics"`
+	Dpes        int64   `json:"dpes"`
+	Published   int64   `json:"published"`
+	Writes      int64   `json:"writes"`
+	Errors      int64   `json:"errors"`
+	LastApplied *string `json:"lastApplied,omitempty"`
+	ApplyError  *string `json:"applyError,omitempty"`
+}
+
+type UnsModelerTopicStatus struct {
+	Topic string `json:"topic"`
+	Dpe   string `json:"dpe"`
+	// Current value as JSON text.
+	Value       *string `json:"value,omitempty"`
+	Status      *int64  `json:"status,omitempty"`
+	Published   int64   `json:"published"`
+	LastPublish *string `json:"lastPublish,omitempty"`
+	LastError   *string `json:"lastError,omitempty"`
+	LastErrorAt *string `json:"lastErrorAt,omitempty"`
+}
+
 type UpdateACLRuleInput struct {
 	ID           string  `json:"id"`
 	Username     *string `json:"username,omitempty"`
@@ -1152,6 +1377,20 @@ type WinCCOaConnectionConfigInput struct {
 	Addresses         []*WinCCOaAddressInput       `json:"addresses,omitempty"`
 }
 
+type WinCCOaDatapoint struct {
+	// Datapoint name without system prefix.
+	Name   string `json:"name"`
+	System string `json:"system"`
+	Type   string `json:"type"`
+}
+
+type WinCCOaDatapointPage struct {
+	Items  []*WinCCOaDatapoint `json:"items"`
+	Total  int                 `json:"total"`
+	Offset int                 `json:"offset"`
+	Limit  int                 `json:"limit"`
+}
+
 type WinCCOaDeviceMutations struct {
 	Create        *WinCCOaClientResult `json:"create"`
 	Update        *WinCCOaClientResult `json:"update"`
@@ -1163,6 +1402,59 @@ type WinCCOaDeviceMutations struct {
 	AddAddress    *WinCCOaClientResult `json:"addAddress"`
 	UpdateAddress *WinCCOaClientResult `json:"updateAddress"`
 	DeleteAddress *WinCCOaClientResult `json:"deleteAddress"`
+}
+
+type WinCCOaElement struct {
+	// Full DPE name, System:DP.path (the root as System:DP.).
+	Dpe           string  `json:"dpe"`
+	Path          string  `json:"path"`
+	Name          string  `json:"name"`
+	Parent        string  `json:"parent"`
+	Depth         int     `json:"depth"`
+	ElementType   string  `json:"elementType"`
+	ValueElement  bool    `json:"valueElement"`
+	TypeReference *string `json:"typeReference,omitempty"`
+	ChildCount    int     `json:"childCount"`
+}
+
+type WinCCOaElementInfo struct {
+	Dpe    string `json:"dpe"`
+	Exists bool   `json:"exists"`
+	// Why the element could not be read (missing DPE, unavailable system).
+	Error *string `json:"error,omitempty"`
+	// Datapoint type of the datapoint.
+	Type         *string `json:"type,omitempty"`
+	ElementType  *string `json:"elementType,omitempty"`
+	ValueElement bool    `json:"valueElement"`
+	Unit         *string `json:"unit,omitempty"`
+	Description  *string `json:"description,omitempty"`
+	Format       *string `json:"format,omitempty"`
+	// Current online value as JSON text (blob as base64 string, NaN as null).
+	Value *string `json:"value,omitempty"`
+	// Source time of the value, RFC 3339 with milliseconds.
+	Stime *string `json:"stime,omitempty"`
+	// Raw _online.._status bits.
+	Status *int64 `json:"status,omitempty"`
+}
+
+type WinCCOaQuery struct {
+	// Local system and the connected or known remote systems.
+	Systems []*WinCCOaSystem `json:"systems"`
+	// Datapoint type names (dpTypes pattern); internal and MMQ store types are left out.
+	Types         []string              `json:"types"`
+	TypeStructure *WinCCOaTypeStructure `json:"typeStructure"`
+	// Datapoints (dpNames pattern without system and element part), sorted, paged; limit at most 1000.
+	Datapoints *WinCCOaDatapointPage `json:"datapoints"`
+	// Element tree of a datapoint (name with optional system prefix).
+	Elements []*WinCCOaElement `json:"elements"`
+	// Metadata and current value of at most 200 DPEs; a missing DPE is reported per item.
+	ElementInfo []*WinCCOaElementInfo `json:"elementInfo"`
+}
+
+type WinCCOaSystem struct {
+	Name      string `json:"name"`
+	Local     bool   `json:"local"`
+	Connected bool   `json:"connected"`
 }
 
 type WinCCOaTransformConfig struct {
@@ -1179,6 +1471,30 @@ type WinCCOaTransformConfigInput struct {
 	ConvertUnderscoreToSlash *bool   `json:"convertUnderscoreToSlash,omitempty"`
 	RegexPattern             *string `json:"regexPattern,omitempty"`
 	RegexReplacement         *string `json:"regexReplacement,omitempty"`
+}
+
+// One node of a datapoint type or datapoint, listed depth-first (parents before children).
+type WinCCOaTypeElement struct {
+	// Dotted path below the root; empty for the root.
+	Path string `json:"path"`
+	// Last path level; the type (or datapoint) name for the root.
+	Name string `json:"name"`
+	// Path of the parent node; empty for the root and its direct children.
+	Parent string `json:"parent"`
+	Depth  int    `json:"depth"`
+	// WinCC OA element type, e.g. float, int, struct, dyn_string, langString, typeref.
+	ElementType string `json:"elementType"`
+	// True for a value element (not a structure node).
+	ValueElement bool `json:"valueElement"`
+	// Referenced type of a typeref node.
+	TypeReference *string `json:"typeReference,omitempty"`
+	ChildCount    int     `json:"childCount"`
+}
+
+type WinCCOaTypeStructure struct {
+	System   string                `json:"system"`
+	Type     string                `json:"type"`
+	Elements []*WinCCOaTypeElement `json:"elements"`
 }
 
 type WinCCUaAddress struct {
@@ -2046,6 +2362,232 @@ func (e *ScriptTriggerType) UnmarshalJSON(b []byte) error {
 }
 
 func (e ScriptTriggerType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type UnsModelerApprovalMode string
+
+const (
+	UnsModelerApprovalModeReview UnsModelerApprovalMode = "REVIEW"
+	UnsModelerApprovalModeAuto   UnsModelerApprovalMode = "AUTO"
+)
+
+var AllUnsModelerApprovalMode = []UnsModelerApprovalMode{
+	UnsModelerApprovalModeReview,
+	UnsModelerApprovalModeAuto,
+}
+
+func (e UnsModelerApprovalMode) IsValid() bool {
+	switch e {
+	case UnsModelerApprovalModeReview, UnsModelerApprovalModeAuto:
+		return true
+	}
+	return false
+}
+
+func (e UnsModelerApprovalMode) String() string {
+	return string(e)
+}
+
+func (e *UnsModelerApprovalMode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = UnsModelerApprovalMode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid UnsModelerApprovalMode", str)
+	}
+	return nil
+}
+
+func (e UnsModelerApprovalMode) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *UnsModelerApprovalMode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e UnsModelerApprovalMode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type UnsModelerDirection string
+
+const (
+	// Direction A: WinCC OA datapoints published into the UNS
+	UnsModelerDirectionWinccoaToUns UnsModelerDirection = "WINCCOA_TO_UNS"
+	// Direction B: MQTT topics into new WinCC OA datapoints
+	UnsModelerDirectionMqttToWinccoa UnsModelerDirection = "MQTT_TO_WINCCOA"
+)
+
+var AllUnsModelerDirection = []UnsModelerDirection{
+	UnsModelerDirectionWinccoaToUns,
+	UnsModelerDirectionMqttToWinccoa,
+}
+
+func (e UnsModelerDirection) IsValid() bool {
+	switch e {
+	case UnsModelerDirectionWinccoaToUns, UnsModelerDirectionMqttToWinccoa:
+		return true
+	}
+	return false
+}
+
+func (e UnsModelerDirection) String() string {
+	return string(e)
+}
+
+func (e *UnsModelerDirection) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = UnsModelerDirection(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid UnsModelerDirection", str)
+	}
+	return nil
+}
+
+func (e UnsModelerDirection) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *UnsModelerDirection) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e UnsModelerDirection) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type UnsModelerRedundancy string
+
+const (
+	UnsModelerRedundancyHotStandby  UnsModelerRedundancy = "HOT_STANDBY"
+	UnsModelerRedundancyColdStandby UnsModelerRedundancy = "COLD_STANDBY"
+	UnsModelerRedundancyAlways      UnsModelerRedundancy = "ALWAYS"
+)
+
+var AllUnsModelerRedundancy = []UnsModelerRedundancy{
+	UnsModelerRedundancyHotStandby,
+	UnsModelerRedundancyColdStandby,
+	UnsModelerRedundancyAlways,
+}
+
+func (e UnsModelerRedundancy) IsValid() bool {
+	switch e {
+	case UnsModelerRedundancyHotStandby, UnsModelerRedundancyColdStandby, UnsModelerRedundancyAlways:
+		return true
+	}
+	return false
+}
+
+func (e UnsModelerRedundancy) String() string {
+	return string(e)
+}
+
+func (e *UnsModelerRedundancy) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = UnsModelerRedundancy(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid UnsModelerRedundancy", str)
+	}
+	return nil
+}
+
+func (e UnsModelerRedundancy) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *UnsModelerRedundancy) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e UnsModelerRedundancy) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type UnsModelerSeverity string
+
+const (
+	UnsModelerSeverityError   UnsModelerSeverity = "ERROR"
+	UnsModelerSeverityWarning UnsModelerSeverity = "WARNING"
+	UnsModelerSeverityInfo    UnsModelerSeverity = "INFO"
+)
+
+var AllUnsModelerSeverity = []UnsModelerSeverity{
+	UnsModelerSeverityError,
+	UnsModelerSeverityWarning,
+	UnsModelerSeverityInfo,
+}
+
+func (e UnsModelerSeverity) IsValid() bool {
+	switch e {
+	case UnsModelerSeverityError, UnsModelerSeverityWarning, UnsModelerSeverityInfo:
+		return true
+	}
+	return false
+}
+
+func (e UnsModelerSeverity) String() string {
+	return string(e)
+}
+
+func (e *UnsModelerSeverity) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = UnsModelerSeverity(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid UnsModelerSeverity", str)
+	}
+	return nil
+}
+
+func (e UnsModelerSeverity) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *UnsModelerSeverity) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e UnsModelerSeverity) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

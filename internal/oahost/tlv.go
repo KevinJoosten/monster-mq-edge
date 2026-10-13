@@ -4,6 +4,7 @@
 package oahost
 
 import (
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -333,4 +334,21 @@ func (v Value) JSON() any {
 		return out
 	}
 	return nil
+}
+
+// PlainJSON converts a value to the form the UNS Modeler publishes and the
+// native command path accepts (plan-uns-modeler-design.md §4.4): like JSON,
+// but a blob is a base64 string instead of a Node Buffer object.
+func (v Value) PlainJSON() any {
+	switch v.Kind {
+	case KindBytes:
+		return base64.StdEncoding.EncodeToString(v.Bytes)
+	case KindDyn:
+		out := make([]any, len(v.Dyn))
+		for i, item := range v.Dyn {
+			out[i] = item.PlainJSON()
+		}
+		return out
+	}
+	return v.JSON()
 }

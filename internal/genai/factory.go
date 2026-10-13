@@ -3,6 +3,7 @@ package genai
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 
@@ -14,6 +15,9 @@ import (
 
 	"monstermq.io/edge/internal/config"
 )
+
+// GeminiOpenAIEndpoint is Gemini's OpenAI-compatible API.
+const GeminiOpenAIEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 // ProviderParams specifies parameters for constructing an LLM provider.
 type ProviderParams struct {
@@ -129,7 +133,7 @@ func CreateAssistantProvider(ctx context.Context, cfg config.GenAIConfig) (Provi
 func CreateProvider(ctx context.Context, params ProviderParams) (Provider, error) {
 	providerType := strings.ToLower(strings.TrimSpace(params.Provider))
 
-	var model llms.Model
+	var model, toolModel llms.Model
 	var err error
 
 	switch providerType {
@@ -144,6 +148,22 @@ func CreateProvider(ctx context.Context, params ProviderParams) (Provider, error
 		model, err = googleai.New(ctx, opts...)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Google Gemini client: %w", err)
+		}
+		// Tool calling uses Gemini's OpenAI-compatible endpoint: the REST
+		// stream reader of the Google client cannot read the end of a
+		// response stream with the encoding/json of Go 1.27.
+		base := params.Endpoint
+		if base == "" {
+			base = GeminiOpenAIEndpoint
+		}
+		toolOpts := []openai.Option{openai.WithBaseURL(base), openai.WithToken(params.ApiKey), openai.WithHTTPClient(&http.Client{Transport: newSignatureTransport()})}
+		if params.Model != "" {
+			toolOpts = append(toolOpts, openai.WithModel(params.Model))
+		}
+		if params.ApiKey != "" {
+			if toolModel, err = openai.New(toolOpts...); err != nil {
+				return nil, fmt.Errorf("failed to create Gemini tool client: %w", err)
+			}
 		}
 
 	case "claude":
@@ -195,6 +215,16 @@ func CreateProvider(ctx context.Context, params ProviderParams) (Provider, error
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Ollama client: %w", err)
 		}
+		// The langchaingo Ollama client ignores tools; tool calling goes
+		// through Ollama's OpenAI-compatible endpoint.
+		toolOpts := []openai.Option{openai.WithBaseURL(strings.TrimSuffix(serverURL, "/") + "/v1"), openai.WithToken("ollama")}
+		if params.Model != "" {
+			toolOpts = append(toolOpts, openai.WithModel(params.Model))
+		}
+		toolModel, err = openai.New(toolOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create Ollama tool client: %w", err)
+		}
 
 	case "llamacpp", "openrouter":
 		// Both are OpenAI-compatible endpoints
@@ -229,6 +259,7 @@ func CreateProvider(ctx context.Context, params ProviderParams) (Provider, error
 		params.Temperature,
 		params.MaxTokens,
 	)
+	adapter.toolModel = toolModel
 
 	return adapter, nil
 }

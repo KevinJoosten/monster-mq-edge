@@ -1,0 +1,266 @@
+# UNS Modeler devices (plan-uns-modeler-design.md). WinCC OA native: devices
+# run only when the broker is embedded in WinCC OA (WCCOAmmq). Mapping
+# documents are JSON text (schema: unsModelerSchema).
+
+enum UnsModelerDirection {
+    "Direction A: WinCC OA datapoints published into the UNS"
+    WINCCOA_TO_UNS
+    "Direction B: MQTT topics into new WinCC OA datapoints"
+    MQTT_TO_WINCCOA
+}
+
+enum UnsModelerApprovalMode {
+    REVIEW
+    AUTO
+}
+
+enum UnsModelerRedundancy {
+    HOT_STANDBY
+    COLD_STANDBY
+    ALWAYS
+}
+
+enum UnsModelerSeverity {
+    ERROR
+    WARNING
+    INFO
+}
+
+type UnsModelerConfig {
+    direction: UnsModelerDirection!
+    "GenAI provider name; empty: manual modelling (A) or JSON import (B) only."
+    aiProvider: String
+    approvalMode: UnsModelerApprovalMode!
+    "Editable prompt of the device's direction; empty uses the built-in prompt."
+    systemPrompt: String
+    aiMaxSteps: Int!
+    aiTimeoutSec: Int!
+    aiTokenBudget: Int!
+    redundancy: UnsModelerRedundancy!
+    "Direction A: UNS subtree of the device."
+    unsRoot: String
+    "Direction A: <uns-topic>/..set writes to WinCC OA."
+    allowWrite: Boolean!
+    "Direction A: default topic semantics as JSON text ($defs/TopicSemantics)."
+    topicDefaults: String
+    "Direction A: default payload fields as JSON text ($defs/PayloadFields)."
+    payloadDefaults: String
+    "Direction B: mandatory prefix of created types and datapoints."
+    oaPrefix: String
+    "Direction B: write values after create."
+    flowEnabled: Boolean!
+}
+
+type UnsModelerIssue {
+    severity: UnsModelerSeverity!
+    "JSON Pointer into the document (or the device settings); empty is the whole document."
+    path: String!
+    message: String!
+}
+
+type UnsModelerStatus {
+    "The device runs on this node (enabled, embedded, Direction A with a runtime)."
+    running: Boolean!
+    "The broker is ACTIVE for this device (role gate)."
+    active: Boolean!
+    topics: Int!
+    dpes: Long!
+    published: Long!
+    writes: Long!
+    errors: Long!
+    lastApplied: String
+    applyError: String
+}
+
+type UnsModelerTopicStatus {
+    topic: String!
+    dpe: String!
+    "Current value as JSON text."
+    value: String
+    status: Long
+    published: Long!
+    lastPublish: String
+    lastError: String
+    lastErrorAt: String
+}
+
+type UnsModelerDevice {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    enabled: Boolean!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    config: UnsModelerConfig!
+    status: UnsModelerStatus!
+    "Current draft mapping document as JSON text."
+    draft: String
+    "Applied mapping document as JSON text."
+    applied: String
+    "Live state per published topic (A3 live monitor)."
+    liveTopics: [UnsModelerTopicStatus!]!
+    "The running or last AI run since broker start; details are in systemLogs."
+    aiRun: UnsModelerAiRun
+    "Direction B: what Create in WinCC OA would do with the draft."
+    createPlan: UnsModelerCreatePlan
+}
+
+type UnsModelerCreatePlan {
+    types: Int!
+    datapoints: Int!
+    configWrites: Int!
+    excluded: Int!
+}
+
+type UnsModelerObjectResult {
+    "type or datapoint"
+    kind: String!
+    name: String!
+    "created, skipped, failed or excluded"
+    status: String!
+    message: String
+    configWrites: Int!
+}
+
+type UnsModelerCreateResult {
+    success: Boolean!
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+    objects: [UnsModelerObjectResult!]!
+    configWrites: Int!
+}
+
+type UnsModelerAiEvent {
+    time: String!
+    "start, tool_call, tool_result, text, feedback"
+    kind: String!
+    name: String
+    detail: String
+    error: String
+}
+
+type UnsModelerAiRun {
+    id: String!
+    "RUNNING, SUCCEEDED or FAILED"
+    status: String!
+    provider: String!
+    model: String
+    startedAt: String!
+    finishedAt: String
+    steps: Int!
+    toolCalls: Int!
+    inputTokens: Int!
+    outputTokens: Int!
+    error: String
+    "The proposal was applied (Direction A) or created (Direction B) by approval mode AUTO."
+    applied: Boolean!
+    issues: [UnsModelerIssue!]!
+    events: [UnsModelerAiEvent!]!
+}
+
+extend type Query {
+    unsModelers(name: String): [UnsModelerDevice!]!
+    "Validates a mapping document for a device without storing it (stage 1 or stage 2 issues)."
+    unsModelerValidate(name: String!, document: String!): [UnsModelerIssue!]!
+    "The mapping JSON Schema; with a direction the prompt view of that direction."
+    unsModelerSchema(direction: UnsModelerDirection): String!
+    "The built-in system prompt of a direction."
+    unsModelerDefaultPrompt(direction: UnsModelerDirection!): String!
+}
+
+input UnsModelerConfigInput {
+    "Fixed at creation; an update with a different direction is rejected."
+    direction: UnsModelerDirection!
+    aiProvider: String
+    approvalMode: UnsModelerApprovalMode
+    systemPrompt: String
+    aiMaxSteps: Int
+    aiTimeoutSec: Int
+    aiTokenBudget: Int
+    redundancy: UnsModelerRedundancy
+    unsRoot: String
+    allowWrite: Boolean
+    topicDefaults: String
+    payloadDefaults: String
+    oaPrefix: String
+    flowEnabled: Boolean
+}
+
+input UnsModelerDeviceInput {
+    name: String!
+    namespace: String
+    nodeId: String
+    enabled: Boolean = true
+    config: UnsModelerConfigInput!
+}
+
+type UnsModelerResult {
+    success: Boolean!
+    device: UnsModelerDevice
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+}
+
+type UnsModelerMappingResult {
+    success: Boolean!
+    "The document was stored (drafts are stored with issues unless too large or not JSON)."
+    stored: Boolean!
+    document: String
+    errors: [String!]!
+    issues: [UnsModelerIssue!]!
+}
+
+"One item of the WinCC OA browser selection (Direction A)."
+input UnsModelerSelectionItemInput {
+    "type, datapoint or element"
+    kind: String!
+    system: String
+    type: String!
+    datapoint: String
+    path: String
+    pattern: String
+}
+
+input UnsModelerAiRunInput {
+    prompt: String
+    "Context document: text, Markdown, PDF or DOCX, base64 encoded."
+    documentBase64: String
+    documentName: String
+    "Direction A: scope of the analysis."
+    selection: [UnsModelerSelectionItemInput!]
+    "Direction A: allow browsing beyond the selection (bindings stay inside it)."
+    allowBeyondSelection: Boolean
+    "Direction B: LIVE or ARCHIVE topic source."
+    topicMode: String
+    archiveGroup: String
+    topicFilters: [String!]
+    maxTopics: Int
+}
+
+type UnsModelerAiRunResult {
+    success: Boolean!
+    errors: [String!]!
+    run: UnsModelerAiRun
+}
+
+type UnsModelerMutations {
+    create(input: UnsModelerDeviceInput!): UnsModelerResult!
+    update(name: String!, input: UnsModelerDeviceInput!): UnsModelerResult!
+    delete(name: String!): Boolean!
+    toggle(name: String!, enabled: Boolean!): UnsModelerResult!
+    "Stores the draft; nodes without id get one."
+    saveDraft(name: String!, document: String!): UnsModelerMappingResult!
+    "Validates the draft and applies it when it has no errors."
+    apply(name: String!): UnsModelerMappingResult!
+    "Direction B: validates the draft and creates its types and datapoints in WinCC OA; then the value flow starts."
+    createInWinCCOa(name: String!): UnsModelerCreateResult!
+    "Direction B: imports a hand-written proposal; source is stamped from the topic selection, then it is validated like an AI answer and stored as the draft."
+    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!): UnsModelerMappingResult!
+    "Starts an AI run that proposes a full mapping document (stored as the draft)."
+    startAiRun(name: String!, input: UnsModelerAiRunInput!): UnsModelerAiRunResult!
+}
+
+extend type Mutation {
+    unsModeler: UnsModelerMutations!
+}

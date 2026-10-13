@@ -26,6 +26,7 @@ func winccoaSysTopics(oa *oahost.Client, native *winccoanative.Service) func() m
 			"winccoa/host/eventsUnrouted":   u(h.EventsUnrouted),
 			"winccoa/host/pendingHighWater": u(h.PendingHighWater),
 			"winccoa/host/pending":          i(oa.Pending()),
+			"winccoa/host/refs":             i(oa.Refs()),
 		}
 		if native != nil {
 			n := native.Stats()

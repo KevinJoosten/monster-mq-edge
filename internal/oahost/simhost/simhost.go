@@ -30,6 +30,12 @@ type Type struct {
 	// Elements maps element path ("" for the root, "a.b" for nested) to the
 	// element kind (oahost.Kind as uint32) or ElemStruct.
 	Elements map[string]uint32
+	// Order optionally lists element paths in type order for the browse
+	// operations; paths not listed follow in sorted order.
+	Order []string
+	// OaTypes optionally overrides the raw WinCC OA element type reported
+	// by the browse operations (e.g. 54 for long).
+	OaTypes map[string]uint32
 }
 
 type dp struct {
@@ -45,6 +51,7 @@ type system struct {
 
 type connection struct {
 	names    []string // fully qualified read addresses
+	attrs    []string // FlagAttrs: further attributes of every name
 	noSource bool
 	stime    bool // FlagSourceTime: items carry the element's _online.._stime
 }
@@ -90,6 +97,7 @@ type Host struct {
 	calls            map[uint32]*atomic.Uint64
 	threadViolations atomic.Uint64
 	typesCreated     atomic.Uint64
+	configWrites     atomic.Uint64
 	managerGoroutine atomic.Int64
 }
 
@@ -111,7 +119,7 @@ func New(localSystem string, queueCap int) *Host {
 		queries:    map[uint64]*query{},
 		calls:      map[uint32]*atomic.Uint64{},
 	}
-	for op := oahost.OpResolve; op <= oahost.OpTypeCheck; op++ {
+	for op := oahost.OpResolve; op <= oahost.OpSetMeta; op++ {
 		h.calls[op] = new(atomic.Uint64)
 	}
 	h.systems[localSystem] = &system{name: localSystem, available: true, dps: map[string]*dp{}}
@@ -193,9 +201,12 @@ func (h *Host) Queries() int {
 func (h *Host) AddType(t Type) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	cp := Type{Name: t.Name, Elements: map[string]uint32{}}
+	cp := Type{Name: t.Name, Elements: map[string]uint32{}, Order: append([]string(nil), t.Order...), OaTypes: map[string]uint32{}}
 	for k, v := range t.Elements {
 		cp.Elements[k] = v
+	}
+	for k, v := range t.OaTypes {
+		cp.OaTypes[k] = v
 	}
 	h.types[t.Name] = &cp
 }
@@ -339,11 +350,11 @@ func (h *Host) SetTimed(address string, v oahost.Value, stime time.Time) error {
 func (h *Host) Get(address string) (oahost.Value, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	_, d, el, _, err := h.lookup(address)
+	_, d, el, attr, err := h.lookup(address)
 	if err != nil {
 		return oahost.Value{}, err
 	}
-	return d.values[el], nil
+	return h.readAttr(d, el, attr), nil
 }
 
 type pendingEvent struct {
@@ -400,7 +411,13 @@ func (h *Host) setLocked(address string, v oahost.Value, own bool, stime time.Ti
 		return nil, nil
 	}
 	if attr != "" && attr != "_original.._value" && attr != "_online.._value" {
-		return nil, fmt.Errorf("%w: attribute %s not writable", oahost.ErrInvalid, attr)
+		if strings.HasPrefix(attr, "_online") || strings.HasPrefix(attr, "_original") {
+			return nil, fmt.Errorf("%w: attribute %s not writable", oahost.ErrInvalid, attr)
+		}
+		// Config attributes (_pv_range, _alert_hdl, ...) are stored as is.
+		d.values[el+"#attr:"+attr] = v
+		h.configWrites.Add(1)
+		return nil, nil
 	}
 	if oahost.Kind(k) != v.Kind {
 		return nil, fmt.Errorf("%w: element %s expects kind %d, got %d", oahost.ErrType, address, k, v.Kind)
@@ -424,6 +441,7 @@ func (h *Host) setLocked(address string, v oahost.Value, own bool, stime time.Ti
 			if c.stime {
 				h.writeSTime(&w, d, el)
 			}
+			h.writeAttrs(&w, c, d, el)
 			evs = append(evs, pendingEvent{ref: ref, data: w.Bytes()})
 		}
 	}
@@ -496,16 +514,52 @@ func (h *Host) readAttr(d *dp, el, attr string) oahost.Value {
 		}
 		return oahost.Value{Kind: oahost.KindTime, Time: time.UnixMilli(0).UTC()}
 	case "_online.._status":
+		if v, ok := d.values[el+"#attr:"+attr]; ok {
+			return v
+		}
 		return oahost.Value{Kind: oahost.KindBit32, Uint: 0x101}
 	case "_online.._invalid":
+		if v, ok := d.values[el+"#attr:"+attr]; ok {
+			return v
+		}
 		return oahost.Value{Kind: oahost.KindBool}
+	case "", "_online.._value", "_original.._value":
+		return d.values[el]
 	}
-	return d.values[el]
+	if v, ok := d.values[el+"#attr:"+attr]; ok {
+		return v
+	}
+	return oahost.Value{Kind: oahost.KindNull}
+}
+
+// SetAttr sets a config attribute of a DPE ("Sys:DP.el:_pv_range.._min"),
+// read by dpGet, queries and FlagAttrs connects (test setup).
+func (h *Host) SetAttr(address string, v oahost.Value) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_, d, el, attr, err := h.lookup(address)
+	if err != nil {
+		return err
+	}
+	d.values[el+"#attr:"+attr] = v
+	return nil
 }
 
 // writeSTime appends the element's _online.._stime as TagTime (Unix ms).
 func (h *Host) writeSTime(w *oahost.Writer, d *dp, el string) {
 	w.U64(oahost.TagTime, uint64(h.readAttr(d, el, "_online.._stime").Time.UnixMilli()))
+}
+
+// writeAttrs appends the FlagAttrs row of a connection item.
+func (h *Host) writeAttrs(w *oahost.Writer, c *connection, d *dp, el string) {
+	if len(c.attrs) == 0 {
+		return
+	}
+	var row oahost.Writer
+	for _, a := range c.attrs {
+		row.Value(oahost.TagValue, h.readAttr(d, el, a))
+	}
+	w.Raw(oahost.TagRow, row.Bytes())
 }
 
 func (h *Host) run() {
@@ -623,6 +677,14 @@ func (h *Host) handle(r request) {
 		}
 	case oahost.OpTypeCheck:
 		err = h.typeCheck(m)
+	case oahost.OpTypeNames:
+		err = h.typeNames(m, &w)
+	case oahost.OpTypeStructure:
+		err = h.typeStructure(m, &w)
+	case oahost.OpElementMeta:
+		h.elementMeta(m, &w)
+	case oahost.OpSetMeta:
+		err = h.setMeta(m)
 	default:
 		err = fmt.Errorf("%w: op %d", oahost.ErrInvalid, op)
 	}
@@ -705,10 +767,12 @@ func (h *Host) dpSet(m oahost.Message) ([]pendingEvent, error) {
 			return nil, err
 		}
 		k := h.types[d.typ].Elements[el]
-		if attrOf(string(names[i])) == attrLVSOff {
+		attr := attrOf(string(names[i]))
+		if attr == attrLVSOff {
 			k = uint32(oahost.KindBool)
 		}
-		if k == ElemStruct || oahost.Kind(k) != v.Kind {
+		configAttr := attr != "" && attr != attrLVSOff && !strings.HasPrefix(attr, "_online") && !strings.HasPrefix(attr, "_original")
+		if !configAttr && (k == ElemStruct || oahost.Kind(k) != v.Kind) {
 			return nil, fmt.Errorf("%w: %s", oahost.ErrType, names[i])
 		}
 		decoded[i] = v
@@ -744,6 +808,11 @@ func (h *Host) dpConnect(m oahost.Message) ([]pendingEvent, error) {
 		return nil, fmt.Errorf("%w: %d names exceed maxConnectMessageSize %d", oahost.ErrOA, len(names), h.BatchLimit)
 	}
 	c := &connection{noSource: flags&oahost.FlagNoSource != 0, stime: flags&oahost.FlagSourceTime != 0}
+	if flags&oahost.FlagAttrs != 0 {
+		for _, a := range m.All(oahost.TagAttr) {
+			c.attrs = append(c.attrs, string(a))
+		}
+	}
 	var w oahost.Writer
 	w.U32(oahost.TagFlags, oahost.FlagAnswer)
 	for _, raw := range names {
@@ -758,6 +827,7 @@ func (h *Host) dpConnect(m oahost.Message) ([]pendingEvent, error) {
 		if c.stime {
 			h.writeSTime(&w, d, el)
 		}
+		h.writeAttrs(&w, c, d, el)
 	}
 	h.conns[ref] = c
 	if flags&oahost.FlagAnswer == 0 {
@@ -927,7 +997,15 @@ func (h *Host) typeCheck(m oahost.Message) error {
 			if i >= len(kinds) {
 				return oahost.ErrInvalid
 			}
-			nt.Elements[string(n)] = kinds[i]
+			path := string(n)
+			for j := strings.Index(path, "."); j >= 0; j = strings.Index(path[j+1:], ".") + j + 1 {
+				nt.Elements[path[:j]] = ElemStruct
+				if strings.Index(path[j+1:], ".") < 0 {
+					break
+				}
+			}
+			nt.Elements[path] = kinds[i]
+			nt.Order = append(nt.Order, path)
 		}
 		h.types[name] = nt
 		h.typesCreated.Add(1)
@@ -947,6 +1025,9 @@ func (h *Host) typeCheck(m oahost.Message) error {
 	}
 	return nil
 }
+
+// ConfigWrites counts written config attributes.
+func (h *Host) ConfigWrites() uint64 { return h.configWrites.Load() }
 
 // TypesCreated counts datapoint types created through a type check.
 func (h *Host) TypesCreated() uint64 { return h.typesCreated.Load() }

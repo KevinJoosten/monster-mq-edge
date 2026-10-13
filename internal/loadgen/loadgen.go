@@ -37,6 +37,9 @@ type Config struct {
 	// of a query bridge): every subscriber uses SubFilter on SubBroker.
 	SubBroker string
 	SubFilter string
+	// SubTopicFmt, when set, is the per-element topic subscribers use
+	// instead of TopicFmt (e.g. the UNS topics of a UNS Modeler device).
+	SubTopicFmt string
 }
 
 type Result struct {
@@ -147,8 +150,12 @@ func Run(cfg Config) (Result, error) {
 			continue
 		}
 		filters := map[string]byte{}
+		subFmt := cfg.TopicFmt
+		if cfg.SubTopicFmt != "" {
+			subFmt = cfg.SubTopicFmt
+		}
 		for d := i; d < cfg.DPEs; d += cfg.Subscribers {
-			filters[fmt.Sprintf(cfg.TopicFmt, d)] = 0
+			filters[fmt.Sprintf(subFmt, d)] = 0
 		}
 		for len(filters) > 0 {
 			batch := map[string]byte{}
@@ -291,5 +298,5 @@ func sequenceOf(payload []byte) (int64, bool) {
 
 // TopicFmtFor builds the topic format for tags named prefix%05d of system.
 func TopicFmtFor(system, prefix, element string) string {
-	return "winccoa/" + system + "/tags/" + prefix + "%05d/" + strings.Trim(element, "/")
+	return "winccoa/systems/" + system + "/tags/" + prefix + "%05d/" + strings.Trim(element, "/")
 }

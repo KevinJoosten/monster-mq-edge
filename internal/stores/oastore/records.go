@@ -5,6 +5,7 @@
 package oastore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -227,7 +228,7 @@ func (r *recordSet) update(parent context.Context, kind, key string, fn func(cur
 	if err != nil || skip {
 		return err
 	}
-	raw, err := json.Marshal(next)
+	raw, err := marshalPlain(next)
 	if err != nil {
 		return err
 	}
@@ -235,7 +236,7 @@ func (r *recordSet) update(parent context.Context, kind, key string, fn func(cur
 	if prev != nil {
 		env.Rev = prev.env.Rev + 1
 	}
-	body, err := json.Marshal(env)
+	body, err := marshalPlain(env)
 	if err != nil {
 		return err
 	}
@@ -272,6 +273,18 @@ func (r *recordSet) put(ctx context.Context, kind, key string, data any, extra m
 	return r.update(ctx, kind, key, func(json.RawMessage) (any, map[string]oahost.Value, bool, error) {
 		return data, extra, false, nil
 	})
+}
+
+// marshalPlain encodes without HTML escaping: records are datapoint
+// strings, and escaping <, > and & would multiply their size.
+func marshalPlain(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
 }
 
 func isExists(err error) bool {

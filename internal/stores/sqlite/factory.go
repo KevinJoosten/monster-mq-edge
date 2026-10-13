@@ -73,7 +73,8 @@ func build(ctx context.Context, cfg *config.Config, db *DB) (*stores.Storage, *D
 	}
 	queue := NewQueueStore(queueDB, 30*time.Second)
 
-	toEnsure := []interface{ EnsureTable(context.Context) error }{retained, users, archives, devices, sessions, queue}
+	mappings := NewUnsMappingStore(db)
+	toEnsure := []interface{ EnsureTable(context.Context) error }{retained, users, archives, devices, mappings, sessions, queue}
 	if metrics != nil {
 		toEnsure = append(toEnsure, metrics.(interface{ EnsureTable(context.Context) error }))
 	}
@@ -93,6 +94,7 @@ func build(ctx context.Context, cfg *config.Config, db *DB) (*stores.Storage, *D
 		Users:         users,
 		ArchiveConfig: archives,
 		DeviceConfig:  devices,
+		UnsMappings:   mappings,
 		Metrics:       metrics,
 		Closer:        func() error { return closeAll(closers) },
 	}

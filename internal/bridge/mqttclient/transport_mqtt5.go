@@ -150,18 +150,18 @@ func (t *mqtt5Transport) clientConfig(ctx context.Context, o transportOptions, u
 	return cfg, nil
 }
 
+// subscribe sends one SUBSCRIBE per topic, so one the remote cannot take does
+// not stop the others (paho refuses a whole packet client-side).
 func (t *mqtt5Transport) subscribe(ctx context.Context, cm *autopaho.ConnectionManager, o transportOptions) {
-	opts := subscribeOptions(o.Subscriptions)
-	ack, err := cm.Subscribe(ctx, &paho.Subscribe{Subscriptions: opts})
-	if err != nil && o.Logger != nil {
-		o.Logger.Warn("bridge subscribe failed", "err", err)
-	}
-	if ack == nil || o.Logger == nil {
-		return
-	}
-	for i, code := range ack.Reasons {
-		if code >= 0x80 && i < len(opts) {
-			o.Logger.Warn("bridge subscription rejected by remote broker", "topic", opts[i].Topic, "reason", code)
+	for _, opt := range subscribeOptions(o.Subscriptions) {
+		ack, err := cm.Subscribe(ctx, &paho.Subscribe{Subscriptions: []paho.SubscribeOptions{opt}})
+		if o.Logger == nil {
+			continue
+		}
+		if err != nil {
+			o.Logger.Warn("bridge subscribe failed", "topic", opt.Topic, "err", err)
+		} else if ack != nil && len(ack.Reasons) > 0 && ack.Reasons[0] >= 0x80 {
+			o.Logger.Warn("bridge subscription rejected by remote broker", "topic", opt.Topic, "reason", ack.Reasons[0])
 		}
 	}
 }

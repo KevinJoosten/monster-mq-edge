@@ -19,6 +19,7 @@ import (
 	"github.com/eclipse/paho.golang/paho"
 
 	engine "monstermq.io/edge/internal/mqtt"
+	mqttpackets "monstermq.io/edge/internal/mqtt/packets"
 	"monstermq.io/edge/internal/stores"
 )
 
@@ -446,4 +447,45 @@ func TestFitToServerLimits(t *testing.T) {
 	if p.QoS != 1 || !p.Retain {
 		t.Errorf("got QoS %d retain %v, want it unchanged", p.QoS, p.Retain)
 	}
+}
+
+// noSharedSubs announces Shared Subscription Available 0 in the CONNACK.
+type noSharedSubs struct{ engine.HookBase }
+
+func (h *noSharedSubs) ID() string             { return "no-shared-subs" }
+func (h *noSharedSubs) Provides(b byte) bool { return b == engine.OnPacketEncode }
+func (h *noSharedSubs) OnPacketEncode(_ *engine.Client, pk mqttpackets.Packet) mqttpackets.Packet {
+	if pk.FixedHeader.Type == mqttpackets.Connack {
+		pk.Properties.SharedSubAvailable, pk.Properties.SharedSubAvailableFlag = 0, true
+	}
+	return pk
+}
+
+// One filter the remote cannot take must not cost the others their subscription.
+func TestOneUnsupportedFilterKeepsTheOthers(t *testing.T) {
+	addr := freeAddr(t)
+	srv := startEngineAt(t, addr, "")
+	if err := srv.AddHook(&noSharedSubs{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan stores.BrokerMessage, 4)
+	tr, err := newMQTT5Transport(context.Background(), withTestDefaults(transportOptions{
+		URL: "tcp://" + addr, ClientID: "bridge-subs",
+		Subscriptions: []transportSubscription{{Topic: "$share/g/a/#", QoS: 1}, {Topic: "b/#", QoS: 1}},
+		OnMessage:     func(_ string, m stores.BrokerMessage) { got <- m },
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		_ = srv.Publish("b/x", []byte("x"), false, 0)
+		select {
+		case <-got:
+			return
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	t.Fatal("b/# never got a message: the unsupported $share filter took it down")
 }

@@ -16,3 +16,23 @@ func userPropsFromPacket(up []packets.UserProperty) []stores.UserProperty {
 	}
 	return out
 }
+
+// propsToPacket builds engine packet properties from a bus message.
+func propsToPacket(m stores.BrokerMessage) packets.Properties {
+	p := packets.Properties{
+		ContentType:     m.ContentType,
+		ResponseTopic:   m.ResponseTopic,
+		CorrelationData: m.CorrelationData,
+	}
+	if m.MessageExpiryInterval != nil {
+		p.MessageExpiryInterval = *m.MessageExpiryInterval
+	}
+	if m.PayloadFormatIndicator != nil {
+		p.PayloadFormat = *m.PayloadFormatIndicator
+		p.PayloadFormatFlag = true
+	}
+	for _, u := range m.UserProperties {
+		p.User = append(p.User, packets.UserProperty{Key: u.Key, Val: u.Value})
+	}
+	return p
+}

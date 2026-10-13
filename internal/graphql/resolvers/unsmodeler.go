@@ -148,20 +148,24 @@ func (r *unsModelerDeviceResolver) Status(ctx context.Context, obj *generated.Un
 }
 
 func (r *unsModelerDeviceResolver) Draft(ctx context.Context, obj *generated.UnsModelerDevice) (*string, error) {
-	return r.unsDoc(ctx, obj.Name, stores.UnsSlotDraft)
+	return r.unsDoc(ctx, obj.Name, unsmodeler.SlotDraft)
 }
 
 func (r *unsModelerDeviceResolver) Applied(ctx context.Context, obj *generated.UnsModelerDevice) (*string, error) {
-	return r.unsDoc(ctx, obj.Name, stores.UnsSlotApplied)
+	return r.unsDoc(ctx, obj.Name, unsmodeler.SlotApplied)
 }
 
 func (r *Resolver) unsDoc(ctx context.Context, name, slot string) (*string, error) {
-	if r.Storage == nil || r.Storage.UnsMappings == nil {
+	if r.Storage == nil || r.Storage.DeviceConfig == nil {
 		return nil, nil
 	}
-	doc, err := r.Storage.UnsMappings.Get(ctx, name, slot)
-	if err != nil || doc == nil {
+	d, err := r.Storage.DeviceConfig.Get(ctx, name)
+	if err != nil || d == nil {
 		return nil, err
+	}
+	doc := unsmodeler.ConfigDocument(d.Config, slot)
+	if doc == nil {
+		return nil, nil
 	}
 	s := string(doc)
 	return &s, nil
@@ -309,7 +313,7 @@ func (r *unsModelerMutationsResolver) save(ctx context.Context, input generated.
 		return res, nil
 	}
 	d.Config = s.Encode()
-	if err := r.Storage.DeviceConfig.Save(ctx, d); err != nil {
+	if err := r.UnsMgr.SaveDevice(ctx, d); err != nil {
 		return fail(err.Error()), nil
 	}
 	saved, _ := r.Storage.DeviceConfig.Get(ctx, d.Name)
@@ -354,8 +358,6 @@ func (r *unsModelerMutationsResolver) Delete(ctx context.Context, _ *generated.U
 	}
 	if r.UnsMgr != nil {
 		err = r.UnsMgr.Delete(ctx, name)
-	} else if r.Storage.UnsMappings != nil {
-		err = r.Storage.UnsMappings.Delete(ctx, name)
 	}
 	r.reloadUns(ctx)
 	return err == nil, err
@@ -490,12 +492,16 @@ func (r *unsModelerMutationsResolver) StartAiRun(ctx context.Context, _ *generat
 // Direction B -------------------------------------------------------------
 
 func (r *unsModelerDeviceResolver) CreatePlan(ctx context.Context, obj *generated.UnsModelerDevice) (*generated.UnsModelerCreatePlan, error) {
-	if obj.Config == nil || obj.Config.Direction != generated.UnsModelerDirectionMqttToWinccoa || r.Storage.UnsMappings == nil {
+	if obj.Config == nil || obj.Config.Direction != generated.UnsModelerDirectionMqttToWinccoa || r.Storage.DeviceConfig == nil {
 		return nil, nil
 	}
-	raw, err := r.Storage.UnsMappings.Get(ctx, obj.Name, stores.UnsSlotDraft)
-	if err != nil || raw == nil {
+	d, err := r.Storage.DeviceConfig.Get(ctx, obj.Name)
+	if err != nil || d == nil {
 		return nil, err
+	}
+	raw := unsmodeler.ConfigDocument(d.Config, unsmodeler.SlotDraft)
+	if raw == nil {
+		return nil, nil
 	}
 	if issues, _ := unsmodeler.ValidateSchema(raw); len(issues) > 0 {
 		return nil, nil

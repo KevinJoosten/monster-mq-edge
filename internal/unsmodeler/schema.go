@@ -27,10 +27,10 @@ const (
 // them. The dashboard does not evaluate the schema; it calls the server's
 // validate operation.
 const (
-	MaxDocumentBytes = 192 << 10 // whole serialized document; leaves room in a 256 KiB store record
-	MaxJSONDepth     = 100       // nesting of objects and arrays
-	MaxTreeDepth     = 32        // node levels below unsRoot
-	MaxSchemaIssues  = 50        // further issues are summarised in one entry
+	MaxDocumentBytes = 96 << 10 // whole serialized document; draft and applied share the 256 KiB device record
+	MaxJSONDepth     = 100      // nesting of objects and arrays
+	MaxTreeDepth     = 32       // node levels below unsRoot
+	MaxSchemaIssues  = 50       // further issues are summarised in one entry
 )
 
 // MappingSchema returns the JSON Schema of the mapping document. It is the

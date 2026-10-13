@@ -491,7 +491,7 @@ func (m *Manager) ImportProposal(ctx context.Context, name string, raw []byte, i
 	if len(in.Filters) == 0 {
 		return nil, nil, fmt.Errorf("select the analysed topics first")
 	}
-	draftRaw, _ := m.docs.Get(ctx, name, "draft")
+	draftRaw, _ := m.getDoc(ctx, name, SlotDraft)
 	var draft *Document
 	if draftRaw != nil {
 		if issues, _ := ValidateSchema(draftRaw); len(issues) == 0 {
@@ -502,7 +502,7 @@ func (m *Manager) ImportProposal(ctx context.Context, name string, raw []byte, i
 	if p.Doc == nil {
 		return nil, p.Issues, ErrInvalidDocument
 	}
-	if err := m.docs.Save(ctx, name, "draft", p.Doc); err != nil {
+	if err := m.saveDoc(ctx, name, SlotDraft, p.Doc); err != nil {
 		return nil, p.Issues, err
 	}
 	m.log.Info("uns proposal imported", "device", name, "issues", len(p.Issues))

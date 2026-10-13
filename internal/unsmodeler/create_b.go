@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"monstermq.io/edge/internal/oahost"
-	"monstermq.io/edge/internal/stores"
 	"monstermq.io/edge/internal/winccoabrowse"
 )
 
@@ -143,7 +142,7 @@ func (m *Manager) CreateInWinCCOa(ctx context.Context, name string) (*CreateResu
 	if m.browse == nil {
 		return nil, nil, ErrNotEmbedded
 	}
-	raw, err := m.docs.Get(ctx, name, stores.UnsSlotDraft)
+	raw, err := m.getDoc(ctx, name, SlotDraft)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -239,7 +238,7 @@ func (m *Manager) CreateInWinCCOa(ctx context.Context, name string) (*CreateResu
 		}
 		logObj(r)
 	}
-	if err := m.docs.Save(ctx, name, stores.UnsSlotApplied, raw); err != nil {
+	if err := m.saveDoc(ctx, name, SlotApplied, raw); err != nil {
 		return out, res.Issues, err
 	}
 	m.restartFlow(ctx, name)

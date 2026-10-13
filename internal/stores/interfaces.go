@@ -2,7 +2,6 @@ package stores
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 )
 
@@ -211,24 +210,6 @@ type DeviceConfigStore interface {
 	Reassign(ctx context.Context, name string, nodeID string) (*DeviceConfig, error)
 	Close() error
 }
-
-// UnsMappingStore keeps the mapping documents of UNS Modeler devices: one
-// draft and one applied document per device (slot "draft" or "applied"),
-// stored as raw JSON, not as device records.
-type UnsMappingStore interface {
-	// Get returns the document of a slot, nil when there is none.
-	Get(ctx context.Context, device, slot string) (json.RawMessage, error)
-	Save(ctx context.Context, device, slot string, doc json.RawMessage) error
-	// Delete removes both documents of a device.
-	Delete(ctx context.Context, device string) error
-	Close() error
-}
-
-// Mapping document slots of a UNS Modeler device.
-const (
-	UnsSlotDraft   = "draft"
-	UnsSlotApplied = "applied"
-)
 
 type MetricKind string
 

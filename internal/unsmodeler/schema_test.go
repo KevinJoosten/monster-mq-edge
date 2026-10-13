@@ -261,7 +261,7 @@ func TestValidateSchemaLimits(t *testing.T) {
 
 	var b strings.Builder
 	b.WriteString(`{"schemaVersion":1,"direction":"winccoa_to_uns","tree":[`)
-	for i := range 5000 {
+	for i := range 2000 {
 		if i > 0 {
 			b.WriteByte(',')
 		}
@@ -270,7 +270,7 @@ func TestValidateSchemaLimits(t *testing.T) {
 	b.WriteString(`]}`)
 	start = time.Now()
 	issues = validate(t, []byte(b.String()))
-	if len(issues) != MaxSchemaIssues+1 || issues[MaxSchemaIssues].Message != "4950 more issues not shown" {
+	if len(issues) != MaxSchemaIssues+1 || issues[MaxSchemaIssues].Message != "1950 more issues not shown" {
 		t.Errorf("wide: got %d issues, last %v", len(issues), issues[len(issues)-1])
 	}
 	if d := time.Since(start); d > time.Second {

@@ -52,7 +52,6 @@ func EnsureTypes(ctx context.Context, api oahost.API, needConfig, needSessions, 
 type Stores struct {
 	Device   *DeviceConfigStore
 	Archive  *ArchiveConfigStore
-	Mappings *UnsMappingStore
 	Sessions *SessionStore
 	Retained *RetainedStore
 	Users    *UserStore
@@ -67,7 +66,6 @@ func New(api oahost.API, timeout time.Duration, logger *slog.Logger) *Stores {
 	return &Stores{
 		Device:   &DeviceConfigStore{r: cfg},
 		Archive:  &ArchiveConfigStore{r: cfg},
-		Mappings: &UnsMappingStore{r: cfg},
 		Sessions: &SessionStore{r: ses},
 		Retained: newRetainedStore(api, timeout, logger),
 		Users:    newUserStore(api, timeout, logger),

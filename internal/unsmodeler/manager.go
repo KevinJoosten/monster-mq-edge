@@ -29,7 +29,7 @@ var (
 // Manager runs the UNS Modeler devices of this node.
 type Manager struct {
 	store  stores.DeviceConfigStore
-	docs   stores.UnsMappingStore
+	cfgMu  sync.Mutex // serializes read-modify-writes of device configs
 	browse *winccoabrowse.Service
 	api    oahost.API
 	pub    Publisher
@@ -59,11 +59,11 @@ type device struct {
 
 // NewManager creates the manager. browse is nil when the broker does not
 // run embedded in WinCC OA; devices are then stored but never run.
-func NewManager(store stores.DeviceConfigStore, docs stores.UnsMappingStore, browse *winccoabrowse.Service, pub Publisher, gate RoleGate, roots TopicRoots, nodeID string, logger *slog.Logger) *Manager {
+func NewManager(store stores.DeviceConfigStore, browse *winccoabrowse.Service, pub Publisher, gate RoleGate, roots TopicRoots, nodeID string, logger *slog.Logger) *Manager {
 	if gate == nil {
 		gate = AlwaysActive{}
 	}
-	m := &Manager{store: store, docs: docs, browse: browse, pub: pub, gate: gate, roots: roots, nodeID: nodeID,
+	m := &Manager{store: store, browse: browse, pub: pub, gate: gate, roots: roots, nodeID: nodeID,
 		log: logger.With("logger", "UnsModeler"), devices: map[string]*device{}, runs: aiRuns{last: map[string]*AiRunStatus{}}}
 	if browse != nil {
 		m.api = browse.API()
@@ -106,7 +106,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 	var stop []*device
 	for name, dev := range m.devices {
 		next, keep := wanted[name]
-		if !keep || next.Config != dev.cfg.Config {
+		if !keep || settingsKey(next.Config) != settingsKey(dev.cfg.Config) {
 			stop = append(stop, dev)
 			delete(m.devices, name)
 		}
@@ -159,7 +159,7 @@ func (m *Manager) startDevice(ctx context.Context, d stores.DeviceConfig) {
 	m.mu.Lock()
 	dev.rt = rt
 	m.mu.Unlock()
-	raw, err := m.docs.Get(ctx, d.Name, stores.UnsSlotApplied)
+	raw, err := m.getDoc(ctx, d.Name, SlotApplied)
 	if err != nil {
 		m.log.Warn("uns modeler applied mapping not readable", "device", d.Name, "err", err)
 		return
@@ -233,7 +233,7 @@ func (m *Manager) startFlow(ctx context.Context, dev *device) {
 		m.log.Info("uns flow disabled (one-time onboarding)", "device", dev.cfg.Name)
 		return
 	}
-	raw, err := m.docs.Get(ctx, dev.cfg.Name, stores.UnsSlotApplied)
+	raw, err := m.getDoc(ctx, dev.cfg.Name, SlotApplied)
 	if err != nil || raw == nil {
 		return
 	}
@@ -350,7 +350,7 @@ func (m *Manager) Draft(ctx context.Context, name string) (json.RawMessage, erro
 	if _, _, err := m.deviceConfig(ctx, name); err != nil {
 		return nil, err
 	}
-	return m.docs.Get(ctx, name, stores.UnsSlotDraft)
+	return m.getDoc(ctx, name, SlotDraft)
 }
 
 // Applied returns the applied document of a device (nil when there is none).
@@ -358,7 +358,7 @@ func (m *Manager) Applied(ctx context.Context, name string) (json.RawMessage, er
 	if _, _, err := m.deviceConfig(ctx, name); err != nil {
 		return nil, err
 	}
-	return m.docs.Get(ctx, name, stores.UnsSlotApplied)
+	return m.getDoc(ctx, name, SlotApplied)
 }
 
 // fatalIssue returns the stage-1 issue that prevents storing a document:
@@ -402,7 +402,7 @@ func (m *Manager) SaveDraft(ctx context.Context, name string, raw []byte) (json.
 	if len(doc) > MaxDocumentBytes {
 		return nil, []Issue{*fatalIssue(doc)}, ErrInvalidDocument
 	}
-	if err := m.docs.Save(ctx, name, stores.UnsSlotDraft, doc); err != nil {
+	if err := m.saveDoc(ctx, name, SlotDraft, doc); err != nil {
 		return nil, []Issue{{Severity: SeverityError, Path: "", Message: "document not stored: " + err.Error()}}, err
 	}
 	res, err := Validate(ctx, doc, m.Env(name, s))
@@ -425,7 +425,7 @@ func (m *Manager) Apply(ctx context.Context, name string) ([]Issue, error) {
 	if m.browse == nil {
 		return nil, ErrNotEmbedded
 	}
-	raw, err := m.docs.Get(ctx, name, stores.UnsSlotDraft)
+	raw, err := m.getDoc(ctx, name, SlotDraft)
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +443,7 @@ func (m *Manager) Apply(ctx context.Context, name string) ([]Issue, error) {
 		m.log.Info("uns mapping apply refused: validation errors", "device", name, "issues", len(res.Issues))
 		return res.Issues, nil
 	}
-	if err := m.docs.Save(ctx, name, stores.UnsSlotApplied, raw); err != nil {
+	if err := m.saveDoc(ctx, name, SlotApplied, raw); err != nil {
 		return res.Issues, err
 	}
 	m.mu.Lock()
@@ -469,7 +469,7 @@ func (m *Manager) Apply(ctx context.Context, name string) ([]Issue, error) {
 	return res.Issues, nil
 }
 
-// Delete stops a device and deletes its documents.
+// Delete stops a device; its documents go with its device record.
 func (m *Manager) Delete(ctx context.Context, name string) error {
 	m.mu.Lock()
 	dev := m.devices[name]
@@ -478,7 +478,7 @@ func (m *Manager) Delete(ctx context.Context, name string) error {
 	if dev != nil {
 		dev.stop()
 	}
-	return m.docs.Delete(ctx, name)
+	return nil
 }
 
 // DeviceStatus is the runtime state of one device.

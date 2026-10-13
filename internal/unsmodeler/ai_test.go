@@ -171,7 +171,7 @@ func TestAiRunTools(t *testing.T) {
 	if fmt.Sprint(f.tools) != fmt.Sprint(want) {
 		t.Fatalf("tools %v", f.tools)
 	}
-	raw, _ := docs.Get(context.Background(), "d", stores.UnsSlotDraft)
+	raw, _ := docs.Get(context.Background(), "d", SlotDraft)
 	doc, err := ParseDocument(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +193,7 @@ func TestAiRunTools(t *testing.T) {
 
 func TestAiRunNoWritesOnHost(t *testing.T) {
 	oa, sim := newSimOA(t)
-	m := NewManager(&memDevices{m: map[string]stores.DeviceConfig{}}, &memDocs{m: map[string]json.RawMessage{}}, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	m := NewManager(&memDevices{m: map[string]stores.DeviceConfig{}}, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
 	before := map[uint32]uint64{}
 	write := []uint32{oahost.OpDpSet, oahost.OpDpCreate, oahost.OpDpDelete, oahost.OpSetMeta, oahost.OpTypeCheck, oahost.OpDpConnect, oahost.OpQueryConnect}
 	for _, op := range write {
@@ -225,11 +225,8 @@ func TestAiRunStandbyAndLimits(t *testing.T) {
 	if _, err := m.StartAiRun(context.Background(), "d", AiRunRequest{}); err == nil {
 		t.Fatal("run without selection accepted")
 	}
-	big := make([]byte, MaxAIDocumentBytes+1)
-	for i := range big {
-		big[i] = ' '
-	}
-	_ = docs.Save(context.Background(), "d", stores.UnsSlotDraft, big)
+	big := []byte(`{"x":"` + strings.Repeat("a", MaxAIDocumentBytes) + `"}`)
+	_ = docs.Save(context.Background(), "d", SlotDraft, big)
 	if _, err := m.StartAiRun(context.Background(), "d", AiRunRequest{Selection: selA}); err == nil || !strings.Contains(err.Error(), "limited") {
 		t.Fatalf("oversized draft: %v", err)
 	}
@@ -248,7 +245,7 @@ func TestAiRunMaxSteps(t *testing.T) {
 	if st.Status != "failed" || !strings.Contains(st.Error, "maximum") {
 		t.Fatalf("run %+v", st)
 	}
-	if d, _ := docs.Get(context.Background(), "d", stores.UnsSlotDraft); d != nil {
+	if d, _ := docs.Get(context.Background(), "d", SlotDraft); d != nil {
 		t.Fatal("draft stored by a failed run")
 	}
 }
@@ -265,7 +262,7 @@ func TestAiRunAutoApply(t *testing.T) {
 	if st.Status != "succeeded" || !st.Applied {
 		t.Fatalf("run %+v", st)
 	}
-	applied, _ := docs.Get(context.Background(), "d", stores.UnsSlotApplied)
+	applied, _ := docs.Get(context.Background(), "d", SlotApplied)
 	doc, err := ParseDocument(applied)
 	if err != nil || len(doc.Tree) != 1 {
 		t.Fatalf("applied %s %v", applied, err)
@@ -285,7 +282,7 @@ func TestAiRunMergeKeepsIDs(t *testing.T) {
 	m, _, docs := aiSetup(t, AlwaysActive{}, ApprovalReview, nil)
 	_, _, _ = m.SaveDraft(context.Background(), "d", []byte(`{"schemaVersion":1,"direction":"winccoa_to_uns","tree":[
 		{"id":"keep","name":"hall2","children":[{"id":"other","name":"tag","binding":{"kind":"element","type":"Scalar","datapoint":"Tag1","element":""}}]}]}`))
-	raw, _ := docs.Get(context.Background(), "d", stores.UnsSlotDraft)
+	raw, _ := docs.Get(context.Background(), "d", SlotDraft)
 	draft, _ := ParseDocument(raw)
 	sc := newScope(selA, "System1")
 	s, _ := ParseSettings(settingsA("u").Encode())

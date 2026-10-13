@@ -600,8 +600,8 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var browse *winccoabrowse.Service
 	if nativeOn {
 		browse = winccoabrowse.New(opts.OA)
-		if storage.UnsMappings != nil {
-			unsMgr = unsmodeler.NewManager(storage.DeviceConfig, storage.UnsMappings, browse, publishFn, unsmodeler.AlwaysActive{},
+		if storage.DeviceConfig != nil {
+			unsMgr = unsmodeler.NewManager(storage.DeviceConfig, browse, publishFn, unsmodeler.AlwaysActive{},
 				unsmodeler.TopicRoots{Native: names.Root}, cfg.NodeID, logger)
 			unsMgr.SetProviders(func(ctx context.Context, name string) (genai.Provider, error) {
 				return genai.ProviderByName(ctx, cfg.GenAI, storage.DeviceConfig, name)
@@ -789,7 +789,6 @@ func useOAStores(ctx context.Context, cfg *config.Config, storage *stores.Storag
 	if needCfg {
 		storage.DeviceConfig = st.Device
 		storage.ArchiveConfig = st.Archive
-		storage.UnsMappings = st.Mappings
 	}
 	if needSes {
 		storage.Sessions = st.Sessions

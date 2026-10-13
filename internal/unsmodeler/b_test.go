@@ -125,7 +125,7 @@ func TestPrepareBStamping(t *testing.T) {
 	draftRaw := `{"schemaVersion":1,"direction":"mqtt_to_winccoa","source":{"mode":"live","topicFilters":["old/#"]},
 		"types":[{"name":"UNS_Keep","excluded":true,"elements":[{"path":"v","elementType":"float"}]},{"name":"UNS_T","elements":[{"path":"v","elementType":"float"}]}],
 		"datapoints":[{"name":"UNS_Old","type":"UNS_T","bindings":[{"element":"v","topic":"old/x"}]}]}`
-	_ = docs.Save(context.Background(), "b", stores.UnsSlotDraft, []byte(draftRaw))
+	_ = docs.Save(context.Background(), "b", SlotDraft, []byte(draftRaw))
 	draft, _ := ParseDocument([]byte(draftRaw))
 	s := settingsB()
 	in := &TopicInput{Mode: "live", Filters: []string{"plant/#"}}
@@ -193,8 +193,8 @@ func TestCreateInWinCCOaAndFlow(t *testing.T) {
 	oa, sim := newSimOA(t)
 	addAlertClasses(t, sim)
 	devs := &memDevices{m: map[string]stores.DeviceConfig{}}
-	docs := &memDocs{m: map[string]json.RawMessage{}}
-	m := NewManager(devs, docs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	m := NewManager(devs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	docs := &memDocs{m: m}
 	sub := &fakeSub{}
 	m.SetSubscriber(sub)
 	t.Cleanup(m.Stop)
@@ -203,7 +203,7 @@ func TestCreateInWinCCOaAndFlow(t *testing.T) {
 	if err := m.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	_ = docs.Save(ctx, "b", stores.UnsSlotDraft, []byte(docB))
+	_ = docs.Save(ctx, "b", SlotDraft, []byte(docB))
 	res, issues, err := m.CreateInWinCCOa(ctx, "b")
 	if err != nil || HasErrors(issues) {
 		t.Fatalf("create %v %v", err, issues)
@@ -345,8 +345,7 @@ func TestAiRunAutoCreateB(t *testing.T) {
 	oa, sim := newSimOA(t)
 	addAlertClasses(t, sim)
 	devs := &memDevices{m: map[string]stores.DeviceConfig{}}
-	docs := &memDocs{m: map[string]json.RawMessage{}}
-	m := NewManager(devs, docs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	m := NewManager(devs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
 	m.SetSubscriber(&fakeSub{})
 	t.Cleanup(m.Stop)
 	s := settingsB()

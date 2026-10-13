@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"monstermq.io/edge/internal/genai"
-	"monstermq.io/edge/internal/stores"
 	"monstermq.io/edge/internal/winccoabrowse"
 )
 
@@ -156,7 +155,7 @@ func (m *Manager) StartAiRun(ctx context.Context, name string, req AiRunRequest)
 	if m.providers == nil {
 		return nil, errors.New("GenAI is not available")
 	}
-	draftRaw, err := m.docs.Get(ctx, name, stores.UnsSlotDraft)
+	draftRaw, err := m.getDoc(ctx, name, SlotDraft)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +342,7 @@ func (m *Manager) runAI(name string, s *Settings, req AiRunRequest, st *AiRunSta
 	}
 	saveCtx, cancelSave := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelSave()
-	if err := m.docs.Save(saveCtx, name, stores.UnsSlotDraft, final.Doc); err != nil {
+	if err := m.saveDoc(saveCtx, name, SlotDraft, final.Doc); err != nil {
 		m.finishRun(st, fmt.Errorf("storing the proposal: %w", err), final.Issues, false)
 		return
 	}

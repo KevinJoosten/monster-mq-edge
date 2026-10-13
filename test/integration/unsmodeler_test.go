@@ -193,13 +193,13 @@ func TestUnsModelerDirectionA(t *testing.T) {
 		t.Fatal("no $SYS/unsmodeler counters")
 	}
 
-	// Delete removes the device and both documents.
+	// Delete removes the device record and with it both documents.
 	del := gqlQueryAuth(t, url, `mutation { unsModeler { delete(name: "uns1") } }`, nil, tok)
 	if del["unsModeler"].(map[string]any)["delete"] != true {
 		t.Fatal(del)
 	}
-	if doc, _ := env.srv.Storage().UnsMappings.Get(t.Context(), "uns1", "applied"); doc != nil {
-		t.Fatal("applied document kept after delete")
+	if d, _ := env.srv.Storage().DeviceConfig.Get(t.Context(), "uns1"); d != nil {
+		t.Fatal("device record kept after delete")
 	}
 }
 

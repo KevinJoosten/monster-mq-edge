@@ -69,40 +69,24 @@ func (s *memDevices) Reassign(context.Context, string, string) (*stores.DeviceCo
 }
 func (s *memDevices) Close() error { return nil }
 
-type memDocs struct {
-	mu sync.Mutex
-	m  map[string]json.RawMessage
-}
+// memDocs reads and writes the documents in the device records of m.
+type memDocs struct{ m *Manager }
 
-func (d *memDocs) Get(_ context.Context, device, slot string) (json.RawMessage, error) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	return d.m[device+"/"+slot], nil
+func (d *memDocs) Get(ctx context.Context, device, slot string) (json.RawMessage, error) {
+	return d.m.getDoc(ctx, device, slot)
 }
-func (d *memDocs) Save(_ context.Context, device, slot string, doc json.RawMessage) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.m[device+"/"+slot] = doc
-	return nil
+func (d *memDocs) Save(ctx context.Context, device, slot string, doc json.RawMessage) error {
+	return d.m.saveDoc(ctx, device, slot, doc)
 }
-func (d *memDocs) Delete(_ context.Context, device string) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	delete(d.m, device+"/draft")
-	delete(d.m, device+"/applied")
-	return nil
-}
-func (d *memDocs) Close() error { return nil }
 
 func newTestManager(t *testing.T, gate RoleGate) (*Manager, *memDevices, *memDocs, *capture) {
 	t.Helper()
 	oa, _ := newSimOA(t)
 	devs := &memDevices{m: map[string]stores.DeviceConfig{}}
-	docs := &memDocs{m: map[string]json.RawMessage{}}
 	c := newCapture()
-	m := NewManager(devs, docs, oa, c.pub, gate, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	m := NewManager(devs, oa, c.pub, gate, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
 	t.Cleanup(m.Stop)
-	return m, devs, docs, c
+	return m, devs, &memDocs{m: m}, c
 }
 
 func TestManagerApplyAndStandby(t *testing.T) {
@@ -126,7 +110,7 @@ func TestManagerApplyAndStandby(t *testing.T) {
 	if _, err := m.Apply(ctx, "d"); !errors.Is(err, ErrStandby) {
 		t.Fatalf("apply on standby: %v", err)
 	}
-	if a, _ := docs.Get(ctx, "d", stores.UnsSlotApplied); a != nil {
+	if a, _ := docs.Get(ctx, "d", SlotApplied); a != nil {
 		t.Fatal("applied on standby")
 	}
 	g.Set(true)

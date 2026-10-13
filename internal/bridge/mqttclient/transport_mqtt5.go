@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -36,12 +38,17 @@ func newMQTT5Transport(ctx context.Context, o transportOptions) (*mqtt5Transport
 	if err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(u.Scheme, "unix") {
+		return nil, fmt.Errorf("broker url %q: unix sockets need protocolVersion 4 (MQTT 3.1.1)", o.URL)
+	}
 	t := &mqtt5Transport{queued: o.LibraryQueue != ""}
-	cfg, err := t.clientConfig(ctx, o, u)
+	// Close cancels cctx, which also ends a subscribe still in flight.
+	cctx, cancel := context.WithCancel(ctx)
+	cfg, err := t.clientConfig(cctx, o, u)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
-	cctx, cancel := context.WithCancel(ctx)
 	cm, err := autopaho.NewConnection(cctx, cfg)
 	if err != nil {
 		cancel()
@@ -82,13 +89,20 @@ func (t *mqtt5Transport) clientConfig(ctx context.Context, o transportOptions, u
 		},
 		OnConnectError: func(err error) {
 			if t.sawV3.Load() {
-				err = fmt.Errorf("%w: %v", ErrRemoteNotMQTT5, err)
+				err = fmt.Errorf("%w: %v", errRemoteNotMQTT5, err)
 			}
 			if o.OnConnectError != nil {
 				o.OnConnectError(err)
 			}
 		},
 		ClientConfig: paho.ClientConfig{ClientID: o.ClientID},
+	}
+	if o.OnConnectionDown != nil {
+		// autopaho forwards only the error that ended the connection.
+		cfg.OnClientError = o.OnConnectionDown
+		cfg.OnServerDisconnect = func(d *paho.Disconnect) {
+			o.OnConnectionDown(fmt.Errorf("server requested disconnect (reason 0x%02x)", d.ReasonCode))
+		}
 	}
 	if o.Password != "" {
 		cfg.ConnectPassword = []byte(o.Password)
@@ -109,12 +123,15 @@ func (t *mqtt5Transport) clientConfig(ctx context.Context, o transportOptions, u
 	case memoryQueue:
 		cfg.Queue = memory.New()
 	default:
-		if err := os.MkdirAll(o.LibraryQueue, 0o755); err != nil {
-			return cfg, fmt.Errorf("bridge queue %s: %w", o.LibraryQueue, err)
+		// The MQTT 3.1.1 transport keeps the parent directory, so the two
+		// libraries never read each other's files.
+		dir := filepath.Join(o.LibraryQueue, "v5")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return cfg, fmt.Errorf("bridge queue %s: %w", dir, err)
 		}
-		q, err := file.New(o.LibraryQueue, "queue", ".msg")
+		q, err := file.New(dir, "queue", ".msg")
 		if err != nil {
-			return cfg, fmt.Errorf("bridge queue %s: %w", o.LibraryQueue, err)
+			return cfg, fmt.Errorf("bridge queue %s: %w", dir, err)
 		}
 		cfg.Queue = q
 	}

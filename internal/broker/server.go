@@ -544,7 +544,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var bridges *mqttclient.Manager
 	if cfg.Features.MqttClient {
 		busAdapter := &mqttclient.BusAdapter{Bus: bus, BridgeOutbound: cfg.PeerLink.Enabled && cfg.PeerLink.Receive.BridgeOutbound}
-		bridges = mqttclient.NewManager(storage.DeviceConfig, publishFn, busAdapter, cfg.NodeID, logger)
+		bridges = mqttclient.NewManager(storage.DeviceConfig, NewInlinePublisher(server).Publish, busAdapter, cfg.NodeID, logger)
 		if collector != nil {
 			bridges.SetCounters(collector.IncBridgeIn, collector.IncBridgeOut)
 		}

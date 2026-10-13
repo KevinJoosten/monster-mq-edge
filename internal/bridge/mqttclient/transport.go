@@ -17,8 +17,8 @@ import (
 
 // transport is the bridge's connection to the remote broker. The bridge logic
 // (topic mapping, skipping its own messages, buffering) stays independent of
-// the client library behind it, so an MQTT 3.1.1 fallback can be added later
-// as a second implementation.
+// the client library behind it: MQTT 5 (transport_mqtt5.go) or MQTT 3.1.1
+// (transport_mqtt311.go).
 type transport interface {
 	// Publish sends one message. It fails fast with errTransportDown when there
 	// is no connection, and with errTooLarge when the message exceeds the remote
@@ -33,9 +33,9 @@ type transport interface {
 var (
 	errTransportDown = errors.New("remote broker not connected")
 	errTooLarge      = errors.New("message exceeds the remote broker's maximum packet size")
-	// ErrRemoteNotMQTT5 is reported when the remote broker answers with an
+	// errRemoteNotMQTT5 is reported when the remote broker answers with an
 	// MQTT 3.1.1 CONNACK, i.e. it does not support MQTT 5.
-	ErrRemoteNotMQTT5 = errors.New("remote broker does not support MQTT 5")
+	errRemoteNotMQTT5 = errors.New("remote broker does not support MQTT 5")
 )
 
 // memoryQueue selects the client library's in-memory publish queue.
@@ -57,8 +57,10 @@ type transportOptions struct {
 	ConnectTimeout time.Duration
 	ReconnectDelay time.Duration // longest wait between connection attempts
 	CleanSession   bool
-	TLS            *tls.Config
-	Subscriptions  []transportSubscription
+	// ProtocolVersion is 3 or 4 for MQTT 3.1.1, 5 for MQTT 5.
+	ProtocolVersion int
+	TLS             *tls.Config
+	Subscriptions   []transportSubscription
 	// LibraryQueue enables the client library's own publish queue (buffer
 	// implementation PAHO): "" none, memoryQueue in memory, otherwise a directory.
 	LibraryQueue   string
@@ -66,6 +68,8 @@ type transportOptions struct {
 	OnMessage      func(remoteTopic string, msg stores.BrokerMessage)
 	OnConnected    func()
 	OnConnectError func(error)
+	// OnConnectionDown reports why an established connection dropped.
+	OnConnectionDown func(error)
 }
 
 // parseBrokerURL accepts the URL forms bridges have always used; like the old
@@ -79,7 +83,7 @@ func parseBrokerURL(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("broker url %q: %w", raw, err)
 	}
 	switch strings.ToLower(u.Scheme) {
-	case "tcp", "mqtt", "ssl", "tls", "mqtts", "mqtt+ssl", "tcps", "ws", "wss":
+	case "tcp", "mqtt", "ssl", "tls", "mqtts", "mqtt+ssl", "tcps", "ws", "wss", "unix":
 		return u, nil
 	}
 	return nil, fmt.Errorf("broker url %q: unsupported scheme %q", raw, u.Scheme)
@@ -111,13 +115,28 @@ func sessionSettings(cleanSession bool) (cleanStart bool, expiry uint32) {
 
 // subscribeOptions sets No Local, so the remote broker never sends the bridge
 // its own publishes back, and Retain As Published, so retained state keeps its
-// flag on inbound messages.
+// flag on inbound messages. A shared subscription gets no No Local: it is a
+// protocol error there [MQTT-3.8.3-4].
 func subscribeOptions(subs []transportSubscription) []paho.SubscribeOptions {
 	out := make([]paho.SubscribeOptions, len(subs))
 	for i, s := range subs {
-		out[i] = paho.SubscribeOptions{Topic: s.Topic, QoS: s.QoS, NoLocal: true, RetainAsPublished: true}
+		out[i] = paho.SubscribeOptions{Topic: s.Topic, QoS: s.QoS, NoLocal: plainFilter(s.Topic) == s.Topic, RetainAsPublished: true}
 	}
 	return out
+}
+
+// plainFilter strips a shared-subscription prefix ($share/<group>/, or EMQX's
+// $queue/) from a filter: messages arrive under the plain topic.
+func plainFilter(filter string) string {
+	if rest, ok := strings.CutPrefix(filter, "$share/"); ok {
+		if _, f, ok := strings.Cut(rest, "/"); ok {
+			return f
+		}
+	}
+	if f, ok := strings.CutPrefix(filter, "$queue/"); ok {
+		return f
+	}
+	return filter
 }
 
 // backoff waits nothing before the first attempt, then 1s, 2s, 4s, … up to max.
@@ -179,4 +198,20 @@ func fromPahoPublish(p *paho.Publish) stores.BrokerMessage {
 // always carries a properties length, so its remaining length is at least 3.
 func isV3Connack(head []byte) bool {
 	return len(head) >= 2 && head[0] == 0x20 && head[1] == 0x02
+}
+
+// newTransportFor starts the transport for o.ProtocolVersion.
+func newTransportFor(ctx context.Context, o transportOptions) (transport, error) {
+	if o.ProtocolVersion == 3 || o.ProtocolVersion == 4 {
+		tr, err := newMQTT311Transport(o)
+		if err != nil {
+			return nil, err
+		}
+		return tr, nil
+	}
+	tr, err := newMQTT5Transport(ctx, o)
+	if err != nil {
+		return nil, err
+	}
+	return tr, nil
 }

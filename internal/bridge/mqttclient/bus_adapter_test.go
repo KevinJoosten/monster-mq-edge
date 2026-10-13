@@ -23,8 +23,8 @@ func TestBusAdapterSkipsPeerReplicas(t *testing.T) {
 		for {
 			select {
 			case m := <-ch:
-				got = append(got, m.Topic)
-				if m.Topic == "local/x" {
+				got = append(got, m.TopicName)
+				if m.TopicName == "local/x" {
 					break read
 				}
 			case <-timeout:

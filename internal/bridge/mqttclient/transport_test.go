@@ -5,9 +5,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +73,31 @@ func TestSubscribeOptionsSetNoLocalAndRetainAsPublished(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("subscribe options = %+v, want %+v", got, want)
 	}
+}
+
+// No Local on a shared subscription is a protocol error [MQTT-3.8.3-4].
+func TestSubscribeOptionsNoLocalOnlyForNonSharedFilters(t *testing.T) {
+	got := subscribeOptions([]transportSubscription{{Topic: "$share/g/data/#", QoS: 1}, {Topic: "$queue/cmd/#", QoS: 1}})
+	for _, o := range got {
+		if o.NoLocal || !o.RetainAsPublished {
+			t.Errorf("%s: NoLocal=%v RetainAsPublished=%v, want false and true", o.Topic, o.NoLocal, o.RetainAsPublished)
+		}
+	}
+}
+
+func TestUnixURLsNeedMQTT311(t *testing.T) {
+	if _, err := parseBrokerURL("unix:///run/mqtt.sock"); err != nil {
+		t.Fatalf("unix:// must be accepted: %v", err)
+	}
+	_, err := newTransportFor(context.Background(), transportOptions{URL: "unix:///run/mqtt.sock", ProtocolVersion: 5})
+	if err == nil || !strings.Contains(err.Error(), "protocolVersion 4") {
+		t.Errorf("MQTT 5 over unix:// = %v, want an error naming protocolVersion 4", err)
+	}
+	tr, err := newTransportFor(context.Background(), transportOptions{URL: "unix:///run/mqtt.sock", ProtocolVersion: 4, Logger: slog.New(slog.DiscardHandler)})
+	if err != nil {
+		t.Fatalf("MQTT 3.1.1 over unix:// = %v", err)
+	}
+	tr.Close()
 }
 
 func TestPublishConversionKeepsProperties(t *testing.T) {
@@ -198,8 +227,8 @@ func TestTransportReportsRemoteNotMQTT5(t *testing.T) {
 
 	select {
 	case err := <-errs:
-		if !errors.Is(err, ErrRemoteNotMQTT5) {
-			t.Errorf("err = %v, want ErrRemoteNotMQTT5", err)
+		if !errors.Is(err, errRemoteNotMQTT5) {
+			t.Errorf("err = %v, want errRemoteNotMQTT5", err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("no connect error reported")
@@ -263,11 +292,55 @@ func TestRemoteNotMQTT5IsNotStickyAcrossAttempts(t *testing.T) {
 	}
 	defer tr.Close()
 	first, second := <-errs, <-errs
-	if !errors.Is(first, ErrRemoteNotMQTT5) {
-		t.Errorf("first = %v, want ErrRemoteNotMQTT5", first)
+	if !errors.Is(first, errRemoteNotMQTT5) {
+		t.Errorf("first = %v, want errRemoteNotMQTT5", first)
 	}
-	if errors.Is(second, ErrRemoteNotMQTT5) {
-		t.Errorf("second = %v, must not be ErrRemoteNotMQTT5", second)
+	if errors.Is(second, errRemoteNotMQTT5) {
+		t.Errorf("second = %v, must not be errRemoteNotMQTT5", second)
+	}
+}
+
+// A connection that drops after it was up is reported with its error.
+func TestTransportReportsConnectionDown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_, _ = c.Read(make([]byte, 256))
+		_, _ = c.Write([]byte{0x20, 0x03, 0x00, 0x00, 0x00}) // MQTT 5 CONNACK, success
+		time.Sleep(100 * time.Millisecond)
+		_ = c.Close()
+	}()
+	down := make(chan error, 1)
+	tr, err := newMQTT5Transport(context.Background(), transportOptions{
+		URL:            (&url.URL{Scheme: "tcp", Host: ln.Addr().String()}).String(),
+		ClientID:       "bridge-test",
+		ConnectTimeout: 2 * time.Second,
+		ReconnectDelay: time.Second,
+		OnConnectionDown: func(err error) {
+			select {
+			case down <- err:
+			default:
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	select {
+	case err := <-down:
+		if err == nil {
+			t.Error("connection down reported without an error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("connection down not reported")
 	}
 }
 
@@ -300,5 +373,19 @@ func TestDialHonoursContext(t *testing.T) {
 			_ = conn.Close()
 			t.Errorf("%s: dial with a cancelled context succeeded", scheme)
 		}
+	}
+}
+
+func TestMQTT5FileQueueUsesOwnSubdirectory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "paho-x")
+	tr, err := newMQTT5Transport(context.Background(), withTestDefaults(transportOptions{
+		URL: "tcp://" + freeAddr(t), ClientID: "q5", LibraryQueue: dir,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	if fi, err := os.Stat(filepath.Join(dir, "v5")); err != nil || !fi.IsDir() {
+		t.Fatalf("MQTT 5 queue directory %s/v5 missing: %v", dir, err)
 	}
 }

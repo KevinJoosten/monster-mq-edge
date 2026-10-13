@@ -397,6 +397,7 @@ func (h *StorageHook) publishedReplica(pk *packets.Packet, f *packets.Forward) {
 		IsRetain:    pk.FixedHeader.Retain,
 		IsDup:       f.Dup,
 		ClientID:    f.ClientID,
+		Inline:      f.Inline,
 		Time:        t,
 		OriginNode:  f.SourceNode,
 	}

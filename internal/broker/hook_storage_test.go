@@ -165,6 +165,17 @@ func (e *peerEnv) get(t *testing.T, topic string) *stores.BrokerMessage {
 	return m
 }
 
+// A replica of a message a bridge brought in keeps the inline flag, so the
+// same bridge on this node does not forward it back out.
+func TestStorageHookReplicaKeepsInline(t *testing.T) {
+	e := newPeerEnv(t, false)
+	e.inject(t, &packets.Forward{SourceNode: "oa-a", ClientID: "bridge:up", Inline: true}, "plant/b", "v", false, 0)
+	bus := e.busMsgs()
+	if len(bus) != 1 || !bus[0].Inline || bus[0].ClientID != "bridge:up" {
+		t.Fatalf("bus = %+v, want one inline message from bridge:up", bus)
+	}
+}
+
 func TestStorageHookReplicaDispatch(t *testing.T) {
 	e := newPeerEnv(t, false)
 	ts := time.Date(2026, 10, 3, 12, 0, 0, 123456789, time.UTC)

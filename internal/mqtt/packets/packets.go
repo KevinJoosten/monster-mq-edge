@@ -153,6 +153,7 @@ type Forward struct {
 	Dup        bool   // DUP flag of the original publish
 	Will       bool   // the record is a will message
 	Snapshot   bool   // the record comes from a retained snapshot, not the live log
+	Inline     bool   // published by an inline client on the source (a bridge, the broker itself)
 }
 
 // Mods specifies certain values required for certain mqtt v5 compliance within packet encoding/decoding.

@@ -594,6 +594,11 @@ func (c *Connector) publishLocalMessage(addr Address, msg stores.BrokerMessage, 
 		c.requeue(msg, buffered, remote, "remote disconnected")
 		return false
 	}
+	msg, live := remainingExpiry(msg, time.Now())
+	if !live {
+		c.logger.Debug("bridge outbound message expired", "name", c.name, "topic", remote)
+		return true
+	}
 	qos := outboundQoS(addr, msg)
 	retain := addr.Retain || msg.IsRetain
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -614,6 +619,21 @@ func (c *Connector) publishLocalMessage(addr Address, msg stores.BrokerMessage, 
 	c.logger.Debug("bridge outbound published", "name", c.name, "localTopic", msg.TopicName,
 		"remoteTopic", remote, "qos", qos, "retain", retain, "buffered", buffered)
 	return true
+}
+
+// remainingExpiry lowers Message Expiry by the time the message waited
+// since it was published; live is false once it has expired [MQTT-3.3.2-5/6].
+func remainingExpiry(msg stores.BrokerMessage, now time.Time) (stores.BrokerMessage, bool) {
+	if msg.MessageExpiryInterval == nil || msg.Time.IsZero() {
+		return msg, true
+	}
+	left := int64(*msg.MessageExpiryInterval) - int64(now.Sub(msg.Time)/time.Second)
+	if left <= 0 {
+		return msg, false
+	}
+	v := uint32(left)
+	msg.MessageExpiryInterval = &v
+	return msg, true
 }
 
 // requeue puts an unsent message into the bridge buffer when it came straight

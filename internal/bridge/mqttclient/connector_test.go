@@ -488,6 +488,24 @@ func TestRejectedMessageIsDroppedNotRequeued(t *testing.T) {
 	}
 }
 
+// Time spent in the buffer counts against Message Expiry [MQTT-3.3.2-5/6].
+func TestBufferedMessageExpiryCountsDown(t *testing.T) {
+	tr := &fakeTransport{connected: true}
+	c := NewConnector("test", Config{}, nil, nil, discard)
+	c.tr = tr
+	exp := func(s uint32) *uint32 { return &s }
+	c.publishLocalMessage(exactAddr, stores.BrokerMessage{TopicName: "a", Time: time.Now().Add(-50 * time.Second), MessageExpiryInterval: exp(60)}, true)
+	if !c.publishLocalMessage(exactAddr, stores.BrokerMessage{TopicName: "a", Time: time.Now().Add(-2 * time.Minute), MessageExpiryInterval: exp(60)}, true) {
+		t.Error("an expired message must count as handled")
+	}
+	if len(tr.published) != 1 {
+		t.Fatalf("published %d, want 1 (the expired one dropped)", len(tr.published))
+	}
+	if got := tr.published[0].msg.MessageExpiryInterval; got == nil || *got > 10 || *got < 9 {
+		t.Errorf("expiry = %v, want the 10s remaining", got)
+	}
+}
+
 // The old client logged "bridge connection lost"; the connector must still hear about it.
 func TestConnectorListensForConnectionDown(t *testing.T) {
 	opts := startWithFake(t, Config{Addresses: []Address{outAll}}, &fakeTransport{connected: true}, &recorder{}, newFakeBus())

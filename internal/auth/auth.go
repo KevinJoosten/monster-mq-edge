@@ -19,10 +19,25 @@ type Cache struct {
 	mu                  sync.RWMutex
 	users               map[string]stores.User
 	rulesByUser         map[string][]stores.AclRule
+	decisions           map[aclKey]bool // memoized AllowClient verdicts, reset by Refresh
+	decisionsGen        uint64          // bumped by Refresh so in-flight checks don't memoize stale verdicts
 	anonymousAllow      bool
 	aclCheckOnSubscribe bool
 	sessions            map[string]session
 }
+
+type aclKey struct {
+	username, clientID, topic string
+	write                     bool
+}
+
+// maxACLDecisions bounds the memo; a client publishing to random topics would
+// otherwise grow it without limit. Full means reset, not eviction. Keys longer
+// than maxACLMemoKeyLen are not memoized, so the cap also bounds bytes (~16 MiB).
+const (
+	maxACLDecisions  = 1 << 16
+	maxACLMemoKeyLen = 256
+)
 
 type session struct {
 	username     string
@@ -112,6 +127,8 @@ func (c *Cache) Refresh(ctx context.Context) error {
 		usersMap[u.Username] = u
 	}
 	c.mu.Lock()
+	c.decisions = nil
+	c.decisionsGen++
 	c.users = usersMap
 	c.rulesByUser = rulesByUser
 	c.mu.Unlock()
@@ -189,7 +206,31 @@ func (c *Cache) Allow(username, topic string, write bool) bool {
 
 // AllowClient is Allow with the MQTT client ID used for %c substitution in ACL
 // patterns (%u is replaced with the username).
+//
+// Verdicts are memoized until the next Refresh: with AclCheckOnSubscription
+// off, every delivery to every subscriber lands here.
 func (c *Cache) AllowClient(username, clientID, topic string, write bool) bool {
+	key := aclKey{username, clientID, topic, write}
+	c.mu.RLock()
+	ok, hit := c.decisions[key]
+	gen := c.decisionsGen
+	c.mu.RUnlock()
+	if hit {
+		return ok
+	}
+	ok = c.allowClient(username, clientID, topic, write)
+	c.mu.Lock()
+	if c.decisionsGen == gen && len(topic)+len(clientID)+len(username) <= maxACLMemoKeyLen {
+		if c.decisions == nil || len(c.decisions) >= maxACLDecisions {
+			c.decisions = map[aclKey]bool{}
+		}
+		c.decisions[key] = ok
+	}
+	c.mu.Unlock()
+	return ok
+}
+
+func (c *Cache) allowClient(username, clientID, topic string, write bool) bool {
 	if username == "" {
 		if !c.anonymousAllow {
 			return false

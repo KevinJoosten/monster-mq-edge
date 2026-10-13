@@ -166,15 +166,15 @@ func TestAllowFilterCoverage(t *testing.T) {
 }
 
 func TestAllowAnonymousUserRecord(t *testing.T) {
-	c := NewCache(nil, true, true)
+	store := &fakeUserStore{}
+	c := NewCache(store, true, true)
 	if !c.Validate("", "") || !c.Allow("", "any/topic", true) {
 		t.Fatal("without an Anonymous record anonymous access follows AnonymousEnabled")
 	}
-	c.users = map[string]stores.User{
-		AnonymousUser: {Username: AnonymousUser, Enabled: true, CanSubscribe: true},
-	}
-	c.rulesByUser = map[string][]stores.AclRule{
-		AnonymousUser: {{TopicPattern: "public/#", CanSubscribe: true, Priority: 1}},
+	store.users = []stores.User{{Username: AnonymousUser, Enabled: true, CanSubscribe: true}}
+	store.rules = []stores.AclRule{{Username: AnonymousUser, TopicPattern: "public/#", CanSubscribe: true, Priority: 1}}
+	if err := c.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	if !c.Validate("", "") {
 		t.Error("enabled Anonymous record should allow connecting")
@@ -182,7 +182,10 @@ func TestAllowAnonymousUserRecord(t *testing.T) {
 	if !c.Allow("", "public/x", false) || c.Allow("", "private/x", false) || c.Allow("", "public/x", true) {
 		t.Error("Anonymous record permissions and ACL rules should apply")
 	}
-	c.users[AnonymousUser] = stores.User{Username: AnonymousUser, Enabled: false, CanSubscribe: true}
+	store.users[0].Enabled = false
+	if err := c.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if c.Validate("", "") || c.Allow("", "public/x", false) {
 		t.Error("disabled Anonymous record should deny")
 	}

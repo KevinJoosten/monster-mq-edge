@@ -1,6 +1,8 @@
 package mqttclient
 
 import (
+	"bytes"
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -12,11 +14,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -392,4 +396,53 @@ func TestTLSConfigReadsFilesPerHandshake(t *testing.T) {
 	if err, _ := p.handshake(t, cfg); err != nil {
 		t.Fatalf("handshake after the file appeared: %v", err)
 	}
+}
+
+// A config error stops the bridge at start, as in Core; nothing is left running.
+func TestStartRefusesInvalidTLSConfig(t *testing.T) {
+	c := NewConnector("bad", Config{BrokerURL: "tcp://127.0.0.1:1", TlsCaCertPath: "/ca.pem"}, nil, nil, slog.New(slog.DiscardHandler))
+	err := c.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Invalid MQTT client configuration: TLS options (tls*) require an ssl:// or wss:// brokerUrl") {
+		t.Fatalf("Start err = %v", err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.client != nil || c.queue != nil {
+		t.Error("a refused bridge left its client or queue behind")
+	}
+}
+
+// A certificate file that is missing at start is a warning, not a refusal:
+// the bridge keeps trying and picks the file up when it appears.
+func TestStartWarnsAboutMissingCertificateFile(t *testing.T) {
+	var logs syncBuffer
+	missing := filepath.Join(t.TempDir(), "client.pem")
+	c := NewConnector("later", Config{
+		BrokerURL: "ssl://127.0.0.1:1", TlsClientCertPath: missing, TlsClientKeyPath: missing,
+		ReconnectDelay: 1,
+	}, nil, nil, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer c.Stop()
+	if !strings.Contains(logs.String(), "Invalid MQTT client TLS configuration") || !strings.Contains(logs.String(), "file not found") {
+		t.Errorf("no TLS warning logged:\n%s", logs.String())
+	}
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }

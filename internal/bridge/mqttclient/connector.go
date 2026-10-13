@@ -2,7 +2,6 @@ package mqttclient
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"path/filepath"
@@ -180,6 +179,10 @@ func (c *Connector) LatestMetrics() MetricsSnapshot {
 
 // Start dials the remote broker and registers inbound/outbound forwarders.
 func (c *Connector) Start(ctx context.Context) error {
+	if errs := c.cfg.tlsErrors(); len(errs) > 0 {
+		// A config error is not retried, as in MonsterMQ Core.
+		return fmt.Errorf("Invalid MQTT client configuration: %s", strings.Join(errs, "; "))
+	}
 	opts := paho.NewClientOptions().AddBroker(c.cfg.BrokerURL)
 	opts.SetClientID(c.cfg.ClientID)
 	if c.cfg.Username != "" {
@@ -209,8 +212,14 @@ func (c *Connector) Start(ctx context.Context) error {
 		}
 		c.logger.Info("bridge message buffering enabled", "name", c.name, "type", "PAHO", "persisted", c.cfg.PersistBuffer, "size", c.bufferSize())
 	}
-	if strings.HasPrefix(c.cfg.BrokerURL, "ssl://") || strings.HasPrefix(c.cfg.BrokerURL, "tls://") || strings.HasPrefix(c.cfg.BrokerURL, "wss://") {
-		opts.SetTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12})
+	if c.cfg.isTLSURL() {
+		tlsCfg, err := buildTLSConfig(c.cfg)
+		if err != nil {
+			// Files are read again on every connection attempt: one that is
+			// missing now (not yet provisioned, being renewed) is retried.
+			c.logger.Warn("Invalid MQTT client TLS configuration", "name", c.name, "err", err)
+		}
+		opts.SetTLSConfig(tlsCfg)
 	}
 
 	opts.SetOnConnectHandler(func(client paho.Client) {

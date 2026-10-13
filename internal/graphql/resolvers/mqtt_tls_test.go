@@ -116,3 +116,13 @@ func TestMqttClientCreateAndUpdateValidate(t *testing.T) {
 		t.Errorf("create = %+v, %v", res, err)
 	}
 }
+
+func TestMqttClientBlankTLSValuesAreNotStored(t *testing.T) {
+	m := mqttClientConfigInputToMap(&generated.MqttClientConnectionConfigInput{BrokerURL: "ssl://r:8883", TLSCaCertPath: sp("  "), TLSServerName: sp(" ")})
+	if _, ok := m["tlsCaCertPath"]; ok {
+		t.Error("blank tlsCaCertPath stored")
+	}
+	if _, ok := m["tlsServerName"]; ok {
+		t.Error("blank tlsServerName stored")
+	}
+}

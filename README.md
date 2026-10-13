@@ -178,8 +178,8 @@ config and in GraphQL:
 | `tlsClientKeyPath` | PEM private key (PKCS#1, EC, PKCS#8, encrypted PKCS#8 or legacy encrypted PEM); not used with PKCS12 |
 | `tlsClientKeyPassword` | password of the key or the PKCS12 bundle; never returned, GraphQL reports `tlsClientKeyPasswordSet` |
 | `tlsClientKeyFormat` | `PEM` (default) or `PKCS12` |
-| `tlsServerName` | SNI and the name the server certificate must carry; defaults to the URL host |
-| `tlsAlpnProtocols` | ALPN protocols |
+| `tlsServerName` | SNI and the name the server certificate must carry; defaults to the URL host (a URL without host needs it) |
+| `tlsAlpnProtocols` | ALPN protocols; for `ssl://` only, a `wss://` connection needs `http/1.1` |
 
 Private CA with a client certificate:
 

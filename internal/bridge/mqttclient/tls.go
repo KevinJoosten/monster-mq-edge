@@ -22,6 +22,7 @@ import (
 // to load right now; the returned config is usable either way and fails its
 // handshakes with the same message until the files are right.
 func buildTLSConfig(c Config) (*tls.Config, error) {
+	c = c.trimTLS()
 	cfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		NextProtos: c.TlsAlpnProtocols,
@@ -72,7 +73,8 @@ func verifyServer(cs tls.ConnectionState, caPath, name string) error {
 		return errors.New("tls: server sent no certificate")
 	}
 	if name == "" {
-		name = cs.ServerName
+		// x509 skips the host name check for an empty name; Go's default refuses.
+		return errors.New("tls: no host name to verify the server certificate against: set tlsServerName")
 	}
 	inter := x509.NewCertPool()
 	for _, ic := range cs.PeerCertificates[1:] {
@@ -83,6 +85,9 @@ func verifyServer(cs tls.ConnectionState, caPath, name string) error {
 }
 
 func readTLSFile(field, path string) ([]byte, error) {
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		return nil, fmt.Errorf("%s '%s': file not found", field, path)
+	}
 	data, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%s '%s': file not found", field, path)
@@ -138,11 +143,14 @@ func loadClientCertificate(c Config) (*tls.Certificate, error) {
 			return nil, err
 		}
 		key, leaf, chain, err := pkcs12.DecodeChain(data, c.TlsClientKeyPassword)
+		if key == nil && err != nil && strings.Contains(err.Error(), "private key missing") {
+			return nil, fmt.Errorf("tlsClientCertPath '%s': PKCS12 bundle contains no private key", c.TlsClientCertPath)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("tlsClientCertPath '%s': cannot open PKCS12 bundle (wrong tlsClientKeyPassword?): %v", c.TlsClientCertPath, err)
 		}
-		if key == nil {
-			return nil, fmt.Errorf("tlsClientCertPath '%s': PKCS12 bundle contains no private key", c.TlsClientCertPath)
+		if !keyMatches(leaf, key) {
+			return nil, fmt.Errorf("tlsClientCertPath '%s': the private key in the PKCS12 bundle does not match its certificate", c.TlsClientCertPath)
 		}
 		cert := &tls.Certificate{Certificate: [][]byte{leaf.Raw}, PrivateKey: key, Leaf: leaf}
 		for _, ca := range chain {
@@ -158,9 +166,7 @@ func loadClientCertificate(c Config) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, err
 	}
-	signer, ok := key.(crypto.Signer)
-	pub, okPub := certs[0].PublicKey.(interface{ Equal(crypto.PublicKey) bool })
-	if !ok || !okPub || !pub.Equal(signer.Public()) {
+	if !keyMatches(certs[0], key) {
 		return nil, fmt.Errorf("tlsClientKeyPath '%s' does not match the certificate in tlsClientCertPath '%s'", c.TlsClientKeyPath, c.TlsClientCertPath)
 	}
 	cert := &tls.Certificate{PrivateKey: key, Leaf: certs[0]}
@@ -168,6 +174,12 @@ func loadClientCertificate(c Config) (*tls.Certificate, error) {
 		cert.Certificate = append(cert.Certificate, x.Raw)
 	}
 	return cert, nil
+}
+
+func keyMatches(cert *x509.Certificate, key any) bool {
+	signer, ok := key.(crypto.Signer)
+	pub, okPub := cert.PublicKey.(interface{ Equal(crypto.PublicKey) bool })
+	return ok && okPub && pub.Equal(signer.Public())
 }
 
 // loadPEMKey reads PKCS#1, SEC1 EC and PKCS#8 keys, encrypted PKCS#8, and

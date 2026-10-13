@@ -446,3 +446,38 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// Without a host name there is nothing to check the server certificate
+// against: refuse, as Go's default does, instead of skipping the check.
+func TestTLSConfigRefusesEmptyServerName(t *testing.T) {
+	p := newTestPKI(t)
+	c := pemConfig(p)
+	c.BrokerURL = "ssl://:8883"
+	cfg, _ := buildTLSConfig(c)
+	if err, _ := p.handshake(t, cfg); err == nil {
+		t.Fatal("server certificate accepted without a host name to check")
+	}
+}
+
+func TestTLSConfigPKCS12WithoutKey(t *testing.T) {
+	p := newTestPKI(t)
+	bundle, err := pkcs12.Modern.EncodeTrustStore([]*x509.Certificate{p.clientCert}, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := writeFile(t, p.dir, "nokey.p12", bundle)
+	_, err = buildTLSConfig(Config{BrokerURL: "ssl://broker.test:8883", TlsClientCertPath: path, TlsClientKeyFormat: "PKCS12", TlsClientKeyPassword: "secret"})
+	if want := "tlsClientCertPath '" + path + "': PKCS12 bundle contains no private key"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+func TestTLSConfigDirectoryIsNotFound(t *testing.T) {
+	p := newTestPKI(t)
+	c := pemConfig(p)
+	c.TlsCaCertPath = p.dir
+	_, err := buildTLSConfig(c)
+	if want := "tlsCaCertPath '" + p.dir + "': file not found"; err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}

@@ -71,3 +71,10 @@ func TestTLSErrorsIgnoreURLAndClientID(t *testing.T) {
 		t.Errorf("TLS option on tcp:// = %v, want one error", errs)
 	}
 }
+
+// Blank paths count as not set, as in Core.
+func TestBlankTLSPathsAreNotSet(t *testing.T) {
+	if errs := (Config{BrokerURL: "tcp://h:1", TlsCaCertPath: " ", TlsServerName: "  "}).tlsErrors(); len(errs) != 0 {
+		t.Errorf("blank tls* fields on tcp:// = %v, want none", errs)
+	}
+}

@@ -2767,8 +2767,8 @@ func mqttClientConfigInputToMap(in *generated.MqttClientConnectionConfigInput) m
 		m["topicAliasMaximum"] = *in.TopicAliasMaximum
 	}
 	for k, v := range tlsStringInputs(in) {
-		if v != nil && *v != "" {
-			m[k] = *v
+		if v != nil && strings.TrimSpace(*v) != "" {
+			m[k] = strings.TrimSpace(*v)
 		}
 	}
 	m["tlsClientKeyFormat"] = strings.ToUpper(stringPtr(in.TLSClientKeyFormat, "PEM"))
@@ -2807,7 +2807,7 @@ func mergeTLSForUpdate(cfg, prev map[string]any, in *generated.MqttClientConnect
 		delete(cfg, "tlsClientKeyPassword")
 	}
 	// An older dashboard sends the default PEM and no paths: keep a stored PKCS12.
-	if old := asString(prev["tlsClientKeyFormat"]); old != "" && cfg["tlsClientKeyFormat"] == "PEM" &&
+	if old := asString(prev["tlsClientKeyFormat"]); strings.EqualFold(old, "PKCS12") && cfg["tlsClientKeyFormat"] == "PEM" &&
 		in.TLSClientCertPath == nil && in.TLSClientKeyPath == nil {
 		cfg["tlsClientKeyFormat"] = old
 	}

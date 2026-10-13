@@ -37,7 +37,16 @@ func ValidateConfig(c Config) []string {
 	return append(errs, c.tlsErrors()...)
 }
 
+// trimTLS treats blank tls* values as not set, as Core does.
+func (c Config) trimTLS() Config {
+	for _, f := range []*string{&c.TlsCaCertPath, &c.TlsClientCertPath, &c.TlsClientKeyPath, &c.TlsServerName} {
+		*f = strings.TrimSpace(*f)
+	}
+	return c
+}
+
 func (c Config) tlsErrors() []string {
+	c = c.trimTLS()
 	var errs []string
 	if c.hasTLSOptions() && !c.isTLSURL() {
 		errs = append(errs, "TLS options (tls*) require an ssl:// or wss:// brokerUrl")

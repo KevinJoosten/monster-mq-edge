@@ -367,3 +367,27 @@ func TestBridgeInboundSharedSubscription(t *testing.T) {
 		})
 	}
 }
+
+// Over MQTT 5 a retained message forwarded live keeps its retain flag
+// (Retain As Published), so it lands in the retained store at the far end;
+// a plain message does not.
+func TestBridgeChainInboundKeepsRetainFlagLive(t *testing.T) {
+	a, _, c := startChain(t, 27871)
+	obsC := observe(t, c, "data/#")
+	waitBridged(t, a, obsC)
+
+	publishAt(t, a, "pub-a", stores.BrokerMessage{TopicName: "data/cmd/mode", Payload: []byte("auto"), QoS: 1, IsRetain: true})
+	publishAt(t, a, "pub-a", stores.BrokerMessage{TopicName: "data/cmd/pulse", Payload: []byte("1"), QoS: 1})
+	obsC.waitFor(t, "data/cmd/pulse", 1, 500*time.Millisecond)
+
+	count := func(topic string) (n int) {
+		_ = c.Storage().Retained.FindMatchingMessages(context.Background(), topic, func(stores.BrokerMessage) bool { n++; return true })
+		return n
+	}
+	if n := count("data/cmd/mode"); n != 1 {
+		t.Errorf("C holds %d retained messages for the retained topic, want 1 (retain flag lost on the way)", n)
+	}
+	if n := count("data/cmd/pulse"); n != 0 {
+		t.Errorf("C holds %d retained messages for a plain topic, want 0", n)
+	}
+}

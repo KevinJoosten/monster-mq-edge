@@ -164,8 +164,9 @@ func TestBridgeChainOverMQTT311DoesNotLoop(t *testing.T) {
 	if after := counts(); after != before {
 		t.Fatalf("copies (A, B, C) still growing: %v, then %v", before, after)
 	}
-	// B: from C + echo from A; C: original + echo from B + A's echo via B
-	if before[1] > 2 || before[2] > 3 {
-		t.Errorf("copies (A, B, C) = %v, want at most (1, 2, 3)", before)
+	// B: from C + echo from A; C: original + echo from B + A's echo via B.
+	// Each bridge stops its own echo there, so the counts are exact.
+	if before != [3]int{1, 2, 3} {
+		t.Errorf("copies (A, B, C) = %v, want (1, 2, 3)", before)
 	}
 }

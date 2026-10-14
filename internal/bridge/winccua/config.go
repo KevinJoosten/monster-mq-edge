@@ -22,11 +22,15 @@ import (
 const (
 	AddressTypeTagValues    = "TAG_VALUES"
 	AddressTypeActiveAlarms = "ACTIVE_ALARMS"
+	AddressTypeTagWrite     = "TAG_WRITE"
 
 	FormatJSONISO  = "JSON_ISO"
 	FormatJSONMS   = "JSON_MS"
 	FormatRawValue = "RAW_VALUE"
 	FormatRawJSON  = "RAW_JSON"
+
+	TimestampFormatISO = "ISO"
+	TimestampFormatMS  = "MS"
 
 	ModeGraphQL  = "GRAPHQL"
 	ModeOpenPipe = "OPENPIPE"
@@ -42,15 +46,19 @@ const (
 
 // Address mirrors WinCCUaAddress (stores/devices/WinCCUaConfig.kt).
 type Address struct {
-	Type           string   `json:"type"`
-	Topic          string   `json:"topic"`
-	Description    string   `json:"description,omitempty"`
-	Retained       bool     `json:"retained,omitempty"`
-	NameFilters    []string `json:"nameFilters,omitempty"`
-	IncludeQuality bool     `json:"includeQuality,omitempty"`
-	SystemNames    []string `json:"systemNames,omitempty"`
-	FilterString   string   `json:"filterString,omitempty"`
-	PipeTagMode    string   `json:"pipeTagMode,omitempty"`
+	Type              string   `json:"type"`
+	Topic             string   `json:"topic"`
+	Description       string   `json:"description,omitempty"`
+	Retained          bool     `json:"retained,omitempty"`
+	NameFilters       []string `json:"nameFilters,omitempty"`
+	IncludeQuality    bool     `json:"includeQuality,omitempty"`
+	SystemNames       []string `json:"systemNames,omitempty"`
+	FilterString      string   `json:"filterString,omitempty"`
+	PipeTagMode       string   `json:"pipeTagMode,omitempty"`
+	TagName           string   `json:"tagName,omitempty"`
+	JsonPath          string   `json:"jsonPath,omitempty"`
+	TimestampJsonPath string   `json:"timestampJsonPath,omitempty"`
+	TimestampFormat   string   `json:"timestampFormat,omitempty"`
 }
 
 func (a Address) Validate() []string {
@@ -65,6 +73,21 @@ func (a Address) Validate() []string {
 		}
 	case AddressTypeActiveAlarms:
 		// systemNames and filterString optional
+	case AddressTypeTagWrite:
+		if strings.ContainsAny(a.Topic, "+#") {
+			errs = append(errs, "topic cannot contain MQTT wildcards (+ or #) for TAG_WRITE address type")
+		}
+		if strings.TrimSpace(a.TagName) == "" {
+			errs = append(errs, "tagName is required for TAG_WRITE address type")
+		} else if strings.ContainsAny(a.TagName, "*?") {
+			errs = append(errs, "tagName cannot contain wildcards (* or ?) for TAG_WRITE address type")
+		}
+		if strings.TrimSpace(a.TimestampJsonPath) != "" && strings.TrimSpace(a.JsonPath) == "" {
+			errs = append(errs, "timestampJsonPath requires jsonPath to be set")
+		}
+		if a.TimestampFormat != "" && a.TimestampFormat != TimestampFormatISO && a.TimestampFormat != TimestampFormatMS {
+			errs = append(errs, fmt.Sprintf("timestampFormat must be one of: %s, %s", TimestampFormatISO, TimestampFormatMS))
+		}
 	default:
 		errs = append(errs, fmt.Sprintf("unknown address type %q", a.Type))
 	}
@@ -163,6 +186,9 @@ func (c *ConnectionConfig) applyDefaults() {
 	for i := range c.Addresses {
 		if c.Addresses[i].PipeTagMode == "" && c.Addresses[i].Type == AddressTypeTagValues {
 			c.Addresses[i].PipeTagMode = PipeTagModeSingle
+		}
+		if c.Addresses[i].TimestampFormat == "" && c.Addresses[i].Type == AddressTypeTagWrite && c.Addresses[i].TimestampJsonPath != "" {
+			c.Addresses[i].TimestampFormat = TimestampFormatISO
 		}
 	}
 }

@@ -593,6 +593,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var winCCUa *winccua.Manager
 	if cfg.Features.WinCCUa {
 		winCCUa = winccua.NewManager(storage.DeviceConfig, publishFn, cfg.NodeID, logger)
+		winCCUa.SetSubscriber(&winccua.BusAdapter{Bus: bus})
 	}
 
 	// UNS Modeler devices (WinCC OA native; only inside WCCOAmmq).

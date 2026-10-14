@@ -2390,6 +2390,7 @@ extend type Mutation {
 enum WinCCUaAddressType {
     TAG_VALUES
     ACTIVE_ALARMS
+    TAG_WRITE
 }
 
 enum WinCCUaMessageFormat {
@@ -2414,6 +2415,10 @@ type WinCCUaAddress {
     systemNames: [String!]
     filterString: String
     pipeTagMode: String
+    tagName: String
+    jsonPath: String
+    timestampJsonPath: String
+    timestampFormat: String
 }
 
 type WinCCUaTransformConfig {
@@ -2492,6 +2497,10 @@ input WinCCUaAddressInput {
     systemNames: [String!]
     filterString: String
     pipeTagMode: String = "SINGLE"
+    tagName: String
+    jsonPath: String
+    timestampJsonPath: String
+    timestampFormat: String
 }
 
 input WinCCUaClientInput {
@@ -4672,6 +4681,14 @@ func (ec *executionContext) childFields_WinCCUaAddress(ctx context.Context, fiel
 		return ec.fieldContext_WinCCUaAddress_filterString(ctx, field)
 	case "pipeTagMode":
 		return ec.fieldContext_WinCCUaAddress_pipeTagMode(ctx, field)
+	case "tagName":
+		return ec.fieldContext_WinCCUaAddress_tagName(ctx, field)
+	case "jsonPath":
+		return ec.fieldContext_WinCCUaAddress_jsonPath(ctx, field)
+	case "timestampJsonPath":
+		return ec.fieldContext_WinCCUaAddress_timestampJsonPath(ctx, field)
+	case "timestampFormat":
+		return ec.fieldContext_WinCCUaAddress_timestampFormat(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WinCCUaAddress", field.Name)
 }
@@ -30731,6 +30748,98 @@ func (ec *executionContext) fieldContext_WinCCUaAddress_pipeTagMode(_ context.Co
 	return graphql.NewScalarFieldContext("WinCCUaAddress", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _WinCCUaAddress_tagName(ctx context.Context, field graphql.CollectedField, obj *WinCCUaAddress) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCUaAddress_tagName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TagName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCUaAddress_tagName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCUaAddress", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCUaAddress_jsonPath(ctx context.Context, field graphql.CollectedField, obj *WinCCUaAddress) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCUaAddress_jsonPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.JSONPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCUaAddress_jsonPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCUaAddress", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCUaAddress_timestampJsonPath(ctx context.Context, field graphql.CollectedField, obj *WinCCUaAddress) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCUaAddress_timestampJsonPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TimestampJSONPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCUaAddress_timestampJsonPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCUaAddress", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCUaAddress_timestampFormat(ctx context.Context, field graphql.CollectedField, obj *WinCCUaAddress) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCUaAddress_timestampFormat(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TimestampFormat, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCUaAddress_timestampFormat(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCUaAddress", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _WinCCUaClient_name(ctx context.Context, field graphql.CollectedField, obj *WinCCUaClient) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -35751,7 +35860,7 @@ func (ec *executionContext) unmarshalInputWinCCUaAddressInput(ctx context.Contex
 		asMap["pipeTagMode"] = "SINGLE"
 	}
 
-	fieldsInOrder := [...]string{"type", "topic", "description", "retained", "nameFilters", "includeQuality", "systemNames", "filterString", "pipeTagMode"}
+	fieldsInOrder := [...]string{"type", "topic", "description", "retained", "nameFilters", "includeQuality", "systemNames", "filterString", "pipeTagMode", "tagName", "jsonPath", "timestampJsonPath", "timestampFormat"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -35821,6 +35930,34 @@ func (ec *executionContext) unmarshalInputWinCCUaAddressInput(ctx context.Contex
 				return it, err
 			}
 			it.PipeTagMode = data
+		case "tagName":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tagName"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TagName = data
+		case "jsonPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("jsonPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.JSONPath = data
+		case "timestampJsonPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("timestampJsonPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TimestampJSONPath = data
+		case "timestampFormat":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("timestampFormat"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TimestampFormat = data
 		}
 	}
 	return it, nil
@@ -48062,6 +48199,26 @@ func (ec *executionContext) _WinCCUaAddress(ctx context.Context, sel ast.Selecti
 			}
 		case "pipeTagMode":
 			out.Values[i] = ec._WinCCUaAddress_pipeTagMode(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tagName":
+			out.Values[i] = ec._WinCCUaAddress_tagName(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "jsonPath":
+			out.Values[i] = ec._WinCCUaAddress_jsonPath(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "timestampJsonPath":
+			out.Values[i] = ec._WinCCUaAddress_timestampJsonPath(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "timestampFormat":
+			out.Values[i] = ec._WinCCUaAddress_timestampFormat(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}

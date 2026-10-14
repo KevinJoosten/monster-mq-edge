@@ -1498,27 +1498,35 @@ type WinCCOaTypeStructure struct {
 }
 
 type WinCCUaAddress struct {
-	Type           WinCCUaAddressType `json:"type"`
-	Topic          string             `json:"topic"`
-	Description    *string            `json:"description,omitempty"`
-	Retained       bool               `json:"retained"`
-	NameFilters    []string           `json:"nameFilters,omitempty"`
-	IncludeQuality *bool              `json:"includeQuality,omitempty"`
-	SystemNames    []string           `json:"systemNames,omitempty"`
-	FilterString   *string            `json:"filterString,omitempty"`
-	PipeTagMode    *string            `json:"pipeTagMode,omitempty"`
+	Type              WinCCUaAddressType `json:"type"`
+	Topic             string             `json:"topic"`
+	Description       *string            `json:"description,omitempty"`
+	Retained          bool               `json:"retained"`
+	NameFilters       []string           `json:"nameFilters,omitempty"`
+	IncludeQuality    *bool              `json:"includeQuality,omitempty"`
+	SystemNames       []string           `json:"systemNames,omitempty"`
+	FilterString      *string            `json:"filterString,omitempty"`
+	PipeTagMode       *string            `json:"pipeTagMode,omitempty"`
+	TagName           *string            `json:"tagName,omitempty"`
+	JSONPath          *string            `json:"jsonPath,omitempty"`
+	TimestampJSONPath *string            `json:"timestampJsonPath,omitempty"`
+	TimestampFormat   *string            `json:"timestampFormat,omitempty"`
 }
 
 type WinCCUaAddressInput struct {
-	Type           WinCCUaAddressType `json:"type"`
-	Topic          string             `json:"topic"`
-	Description    *string            `json:"description,omitempty"`
-	Retained       *bool              `json:"retained,omitempty"`
-	NameFilters    []string           `json:"nameFilters,omitempty"`
-	IncludeQuality *bool              `json:"includeQuality,omitempty"`
-	SystemNames    []string           `json:"systemNames,omitempty"`
-	FilterString   *string            `json:"filterString,omitempty"`
-	PipeTagMode    *string            `json:"pipeTagMode,omitempty"`
+	Type              WinCCUaAddressType `json:"type"`
+	Topic             string             `json:"topic"`
+	Description       *string            `json:"description,omitempty"`
+	Retained          *bool              `json:"retained,omitempty"`
+	NameFilters       []string           `json:"nameFilters,omitempty"`
+	IncludeQuality    *bool              `json:"includeQuality,omitempty"`
+	SystemNames       []string           `json:"systemNames,omitempty"`
+	FilterString      *string            `json:"filterString,omitempty"`
+	PipeTagMode       *string            `json:"pipeTagMode,omitempty"`
+	TagName           *string            `json:"tagName,omitempty"`
+	JSONPath          *string            `json:"jsonPath,omitempty"`
+	TimestampJSONPath *string            `json:"timestampJsonPath,omitempty"`
+	TimestampFormat   *string            `json:"timestampFormat,omitempty"`
 }
 
 type WinCCUaClient struct {
@@ -2655,16 +2663,18 @@ type WinCCUaAddressType string
 const (
 	WinCCUaAddressTypeTagValues    WinCCUaAddressType = "TAG_VALUES"
 	WinCCUaAddressTypeActiveAlarms WinCCUaAddressType = "ACTIVE_ALARMS"
+	WinCCUaAddressTypeTagWrite     WinCCUaAddressType = "TAG_WRITE"
 )
 
 var AllWinCCUaAddressType = []WinCCUaAddressType{
 	WinCCUaAddressTypeTagValues,
 	WinCCUaAddressTypeActiveAlarms,
+	WinCCUaAddressTypeTagWrite,
 }
 
 func (e WinCCUaAddressType) IsValid() bool {
 	switch e {
-	case WinCCUaAddressTypeTagValues, WinCCUaAddressTypeActiveAlarms:
+	case WinCCUaAddressTypeTagValues, WinCCUaAddressTypeActiveAlarms, WinCCUaAddressTypeTagWrite:
 		return true
 	}
 	return false

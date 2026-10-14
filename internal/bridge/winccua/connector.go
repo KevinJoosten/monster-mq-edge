@@ -41,12 +41,12 @@ func (m *metrics) sampleRate() float64 {
 }
 
 // New constructs the right Connector for the configured DataAccessMode.
-func New(deviceName string, cfg *ConnectionConfig, namespace string, publish LocalPublisher, logger *slog.Logger) Connector {
+func New(deviceName string, cfg *ConnectionConfig, namespace string, publish LocalPublisher, subBus LocalSubscriber, logger *slog.Logger) Connector {
 	pub := newPublisher(namespace, cfg.TransformConfig, cfg.MessageFormat)
 	if cfg.DataAccessMode == ModeOpenPipe {
-		return newPipeConnector(deviceName, cfg, pub, publish, logger)
+		return newPipeConnector(deviceName, cfg, pub, publish, subBus, logger)
 	}
-	return newGraphQLConnector(deviceName, cfg, pub, publish, logger)
+	return newGraphQLConnector(deviceName, cfg, pub, publish, subBus, logger)
 }
 
 // nowNanos returns the wall-clock time in nanoseconds. Extracted so tests can

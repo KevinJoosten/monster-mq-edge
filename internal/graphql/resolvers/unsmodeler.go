@@ -67,7 +67,6 @@ func (r *Resolver) unsDevice(d stores.DeviceConfig) *generated.UnsModelerDevice 
 	}
 	cfg := &generated.UnsModelerConfig{
 		Direction:     unsDirection(s.Direction),
-		AiProvider:    optString(s.AiProvider),
 		ApprovalMode:  generated.UnsModelerApprovalMode(strings.ToUpper(s.ApprovalMode)),
 		SystemPrompt:  optString(s.SystemPrompt),
 		AiMaxSteps:    s.AiMaxSteps,
@@ -207,9 +206,6 @@ func unsSettings(in *generated.UnsModelerConfigInput, current *unsmodeler.Settin
 		*s = *current
 	}
 	s.Direction = unsDirectionString(in.Direction)
-	if in.AiProvider != nil {
-		s.AiProvider = *in.AiProvider
-	}
 	if in.ApprovalMode != nil {
 		s.ApprovalMode = strings.ToLower(string(*in.ApprovalMode))
 	}
@@ -480,6 +476,7 @@ func (r *unsModelerMutationsResolver) StartAiRun(ctx context.Context, _ *generat
 		if input.MaxTopics != nil {
 			ti.MaxTopics = *input.MaxTopics
 		}
+		ti.Topics = unsTopicData(input.TopicData)
 		req.TopicInput = ti
 	}
 	st, err := r.UnsMgr.StartAiRun(ctx, name, req)
@@ -539,13 +536,13 @@ func (r *unsModelerMutationsResolver) CreateInWinCCOa(ctx context.Context, _ *ge
 	return res, nil
 }
 
-func (r *unsModelerMutationsResolver) ImportProposal(ctx context.Context, _ *generated.UnsModelerMutations, name string, document string, topicMode *string, archiveGroup *string, topicFilters []string) (*generated.UnsModelerMappingResult, error) {
+func (r *unsModelerMutationsResolver) ImportProposal(ctx context.Context, _ *generated.UnsModelerMutations, name string, document string, topicMode *string, archiveGroup *string, topicFilters []string, topicData []*generated.TopicDataInput) (*generated.UnsModelerMappingResult, error) {
 	res := &generated.UnsModelerMappingResult{Errors: []string{}, Issues: []*generated.UnsModelerIssue{}}
 	if r.UnsMgr == nil {
 		res.Errors = append(res.Errors, errUnsNotEmbedded.Error())
 		return res, nil
 	}
-	in := unsmodeler.TopicInput{Mode: strings.ToLower(derefStr(topicMode)), ArchiveGroup: derefStr(archiveGroup), Filters: topicFilters}
+	in := unsmodeler.TopicInput{Mode: strings.ToLower(derefStr(topicMode)), ArchiveGroup: derefStr(archiveGroup), Filters: topicFilters, Topics: unsTopicData(topicData)}
 	if in.Mode == "" {
 		in.Mode = "live"
 	}
@@ -561,4 +558,19 @@ func (r *unsModelerMutationsResolver) ImportProposal(ctx context.Context, _ *gen
 	}
 	res.Success = true
 	return res, nil
+}
+
+
+// unsTopicData converts the topics and values the dashboard collected live.
+func unsTopicData(in []*generated.TopicDataInput) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for _, t := range in {
+		if t != nil && t.Topic != "" {
+			out[t.Topic] = derefStr(t.Value)
+		}
+	}
+	return out
 }

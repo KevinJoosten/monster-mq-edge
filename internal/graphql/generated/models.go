@@ -1035,6 +1035,8 @@ type UnsModelerAiRunInput struct {
 	ArchiveGroup *string  `json:"archiveGroup,omitempty"`
 	TopicFilters []string `json:"topicFilters,omitempty"`
 	MaxTopics    *int     `json:"maxTopics,omitempty"`
+	// Direction B: topics and values the dashboard collected via topicUpdates (LIVE); used in addition to retained messages.
+	TopicData []*TopicDataInput `json:"topicData,omitempty"`
 }
 
 type UnsModelerAiRunResult struct {
@@ -1044,9 +1046,7 @@ type UnsModelerAiRunResult struct {
 }
 
 type UnsModelerConfig struct {
-	Direction UnsModelerDirection `json:"direction"`
-	// GenAI provider name; empty: manual modelling (A) or JSON import (B) only.
-	AiProvider   *string                `json:"aiProvider,omitempty"`
+	Direction    UnsModelerDirection    `json:"direction"`
 	ApprovalMode UnsModelerApprovalMode `json:"approvalMode"`
 	// Editable prompt of the device's direction; empty uses the built-in prompt.
 	SystemPrompt  *string              `json:"systemPrompt,omitempty"`
@@ -1071,7 +1071,6 @@ type UnsModelerConfig struct {
 type UnsModelerConfigInput struct {
 	// Fixed at creation; an update with a different direction is rejected.
 	Direction       UnsModelerDirection     `json:"direction"`
-	AiProvider      *string                 `json:"aiProvider,omitempty"`
 	ApprovalMode    *UnsModelerApprovalMode `json:"approvalMode,omitempty"`
 	SystemPrompt    *string                 `json:"systemPrompt,omitempty"`
 	AiMaxSteps      *int                    `json:"aiMaxSteps,omitempty"`

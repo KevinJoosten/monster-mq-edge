@@ -603,8 +603,8 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		if storage.DeviceConfig != nil {
 			unsMgr = unsmodeler.NewManager(storage.DeviceConfig, browse, publishFn, unsmodeler.AlwaysActive{},
 				unsmodeler.TopicRoots{Native: names.Root}, cfg.NodeID, logger)
-			unsMgr.SetProviders(func(ctx context.Context, name string) (genai.Provider, error) {
-				return genai.ProviderByName(ctx, cfg.GenAI, storage.DeviceConfig, name)
+			unsMgr.SetProviders(func(ctx context.Context) (genai.Provider, error) {
+				return genai.CreateAssistantProvider(ctx, cfg.GenAI)
 			})
 			unsMgr.SetTopicSource(&unsTopicSource{cfg: cfg, server: server, storage: storage, archives: archives, bus: bus, sample: 2 * time.Second})
 			unsMgr.SetSubscriber(unsSubscriber{bus: bus})

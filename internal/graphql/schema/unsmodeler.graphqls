@@ -28,8 +28,6 @@ enum UnsModelerSeverity {
 
 type UnsModelerConfig {
     direction: UnsModelerDirection!
-    "GenAI provider name; empty: manual modelling (A) or JSON import (B) only."
-    aiProvider: String
     approvalMode: UnsModelerApprovalMode!
     "Editable prompt of the device's direction; empty uses the built-in prompt."
     systemPrompt: String
@@ -172,7 +170,6 @@ extend type Query {
 input UnsModelerConfigInput {
     "Fixed at creation; an update with a different direction is rejected."
     direction: UnsModelerDirection!
-    aiProvider: String
     approvalMode: UnsModelerApprovalMode
     systemPrompt: String
     aiMaxSteps: Int
@@ -236,6 +233,8 @@ input UnsModelerAiRunInput {
     archiveGroup: String
     topicFilters: [String!]
     maxTopics: Int
+    "Direction B: topics and values the dashboard collected via topicUpdates (LIVE); used in addition to retained messages."
+    topicData: [TopicDataInput!]
 }
 
 type UnsModelerAiRunResult {
@@ -256,7 +255,7 @@ type UnsModelerMutations {
     "Direction B: validates the draft and creates its types and datapoints in WinCC OA; then the value flow starts."
     createInWinCCOa(name: String!): UnsModelerCreateResult!
     "Direction B: imports a hand-written proposal; source is stamped from the topic selection, then it is validated like an AI answer and stored as the draft."
-    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!): UnsModelerMappingResult!
+    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!, topicData: [TopicDataInput!]): UnsModelerMappingResult!
     "Starts an AI run that proposes a full mapping document (stored as the draft)."
     startAiRun(name: String!, input: UnsModelerAiRunInput!): UnsModelerAiRunResult!
 }

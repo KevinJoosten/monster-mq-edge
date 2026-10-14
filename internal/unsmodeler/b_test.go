@@ -349,7 +349,7 @@ func TestAiRunAutoCreateB(t *testing.T) {
 	m.SetSubscriber(&fakeSub{})
 	t.Cleanup(m.Stop)
 	s := settingsB()
-	s.AiProvider, s.ApprovalMode = "fake", ApprovalAuto
+	s.ApprovalMode = ApprovalAuto
 	ctx := context.Background()
 	_ = devs.Save(ctx, stores.DeviceConfig{Name: "b", Type: DeviceType, Enabled: true, NodeID: "n1", Config: s.Encode()})
 	if err := m.Start(ctx); err != nil {
@@ -358,7 +358,7 @@ func TestAiRunAutoCreateB(t *testing.T) {
 	answer := `{"schemaVersion":1,"direction":"mqtt_to_winccoa","types":[{"name":"UNS_Auto","elements":[{"path":"v","elementType":"float"}]}],
 		"datapoints":[{"name":"UNS_A1","type":"UNS_Auto","bindings":[{"element":"v","topic":"plant/x"}]}]}`
 	f := &fakeAI{t: t, script: []scriptStep{{tool: "validate", args: map[string]any{"proposalJson": answer}}, {final: answer}}}
-	m.SetProviders(func(context.Context, string) (genai.Provider, error) { return f, nil })
+	m.SetProviders(func(context.Context) (genai.Provider, error) { return f, nil })
 	in := &TopicInput{Mode: "live", Filters: []string{"plant/#"}, Topics: map[string]string{"plant/x": "1.5"}}
 	if _, err := m.StartAiRun(ctx, "b", AiRunRequest{TopicInput: in}); err != nil {
 		t.Fatal(err)

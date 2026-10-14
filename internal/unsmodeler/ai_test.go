@@ -81,14 +81,13 @@ func aiSetup(t *testing.T, gate RoleGate, mode string, script []scriptStep) (*Ma
 	t.Helper()
 	m, devs, docs, _ := newTestManager(t, gate)
 	s := settingsA("u")
-	s.AiProvider = "fake"
 	s.ApprovalMode = mode
 	_ = devs.Save(context.Background(), stores.DeviceConfig{Name: "d", Type: DeviceType, Enabled: true, NodeID: "n1", Config: s.Encode()})
 	if err := m.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	f := &fakeAI{t: t, script: script}
-	m.SetProviders(func(context.Context, string) (genai.Provider, error) { return f, nil })
+	m.SetProviders(func(context.Context) (genai.Provider, error) { return f, nil })
 	return m, f, docs
 }
 

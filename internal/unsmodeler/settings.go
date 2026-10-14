@@ -31,7 +31,6 @@ const (
 // DeviceConfig.Config. The mapping documents are stored separately.
 type Settings struct {
 	Direction     string `json:"direction"`
-	AiProvider    string `json:"aiProvider,omitempty"`
 	ApprovalMode  string `json:"approvalMode,omitempty"`
 	SystemPrompt  string `json:"systemPrompt,omitempty"`
 	AiMaxSteps    int    `json:"aiMaxSteps,omitempty"`

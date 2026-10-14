@@ -249,7 +249,7 @@ type UnsModelerMutationsResolver interface {
 	SaveDraft(ctx context.Context, obj *UnsModelerMutations, name string, document string) (*UnsModelerMappingResult, error)
 	Apply(ctx context.Context, obj *UnsModelerMutations, name string) (*UnsModelerMappingResult, error)
 	CreateInWinCCOa(ctx context.Context, obj *UnsModelerMutations, name string) (*UnsModelerCreateResult, error)
-	ImportProposal(ctx context.Context, obj *UnsModelerMutations, name string, document string, topicMode *string, archiveGroup *string, topicFilters []string) (*UnsModelerMappingResult, error)
+	ImportProposal(ctx context.Context, obj *UnsModelerMutations, name string, document string, topicMode *string, archiveGroup *string, topicFilters []string, topicData []*TopicDataInput) (*UnsModelerMappingResult, error)
 	StartAiRun(ctx context.Context, obj *UnsModelerMutations, name string, input UnsModelerAiRunInput) (*UnsModelerAiRunResult, error)
 }
 type UserInfoResolver interface {
@@ -1924,8 +1924,6 @@ enum UnsModelerSeverity {
 
 type UnsModelerConfig {
     direction: UnsModelerDirection!
-    "GenAI provider name; empty: manual modelling (A) or JSON import (B) only."
-    aiProvider: String
     approvalMode: UnsModelerApprovalMode!
     "Editable prompt of the device's direction; empty uses the built-in prompt."
     systemPrompt: String
@@ -2068,7 +2066,6 @@ extend type Query {
 input UnsModelerConfigInput {
     "Fixed at creation; an update with a different direction is rejected."
     direction: UnsModelerDirection!
-    aiProvider: String
     approvalMode: UnsModelerApprovalMode
     systemPrompt: String
     aiMaxSteps: Int
@@ -2132,6 +2129,8 @@ input UnsModelerAiRunInput {
     archiveGroup: String
     topicFilters: [String!]
     maxTopics: Int
+    "Direction B: topics and values the dashboard collected via topicUpdates (LIVE); used in addition to retained messages."
+    topicData: [TopicDataInput!]
 }
 
 type UnsModelerAiRunResult {
@@ -2152,7 +2151,7 @@ type UnsModelerMutations {
     "Direction B: validates the draft and creates its types and datapoints in WinCC OA; then the value flow starts."
     createInWinCCOa(name: String!): UnsModelerCreateResult!
     "Direction B: imports a hand-written proposal; source is stamped from the topic selection, then it is validated like an AI answer and stored as the draft."
-    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!): UnsModelerMappingResult!
+    importProposal(name: String!, document: String!, topicMode: String, archiveGroup: String, topicFilters: [String!]!, topicData: [TopicDataInput!]): UnsModelerMappingResult!
     "Starts an AI run that proposes a full mapping document (stored as the draft)."
     startAiRun(name: String!, input: UnsModelerAiRunInput!): UnsModelerAiRunResult!
 }
@@ -4088,8 +4087,6 @@ func (ec *executionContext) childFields_UnsModelerConfig(ctx context.Context, fi
 	switch field.Name {
 	case "direction":
 		return ec.fieldContext_UnsModelerConfig_direction(ctx, field)
-	case "aiProvider":
-		return ec.fieldContext_UnsModelerConfig_aiProvider(ctx, field)
 	case "approvalMode":
 		return ec.fieldContext_UnsModelerConfig_approvalMode(ctx, field)
 	case "systemPrompt":
@@ -7351,6 +7348,14 @@ func (ec *executionContext) field_UnsModelerMutations_importProposal_args(ctx co
 		return nil, err
 	}
 	args["topicFilters"] = arg4
+	arg5, err := graphql.ProcessArgField(ctx, rawArgs, "topicData",
+		func(ctx context.Context, v any) ([]*TopicDataInput, error) {
+			return ec.unmarshalOTopicDataInput2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐTopicDataInputᚄ(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["topicData"] = arg5
 	return args, nil
 }
 
@@ -25224,29 +25229,6 @@ func (ec *executionContext) fieldContext_UnsModelerConfig_direction(_ context.Co
 	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type UnsModelerDirection does not have child fields"))
 }
 
-func (ec *executionContext) _UnsModelerConfig_aiProvider(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
-	return graphql.ResolveField(
-		ctx,
-		ec.OperationContext,
-		field,
-		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return ec.fieldContext_UnsModelerConfig_aiProvider(ctx, field)
-		},
-		func(ctx context.Context) (any, error) {
-			return obj.AiProvider, nil
-		},
-		nil,
-		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
-			return ec.marshalOString2ᚖstring(ctx, selections, v)
-		},
-		true,
-		false,
-	)
-}
-func (ec *executionContext) fieldContext_UnsModelerConfig_aiProvider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
-	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
-}
-
 func (ec *executionContext) _UnsModelerConfig_approvalMode(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -26626,7 +26608,7 @@ func (ec *executionContext) _UnsModelerMutations_importProposal(ctx context.Cont
 		},
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.UnsModelerMutations().ImportProposal(ctx, obj, fc.Args["name"].(string), fc.Args["document"].(string), fc.Args["topicMode"].(*string), fc.Args["archiveGroup"].(*string), fc.Args["topicFilters"].([]string))
+			return ec.Resolvers.UnsModelerMutations().ImportProposal(ctx, obj, fc.Args["name"].(string), fc.Args["document"].(string), fc.Args["topicMode"].(*string), fc.Args["archiveGroup"].(*string), fc.Args["topicFilters"].([]string), fc.Args["topicData"].([]*TopicDataInput))
 		},
 		nil,
 		func(ctx context.Context, selections ast.SelectionSet, v *UnsModelerMappingResult) graphql.Marshaler {
@@ -34735,7 +34717,7 @@ func (ec *executionContext) unmarshalInputUnsModelerAiRunInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"prompt", "documentBase64", "documentName", "selection", "allowBeyondSelection", "topicMode", "archiveGroup", "topicFilters", "maxTopics"}
+	fieldsInOrder := [...]string{"prompt", "documentBase64", "documentName", "selection", "allowBeyondSelection", "topicMode", "archiveGroup", "topicFilters", "maxTopics", "topicData"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -34805,6 +34787,13 @@ func (ec *executionContext) unmarshalInputUnsModelerAiRunInput(ctx context.Conte
 				return it, err
 			}
 			it.MaxTopics = data
+		case "topicData":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicData"))
+			data, err := ec.unmarshalOTopicDataInput2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐTopicDataInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicData = data
 		}
 	}
 	return it, nil
@@ -34821,7 +34810,7 @@ func (ec *executionContext) unmarshalInputUnsModelerConfigInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"direction", "aiProvider", "approvalMode", "systemPrompt", "aiMaxSteps", "aiTimeoutSec", "aiTokenBudget", "redundancy", "unsRoot", "allowWrite", "topicDefaults", "payloadDefaults", "oaPrefix", "flowEnabled"}
+	fieldsInOrder := [...]string{"direction", "approvalMode", "systemPrompt", "aiMaxSteps", "aiTimeoutSec", "aiTokenBudget", "redundancy", "unsRoot", "allowWrite", "topicDefaults", "payloadDefaults", "oaPrefix", "flowEnabled"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -34835,13 +34824,6 @@ func (ec *executionContext) unmarshalInputUnsModelerConfigInput(ctx context.Cont
 				return it, err
 			}
 			it.Direction = data
-		case "aiProvider":
-			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("aiProvider"))
-			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
-			if err != nil {
-				return it, err
-			}
-			it.AiProvider = data
 		case "approvalMode":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("approvalMode"))
 			data, err := ec.unmarshalOUnsModelerApprovalMode2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐUnsModelerApprovalMode(ctx, v)
@@ -44710,11 +44692,6 @@ func (ec *executionContext) _UnsModelerConfig(ctx context.Context, sel ast.Selec
 		case "direction":
 			out.Values[i] = ec._UnsModelerConfig_direction(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
-		case "aiProvider":
-			out.Values[i] = ec._UnsModelerConfig_aiProvider(ctx, field, obj)
-			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
 		case "approvalMode":

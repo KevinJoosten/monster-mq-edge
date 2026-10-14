@@ -499,7 +499,7 @@ func unknownPropertyHint(def *schemaNode, key string) string {
 		name = def.def
 	}
 	switch key {
-	case "unsRoot", "topicDefaults", "payloadDefaults", "oaPrefix", "allowWrite", "approvalMode", "aiProvider", "redundancy", "enabled":
+	case "unsRoot", "topicDefaults", "payloadDefaults", "oaPrefix", "allowWrite", "approvalMode", "redundancy", "enabled":
 		if name == "" {
 			return key + " is a device setting, not part of the mapping document"
 		}

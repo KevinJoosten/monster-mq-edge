@@ -26,8 +26,9 @@ const (
 	maxRunEvents       = 300
 )
 
-// ProviderLookup creates the GenAI provider of a device by name.
-type ProviderLookup func(ctx context.Context, name string) (genai.Provider, error)
+// ProviderLookup creates the GenAI provider of AI runs: the configured
+// GenAI assistant provider. A nil provider means GenAI is disabled.
+type ProviderLookup func(ctx context.Context) (genai.Provider, error)
 
 // DefaultSystemPromptA is the built-in prompt of Direction A.
 const DefaultSystemPromptA = `You are a Unified Namespace (UNS) architect for a WinCC OA SCADA system.
@@ -149,9 +150,6 @@ func (m *Manager) StartAiRun(ctx context.Context, name string, req AiRunRequest)
 	if m.browse == nil {
 		return nil, ErrNotEmbedded
 	}
-	if s.AiProvider == "" {
-		return nil, errors.New("the device has no AI provider")
-	}
 	if m.providers == nil {
 		return nil, errors.New("GenAI is not available")
 	}
@@ -176,7 +174,7 @@ func (m *Manager) StartAiRun(ctx context.Context, name string, req AiRunRequest)
 		m.runs.mu.Unlock()
 		return nil, ErrRunActive
 	}
-	st := &AiRunStatus{ID: NewNodeID(), Device: name, Status: "running", Provider: s.AiProvider, Started: time.Now().UTC(), Events: []AiEvent{}}
+	st := &AiRunStatus{ID: NewNodeID(), Device: name, Status: "running", Started: time.Now().UTC(), Events: []AiEvent{}}
 	m.runs.last[name] = st
 	m.runs.mu.Unlock()
 	go m.runAI(name, s, req, st, draftRaw)
@@ -218,19 +216,22 @@ func (m *Manager) runAI(name string, s *Settings, req AiRunRequest, st *AiRunSta
 	ctx, cancel := genai.WithTimeout(context.Background(), s.AiTimeoutSec)
 	defer cancel()
 	l := m.runLog(st)
-	prov, err := m.providers(ctx, s.AiProvider)
+	prov, err := m.providers(ctx)
+	if err == nil && prov == nil {
+		err = errors.New("GenAI is disabled")
+	}
 	if err != nil {
-		m.finishRun(st, fmt.Errorf("AI provider %s: %w", s.AiProvider, err), nil, false)
+		m.finishRun(st, fmt.Errorf("AI provider: %w", err), nil, false)
 		return
 	}
 	defer prov.Close()
 	tc, ok := prov.(genai.ToolCaller)
 	if !ok {
-		m.finishRun(st, fmt.Errorf("AI provider %s: %w", s.AiProvider, genai.ErrNoToolSupport), nil, false)
+		m.finishRun(st, fmt.Errorf("AI provider %s: %w", prov.ProviderName(), genai.ErrNoToolSupport), nil, false)
 		return
 	}
-	m.runs.update(st, func(x *AiRunStatus) { x.Model = prov.ModelName() })
-	run := AiRun{Provider: s.AiProvider, Model: prov.ModelName()}
+	m.runs.update(st, func(x *AiRunStatus) { x.Provider, x.Model = prov.ProviderName(), prov.ModelName() })
+	run := AiRun{Provider: prov.ProviderName(), Model: prov.ModelName()}
 	if run.Model == "" {
 		run.Model = "default"
 	}
@@ -289,8 +290,8 @@ func (m *Manager) runAI(name string, s *Settings, req AiRunRequest, st *AiRunSta
 		},
 	})
 	var final PreparedAnswer
-	l.Info("uns ai run started", "provider", s.AiProvider, "model", run.Model, "direction", s.Direction, "selection", len(req.Selection.Items))
-	m.event(st, AiEvent{Kind: "start", Detail: fmt.Sprintf("provider %s, model %s, %d tools", s.AiProvider, run.Model, len(tools))})
+	l.Info("uns ai run started", "provider", run.Provider, "model", run.Model, "direction", s.Direction, "selection", len(req.Selection.Items))
+	m.event(st, AiEvent{Kind: "start", Detail: fmt.Sprintf("provider %s, model %s, %d tools", run.Provider, run.Model, len(tools))})
 	resp, err := tc.GenerateWithTools(ctx, genai.ToolRequest{
 		System: system, Prompt: prompt, MaxSteps: s.AiMaxSteps, TokenBudget: s.AiTokenBudget,
 		OnEvent: func(e genai.ToolEvent) {

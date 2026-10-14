@@ -199,6 +199,11 @@ func (m *Manager) promptB(s *Settings, req AiRunRequest, draft *Document) (strin
 		"- Bind only topics of the analysed selection. Keep the type and datapoint names of the current draft.\n" +
 		"- Do not write source, aiRun or excluded; the server sets them.\n" +
 		"- Alert classes are names of _AlertClass datapoints, e.g. alert or warning.\n" +
+		"- Source time: when a JSON payload has a field that holds the time of a value, set timePath to that field and timeFormat " +
+		"to iso8601 (a string like 2026-10-14T09:12:30.250Z), epochMs (milliseconds since 1970, about 1.7e12 today) or epochS (seconds, about 1.7e9). " +
+		"Use the timestamp that belongs to the value: a timestamp in the same object as the value (e.g. $.temp.ts for $.temp.value) wins, " +
+		"else a timestamp of the whole payload (e.g. $.TimeMS for $.Value). Without a related timestamp omit timePath; the receive time is used. " +
+		"Do not create datapoint elements for these timestamps.\n" +
 		"- The final answer is the complete document that passed validate without errors (only the JSON, no explanation), " +
 		"or the single word VALIDATED to use the last document that passed validate without errors.\n")
 	var u strings.Builder

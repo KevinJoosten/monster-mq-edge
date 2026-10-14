@@ -260,6 +260,26 @@ func (a API) DpSet(ctx context.Context, names []string, values []Value, timeout 
 	return err
 }
 
+// DpSetTimed writes values with a source time (dpSetTimed, ms precision)
+// and waits for the OA answer. It is a DpSet request with TagTime.
+func (a API) DpSetTimed(ctx context.Context, names []string, values []Value, stime time.Time, timeout time.Duration) error {
+	if len(names) == 0 || len(names) != len(values) || stime.UnixMilli() < 0 {
+		return ErrInvalid
+	}
+	var w Writer
+	w.U32(TagOp, OpDpSet)
+	w.U32(TagFlags, FlagWait)
+	w.U64(TagTime, uint64(stime.UnixMilli()))
+	for i := range names {
+		w.String(TagName, names[i])
+		w.Value(TagValue, values[i])
+	}
+	start := time.Now()
+	_, err := a.call(ctx, &w, timeout)
+	a.logCall("dpSetTimedWait", start, err, "count", len(names), "stime", stime.UTC().Format(time.RFC3339Nano), "names", nameList(names), "values", valueList(values))
+	return err
+}
+
 func (a API) DpGet(ctx context.Context, names []string, timeout time.Duration) ([]Value, error) {
 	var w Writer
 	w.U32(TagOp, OpDpGet)

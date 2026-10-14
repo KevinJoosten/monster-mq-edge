@@ -602,7 +602,7 @@
       "additionalProperties": false
     },
     "TopicBinding": {
-      "description": "Writes values received on topic to one element of the datapoint, with broker receive time as source time.",
+      "description": "Writes values received on topic to one element of the datapoint. The source time is the time in the payload at timePath (dpSetTimed), or the broker receive time without timePath or when that time cannot be read.",
       "type": "object",
       "required": ["element", "topic"],
       "properties": {
@@ -616,8 +616,19 @@
           "type": "string",
           "maxLength": 512,
           "pattern": "^\\$(\\.[^.\\[\\]'\"\\x00-\\x20\\x7f-\\x9f*?()@$\\\\]+|\\[(0|[1-9][0-9]*)\\]|\\['[^'\\x00-\\x1f]+'\\]|\\[\"[^\"\\x00-\\x1f]+\"\\])+$"
+        },
+        "timePath": {
+          "description": "Field in the JSON payload that holds the source time of this value, same syntax as jsonPath, e.g. $.ts or $.motor.speed_ts. Prefer the timestamp next to the value (same object); else a timestamp of the whole payload. Omit when the payload has no timestamp for this value: the broker receive time is used.",
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^\\$(\\.[^.\\[\\]'\"\\x00-\\x20\\x7f-\\x9f*?()@$\\\\]+|\\[(0|[1-9][0-9]*)\\]|\\['[^'\\x00-\\x1f]+'\\]|\\[\"[^\"\\x00-\\x1f]+\"\\])+$"
+        },
+        "timeFormat": {
+          "description": "Format of the time at timePath: iso8601 (string, e.g. 2026-10-14T09:12:30.250Z; without offset UTC), epochMs (milliseconds since 1970-01-01 UTC) or epochS (seconds, may have a fraction). Required with timePath.",
+          "enum": ["iso8601", "epochMs", "epochS"]
         }
       },
+      "dependentRequired": { "timePath": ["timeFormat"], "timeFormat": ["timePath"] },
       "additionalProperties": false
     },
     "AiRun": {

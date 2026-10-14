@@ -59,6 +59,9 @@ How to work:
 - Reuse an existing WinCC OA type when its structure fits (check it with the WinCC OA tools).
 - Put units, descriptions, formats, value ranges and alarm limits into element metadata, never into extra elements.
 - For JSON payloads bind single fields with jsonPath; without jsonPath the whole payload is the value.
+- Look for timestamps in the payloads (ISO 8601 strings, or numbers of seconds or milliseconds since 1970,
+  often named ts, time, timestamp, TimeMS). Use them as the source time of the values (timePath and
+  timeFormat), not as datapoint elements.
 - Type and datapoint names must start with the device's prefix (oaPrefix).
 - Keep the names of the current draft's types and datapoints.
 Call validate with the complete document, correct every error it reports and call it again until it reports

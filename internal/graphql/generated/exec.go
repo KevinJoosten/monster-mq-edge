@@ -1973,7 +1973,10 @@ type UnsModelerTopicStatus {
     value: String
     status: Long
     published: Long!
+    "Direction A: last publish; Direction B: last write into WinCC OA."
     lastPublish: String
+    "Direction B: source time of the last write, read from the payload (timePath); null when the receive time was used."
+    sourceTime: String
     lastError: String
     lastErrorAt: String
 }
@@ -4299,6 +4302,8 @@ func (ec *executionContext) childFields_UnsModelerTopicStatus(ctx context.Contex
 		return ec.fieldContext_UnsModelerTopicStatus_published(ctx, field)
 	case "lastPublish":
 		return ec.fieldContext_UnsModelerTopicStatus_lastPublish(ctx, field)
+	case "sourceTime":
+		return ec.fieldContext_UnsModelerTopicStatus_sourceTime(ctx, field)
 	case "lastError":
 		return ec.fieldContext_UnsModelerTopicStatus_lastError(ctx, field)
 	case "lastErrorAt":
@@ -27256,6 +27261,29 @@ func (ec *executionContext) fieldContext_UnsModelerTopicStatus_lastPublish(_ con
 	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _UnsModelerTopicStatus_sourceTime(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerTopicStatus_sourceTime(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.SourceTime, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerTopicStatus_sourceTime(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerTopicStatus", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _UnsModelerTopicStatus_lastError(ctx context.Context, field graphql.CollectedField, obj *UnsModelerTopicStatus) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -45896,6 +45924,11 @@ func (ec *executionContext) _UnsModelerTopicStatus(ctx context.Context, sel ast.
 			}
 		case "lastPublish":
 			out.Values[i] = ec._UnsModelerTopicStatus_lastPublish(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "sourceTime":
+			out.Values[i] = ec._UnsModelerTopicStatus_sourceTime(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}

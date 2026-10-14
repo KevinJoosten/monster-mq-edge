@@ -14,14 +14,17 @@ import (
 
 // flowTarget is one topic binding of the Direction B flow.
 type flowTarget struct {
-	dpe      string
-	kind     oahost.Kind
-	jsonPath string
+	dpe        string
+	kind       oahost.Kind
+	jsonPath   string
+	timePath   string // empty: receive time
+	timeFormat string
 }
 
 // RuntimeB feeds MQTT topics into WinCC OA datapoint elements (§5): it
 // subscribes to the binding topics, converts each payload and writes it
-// with DpSet. The source time is the time WinCC OA receives the write.
+// with DpSetTimed when the binding has a timePath, else with DpSet (the
+// source time is then the time WinCC OA receives the write).
 type RuntimeB struct {
 	name   string
 	api    oahost.API
@@ -34,8 +37,25 @@ type RuntimeB struct {
 	targets  map[string][]flowTarget
 	errLog   map[string]time.Time
 	lastErr  map[string]string
+	errAt    map[string]time.Time
 	received map[string]int64
+	last     map[string]flowLast // topic + "\x00" + dpe
 	stopped  bool
+}
+
+// flowLast is the last value written to one DPE of a topic.
+type flowLast struct {
+	v     oahost.Value
+	at    time.Time
+	stime time.Time // source time from the payload; zero: receive time
+}
+
+// flowWrite is one dpSet (zero stime) or dpSetTimed of a message.
+type flowWrite struct {
+	stime time.Time
+	names []string
+	dpes  []string
+	vals  []oahost.Value
 }
 
 // flowTargets resolves the topic bindings of an applied Direction B
@@ -88,7 +108,7 @@ func flowTargets(ctx context.Context, b *winccoabrowse.Service, doc *Document) (
 			if bnd.Element != "" {
 				dpe += bnd.Element
 			}
-			out[bnd.Topic] = append(out[bnd.Topic], flowTarget{dpe: dpe, kind: k, jsonPath: bnd.JSONPath})
+			out[bnd.Topic] = append(out[bnd.Topic], flowTarget{dpe: dpe, kind: k, jsonPath: bnd.JSONPath, timePath: bnd.TimePath, timeFormat: bnd.TimeFormat})
 		}
 	}
 	return out, problems
@@ -100,7 +120,7 @@ func NewRuntimeB(name string, api oahost.API, sub Subscriber, gate RoleGate, cnt
 		gate = AlwaysActive{}
 	}
 	r := &RuntimeB{name: name, api: api, gate: gate, log: log, cnt: cnt, targets: targets,
-		errLog: map[string]time.Time{}, lastErr: map[string]string{}, received: map[string]int64{}}
+		errLog: map[string]time.Time{}, lastErr: map[string]string{}, errAt: map[string]time.Time{}, received: map[string]int64{}, last: map[string]flowLast{}}
 	cnt.DPEs.Store(int64(countTargets(targets)))
 	if sub == nil {
 		return r, errors.New("no in-process subscriber")
@@ -138,27 +158,81 @@ func (r *RuntimeB) onMessage(topic string, payload []byte, _ time.Time) {
 	if stopped || len(targets) == 0 || !r.gate.Active() {
 		return
 	}
-	var names []string
-	var vals []oahost.Value
+	// One write per source time: targets without timePath, or whose time
+	// cannot be read, go with the receive time (plain dpSet).
+	now := time.Now()
+	var writes []*flowWrite
+	group := func(stime time.Time) *flowWrite {
+		for _, w := range writes {
+			if w.stime.Equal(stime) {
+				return w
+			}
+		}
+		w := &flowWrite{stime: stime}
+		writes = append(writes, w)
+		return w
+	}
 	for _, t := range targets {
 		v, err := convertPayload(payload, t.jsonPath, t.kind)
 		if err != nil {
 			r.fail(topic, t.dpe, err)
 			continue
 		}
-		names = append(names, t.dpe+":_original.._value")
-		vals = append(vals, v)
+		var stime time.Time
+		if t.timePath != "" {
+			st, err := sourceTime(payload, t.timePath, t.timeFormat)
+			if err == nil {
+				err = checkSourceTime(st, now)
+			}
+			if err != nil {
+				r.timeProblem(topic, t.dpe, err)
+			} else {
+				stime = st
+			}
+		}
+		w := group(stime)
+		w.names = append(w.names, t.dpe+":_original.._value")
+		w.dpes = append(w.dpes, t.dpe)
+		w.vals = append(w.vals, v)
 	}
-	if len(names) == 0 {
-		return
+	for _, w := range writes {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var err error
+		if w.stime.IsZero() {
+			err = r.api.DpSet(ctx, w.names, w.vals, 10*time.Second)
+		} else {
+			err = r.api.DpSetTimed(ctx, w.names, w.vals, w.stime, 10*time.Second)
+		}
+		cancel()
+		if err != nil {
+			r.fail(topic, w.names[0], err)
+			continue
+		}
+		r.cnt.Writes.Add(int64(len(w.names)))
+		at := time.Now()
+		r.mu.Lock()
+		for i, dpe := range w.dpes {
+			r.last[topic+"\x00"+dpe] = flowLast{v: w.vals[i], at: at, stime: w.stime}
+		}
+		r.mu.Unlock()
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := r.api.DpSet(ctx, names, vals, 10*time.Second); err != nil {
-		r.fail(topic, names[0], err)
-		return
+}
+
+// timeProblem records a source time that cannot be used; the value is
+// still written, with the receive time. Logged once per topic and minute.
+func (r *RuntimeB) timeProblem(topic, dpe string, err error) {
+	r.mu.Lock()
+	last := r.errLog[topic]
+	r.lastErr[topic] = "receive time used: " + err.Error()
+	r.errAt[topic] = time.Now()
+	logIt := time.Since(last) > time.Minute
+	if logIt {
+		r.errLog[topic] = time.Now()
 	}
-	r.cnt.Writes.Add(int64(len(names)))
+	r.mu.Unlock()
+	if logIt {
+		r.log.Warn("uns flow source time not usable, receive time used", "device", r.name, "topic", topic, "dpe", dpe, "err", err)
+	}
 }
 
 // fail counts a payload that could not be written; logging is limited to
@@ -168,6 +242,7 @@ func (r *RuntimeB) fail(topic, dpe string, err error) {
 	r.mu.Lock()
 	last := r.errLog[topic]
 	r.lastErr[topic] = err.Error()
+	r.errAt[topic] = time.Now()
 	logIt := time.Since(last) > time.Minute
 	if logIt {
 		r.errLog[topic] = time.Now()
@@ -197,7 +272,11 @@ func (r *RuntimeB) Status() []TopicStatus {
 	var out []TopicStatus
 	for topic, ts := range r.targets {
 		for _, t := range ts {
-			out = append(out, TopicStatus{Topic: topic, DPE: t.dpe, Published: r.received[topic], LastError: r.lastErr[topic]})
+			st := TopicStatus{Topic: topic, DPE: t.dpe, Published: r.received[topic], LastError: r.lastErr[topic], LastErrorAt: r.errAt[topic]}
+			if l, ok := r.last[topic+"\x00"+t.dpe]; ok {
+				st.Value, st.HasValue, st.LastPublish, st.SourceTime = l.v.PlainJSON(), true, l.at, l.stime
+			}
+			out = append(out, st)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Topic+out[i].DPE < out[j].Topic+out[j].DPE })

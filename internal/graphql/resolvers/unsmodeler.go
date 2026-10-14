@@ -188,6 +188,9 @@ func (r *unsModelerDeviceResolver) LiveTopics(ctx context.Context, obj *generate
 		if !t.LastPublish.IsZero() {
 			g.LastPublish = optString(t.LastPublish.UTC().Format("2006-01-02T15:04:05.000Z"))
 		}
+		if !t.SourceTime.IsZero() {
+			g.SourceTime = optString(t.SourceTime.UTC().Format("2006-01-02T15:04:05.000Z"))
+		}
 		if !t.LastErrorAt.IsZero() {
 			g.LastErrorAt = optString(t.LastErrorAt.UTC().Format(time.RFC3339))
 		}

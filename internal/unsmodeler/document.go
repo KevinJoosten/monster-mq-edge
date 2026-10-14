@@ -221,11 +221,14 @@ type DatapointElement struct {
 	Alert       *Alert   `json:"alert,omitempty"`
 }
 
-// TopicBinding writes the values of a topic to one element.
+// TopicBinding writes the values of a topic to one element. With TimePath
+// the value is written with dpSetTimed and the time read from the payload.
 type TopicBinding struct {
-	Element  string `json:"element"`
-	Topic    string `json:"topic"`
-	JSONPath string `json:"jsonPath,omitempty"`
+	Element    string `json:"element"`
+	Topic      string `json:"topic"`
+	JSONPath   string `json:"jsonPath,omitempty"`
+	TimePath   string `json:"timePath,omitempty"`
+	TimeFormat string `json:"timeFormat,omitempty"`
 }
 
 // AiRun is the provenance of an AI-generated document.

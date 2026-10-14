@@ -77,7 +77,10 @@ type UnsModelerTopicStatus {
     value: String
     status: Long
     published: Long!
+    "Direction A: last publish; Direction B: last write into WinCC OA."
     lastPublish: String
+    "Direction B: source time of the last write, read from the payload (timePath); null when the receive time was used."
+    sourceTime: String
     lastError: String
     lastErrorAt: String
 }

@@ -777,9 +777,13 @@ func (h *Host) dpSet(m oahost.Message) ([]pendingEvent, error) {
 		}
 		decoded[i] = v
 	}
+	stime := time.Now()
+	if ms, ok := m.U64(oahost.TagTime); ok {
+		stime = time.UnixMilli(int64(ms))
+	}
 	var all []pendingEvent
 	for i := range names {
-		evs, err := h.setLocked(string(names[i]), decoded[i], true, time.Now())
+		evs, err := h.setLocked(string(names[i]), decoded[i], true, stime)
 		if err != nil {
 			return all, err
 		}

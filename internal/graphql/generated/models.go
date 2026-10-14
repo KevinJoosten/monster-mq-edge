@@ -1209,10 +1209,13 @@ type UnsModelerTopicStatus struct {
 	Topic string `json:"topic"`
 	Dpe   string `json:"dpe"`
 	// Current value as JSON text.
-	Value       *string `json:"value,omitempty"`
-	Status      *int64  `json:"status,omitempty"`
-	Published   int64   `json:"published"`
+	Value     *string `json:"value,omitempty"`
+	Status    *int64  `json:"status,omitempty"`
+	Published int64   `json:"published"`
+	// Direction A: last publish; Direction B: last write into WinCC OA.
 	LastPublish *string `json:"lastPublish,omitempty"`
+	// Direction B: source time of the last write, read from the payload (timePath); null when the receive time was used.
+	SourceTime  *string `json:"sourceTime,omitempty"`
 	LastError   *string `json:"lastError,omitempty"`
 	LastErrorAt *string `json:"lastErrorAt,omitempty"`
 }

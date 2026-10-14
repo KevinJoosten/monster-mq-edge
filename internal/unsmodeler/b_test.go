@@ -90,6 +90,10 @@ func TestValidateBChecks(t *testing.T) {
 		{"reuse unwritable element", `{"name":"PumpType","reuse":true}`, `{"name":"UNS_X","type":"PumpType","bindings":[{"element":"label","topic":"plant/a"}]}`, SeverityError, "/datapoints/0/bindings/0/element", "cannot be written", nil},
 		{"sample type mismatch", pump, dp(`{"element":"on","topic":"plant/a"}`), SeverityError, "/datapoints/0/bindings/0/element", "does not fit", map[string]string{"plant/a": `"text"`}},
 		{"sample jsonPath", pump, dp(`{"element":"flow","topic":"plant/a","jsonPath":"$.x"}`), SeverityWarning, "/datapoints/0/bindings/0/jsonPath", "does not resolve", map[string]string{"plant/a": `{"y":1}`}},
+		{"sample timePath", pump, dp(`{"element":"flow","topic":"plant/a","jsonPath":"$.v","timePath":"$.ts","timeFormat":"epochMs"}`), SeverityWarning, "/datapoints/0/bindings/0/timePath", "does not resolve", map[string]string{"plant/a": `{"v":1}`}},
+		{"sample time unreadable", pump, dp(`{"element":"flow","topic":"plant/a","jsonPath":"$.v","timePath":"$.ts","timeFormat":"iso8601"}`), SeverityError, "/datapoints/0/bindings/0/timeFormat", "cannot be read as iso8601", map[string]string{"plant/a": `{"v":1,"ts":1791964196247}`}},
+		{"sample time seconds as ms", pump, dp(`{"element":"flow","topic":"plant/a","jsonPath":"$.v","timePath":"$.ts","timeFormat":"epochMs"}`), SeverityWarning, "/datapoints/0/bindings/0/timeFormat", "before 2000", map[string]string{"plant/a": `{"v":1,"ts":1791964196}`}},
+		{"time format without path", pump, dp(`{"element":"flow","topic":"plant/a","timeFormat":"epochMs"}`), SeverityError, "/datapoints/0/bindings/0", "timePath", nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -266,6 +270,16 @@ func TestCreateInWinCCOaAndFlow(t *testing.T) {
 	if st := m.Status("b"); st.Errors < 1 || st.Writes < 3 {
 		t.Fatalf("counters %+v", st)
 	}
+	// The live monitor shows the last written value and its time.
+	var flow *TopicStatus
+	for _, ts := range m.LiveTopics("b") {
+		if ts.DPE == "System1:UNS_P1.flow" {
+			flow = &ts
+		}
+	}
+	if flow == nil || !flow.HasValue || flow.Value != 42.5 || flow.LastPublish.IsZero() || flow.Published != 1 {
+		t.Fatalf("live topic %+v", flow)
+	}
 }
 
 func TestConvertPayload(t *testing.T) {
@@ -380,5 +394,88 @@ func TestAiRunAutoCreateB(t *testing.T) {
 	}
 	if v, err := sim.Get("System1:UNS_A1.v:_online.._value"); err != nil || v.Kind != oahost.KindFloat {
 		t.Fatalf("not created: %v %v", v, err)
+	}
+}
+
+// A binding with timePath writes with the payload's source time
+// (dpSetTimed); without timePath, or when the time cannot be read, the
+// receive time is used and the value is still written.
+func TestFlowSourceTime(t *testing.T) {
+	oa, sim := newSimOA(t)
+	addAlertClasses(t, sim)
+	devs := &memDevices{m: map[string]stores.DeviceConfig{}}
+	m := NewManager(devs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	docs := &memDocs{m: m}
+	sub := &fakeSub{}
+	m.SetSubscriber(sub)
+	t.Cleanup(m.Stop)
+	ctx := context.Background()
+	_ = devs.Save(ctx, stores.DeviceConfig{Name: "b", Type: DeviceType, Enabled: true, NodeID: "n1", Config: settingsB().Encode()})
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	doc := strings.Replace(docB, `"jsonPath":"$.flow"}`, `"jsonPath":"$.flow","timePath":"$.ts","timeFormat":"epochMs"}`, 1)
+	_ = docs.Save(ctx, "b", SlotDraft, []byte(doc))
+	if _, issues, err := m.CreateInWinCCOa(ctx, "b"); err != nil || HasErrors(issues) {
+		t.Fatalf("create %v %v", err, issues)
+	}
+	stime := func(el string) time.Time {
+		t.Helper()
+		v, err := sim.Get("System1:UNS_P1." + el + ":_online.._stime")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.Time
+	}
+	wait := func(el string, cond func(oahost.Value) bool) {
+		t.Helper()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if v, _ := sim.Get("System1:UNS_P1." + el + ":_online.._value"); cond(v) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s not written", el)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	src := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
+	before := time.Now()
+	sub.publish("plant/p1/data", fmt.Sprintf(`{"flow": 42.5, "ts": %d}`, src.UnixMilli()))
+	sub.publish("plant/p1/name", `ON`)
+	wait("flow", func(v oahost.Value) bool { return v.Float == 42.5 })
+	wait("name", func(v oahost.Value) bool { return v.Str == "ON" })
+	if got := stime("flow"); !got.Equal(src) {
+		t.Fatalf("flow source time %v, want %v", got, src)
+	}
+	if got := stime("name"); got.Before(before) {
+		t.Fatalf("name source time %v is not the receive time", got)
+	}
+	var flow *TopicStatus
+	for _, ts := range m.LiveTopics("b") {
+		if ts.DPE == "System1:UNS_P1.flow" {
+			flow = &ts
+		}
+	}
+	if flow == nil || !flow.SourceTime.Equal(src) {
+		t.Fatalf("live source time %+v", flow)
+	}
+
+	// Unreadable time: written with the receive time, reported, no error count.
+	errs := m.Status("b").Errors
+	before = time.Now()
+	sub.publish("plant/p1/data", `{"flow": 7.5, "ts": "soon"}`)
+	wait("flow", func(v oahost.Value) bool { return v.Float == 7.5 })
+	if got := stime("flow"); got.Before(before) {
+		t.Fatalf("fallback source time %v", got)
+	}
+	if st := m.Status("b"); st.Errors != errs {
+		t.Fatalf("errors %d -> %d", errs, st.Errors)
+	}
+	for _, ts := range m.LiveTopics("b") {
+		if ts.DPE == "System1:UNS_P1.flow" && (!strings.Contains(ts.LastError, "receive time used") || !ts.SourceTime.IsZero()) {
+			t.Fatalf("fallback status %+v", ts)
+		}
 	}
 }

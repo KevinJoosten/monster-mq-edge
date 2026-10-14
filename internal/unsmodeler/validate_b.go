@@ -291,6 +291,18 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 					add(SeverityError, bp+"/jsonPath", "%v", err)
 				}
 			}
+			if b.TimePath != "" {
+				if _, err := parseJSONPath(b.TimePath); err != nil {
+					add(SeverityError, bp+"/timePath", "%v", err)
+				}
+				switch b.TimeFormat {
+				case TimeISO8601, TimeEpochMs, TimeEpochS:
+				default:
+					add(SeverityError, bp+"/timeFormat", "timePath needs timeFormat iso8601, epochMs or epochS")
+				}
+			} else if b.TimeFormat != "" {
+				add(SeverityError, bp+"/timeFormat", "timeFormat needs a timePath")
+			}
 			if why := reservedTopic(b.Topic, env.Roots); why != "" {
 				add(SeverityError, bp+"/topic", "source topic %s %s", quoteJSON(b.Topic), why)
 			}
@@ -310,6 +322,15 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 							add(SeverityWarning, bp+"/jsonPath", "jsonPath does not resolve in the sampled payload of %s", b.Topic)
 						} else {
 							add(SeverityError, bp+"/element", "element type %s does not fit the sampled payload of %s: %v", et, b.Topic, err)
+						}
+					}
+					if b.TimePath != "" {
+						if t, err := sourceTime(payload, b.TimePath, b.TimeFormat); errors.Is(err, errNoField) {
+							add(SeverityWarning, bp+"/timePath", "timePath does not resolve in the sampled payload of %s", b.Topic)
+						} else if err != nil {
+							add(SeverityError, bp+"/timeFormat", "the time at timePath in the sampled payload of %s cannot be read as %s: %v", b.Topic, b.TimeFormat, err)
+						} else if err := checkSourceTime(t, time.Now()); err != nil {
+							add(SeverityWarning, bp+"/timeFormat", "%v in the sampled payload of %s; check timeFormat (epochMs or epochS)", err, b.Topic)
 						}
 					}
 				}

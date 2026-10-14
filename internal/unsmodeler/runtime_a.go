@@ -75,6 +75,7 @@ type TopicStatus struct {
 	Status      *uint64
 	Published   int64
 	LastPublish time.Time
+	SourceTime  time.Time // Direction B: source time read from the payload
 	LastError   string
 	LastErrorAt time.Time
 }

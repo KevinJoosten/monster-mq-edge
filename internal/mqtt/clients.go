@@ -378,12 +378,12 @@ func (cl *Client) Read(packetHandler ReadFn) error {
 		fh := new(packets.FixedHeader)
 		err = cl.ReadFixedHeader(fh)
 		if err != nil {
-			return err
+			return keepaliveErr(err)
 		}
 
 		pk, err := cl.ReadPacket(fh)
 		if err != nil {
-			return err
+			return keepaliveErr(err)
 		}
 
 		err = packetHandler(cl, pk) // Process inbound packet.
@@ -391,6 +391,15 @@ func (cl *Client) Read(packetHandler ReadFn) error {
 			return err
 		}
 	}
+}
+
+// keepaliveErr reports an expired read deadline as a keepalive timeout [MQTT-3.1.2-22].
+func keepaliveErr(err error) error {
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return packets.ErrKeepAliveTimeout
+	}
+	return err
 }
 
 // Stop instructs the client to shut down all processing goroutines and disconnect.

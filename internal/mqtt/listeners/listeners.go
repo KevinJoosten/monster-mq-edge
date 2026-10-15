@@ -2,10 +2,14 @@ package listeners
 
 import (
 	"crypto/tls"
+	"errors"
+	"io"
 	"net"
 	"sync"
 
 	"log/slog"
+
+	"monstermq.io/edge/internal/mqtt/packets"
 )
 
 // Config contains configuration values for a listener.
@@ -153,4 +157,15 @@ func (l *Listeners) CloseAll(closer CloseFn) {
 		l.Close(id, closer)
 	}
 	l.ClientsWg.Wait()
+}
+
+// logEstablishErr logs a connection that ended with an error. A clean close (EOF)
+// is not an error, and the server already logged a disconnect with an error
+// reason code together with the client details.
+func logEstablishErr(log *slog.Logger, err error) {
+	var code packets.Code
+	if err == nil || errors.Is(err, io.EOF) || errors.As(err, &code) && code.Code >= packets.ErrUnspecifiedError.Code {
+		return
+	}
+	log.Warn("connection closed with error", "error", err)
 }

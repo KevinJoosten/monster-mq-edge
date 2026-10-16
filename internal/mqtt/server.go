@@ -2,6 +2,7 @@
 package mqtt
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math"
@@ -427,7 +428,14 @@ func (s *Server) EstablishConnection(listener string, c net.Conn) error {
 		return ErrListenersClosed
 	}
 	cl := s.NewClient(c, listener, "", false)
-	return s.attachClient(cl, listener)
+	err := s.attachClient(cl, listener)
+	var code packets.Code
+	if errors.As(err, &code) && code.Code >= packets.ErrUnspecifiedError.Code {
+		s.Log.Warn("client disconnected", "reason", code.Reason, "reason_code", fmt.Sprintf("0x%02X", code.Code),
+			"client", cl.ID, "username", string(cl.Properties.Username), "remote", cl.Net.Remote,
+			"keepalive", cl.State.Keepalive, "listener", listener)
+	}
+	return err
 }
 
 // attachClient validates an incoming client connection and if viable, attaches the client
@@ -507,6 +515,9 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 
 	err = cl.Read(s.receivePacket)
 	if err != nil {
+		if errors.Is(err, packets.ErrKeepAliveTimeout) {
+			cl.refreshDeadline(cl.State.Keepalive) // the expired deadline would also fail the DISCONNECT write
+		}
 		if !cl.Closed() {
 			if code, ok := err.(packets.Code); ok &&
 				cl.Properties.ProtocolVersion == 5 &&
@@ -559,13 +570,15 @@ func (s *Server) readConnectionPacket(cl *Client) (pk packets.Packet, err error)
 func (s *Server) receivePacket(cl *Client, pk packets.Packet) error {
 	err := s.processPacket(cl, pk)
 	if err != nil {
-		if code, ok := err.(packets.Code); ok &&
-			cl.Properties.ProtocolVersion == 5 &&
-			code.Code >= packets.ErrUnspecifiedError.Code {
-			_ = s.DisconnectClient(cl, code)
+		level := slog.LevelWarn
+		if code, ok := err.(packets.Code); ok && code.Code >= packets.ErrUnspecifiedError.Code {
+			if cl.Properties.ProtocolVersion == 5 {
+				_ = s.DisconnectClient(cl, code)
+			}
+			level = slog.LevelDebug // EstablishConnection logs the disconnect and its reason code at WARN
 		}
 
-		s.Log.Warn("error processing packet", "error", err, "client", cl.ID, "listener", cl.Net.Listener, "pk", pk)
+		s.Log.Log(context.Background(), level, "error processing packet", "error", err, "client", cl.ID, "listener", cl.Net.Listener, "pk", pk)
 
 		return err
 	}

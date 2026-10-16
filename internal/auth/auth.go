@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
 	"sort"
@@ -10,8 +12,12 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"monstermq.io/edge/internal/stores"
 )
+
+// compareHash is bcrypt.CompareHashAndPassword; tests swap it to count calls.
+var compareHash = bcrypt.CompareHashAndPassword
 
 // Cache holds users and ACL rules in memory and refreshes from the UserStore.
 type Cache struct {
@@ -23,6 +29,13 @@ type Cache struct {
 	aclCheckOnSubscribe bool
 	sessions            map[string]session
 	canonical           func(topic string) (string, bool)
+	verified            map[string]verifiedCred
+}
+
+// verifiedCred remembers a password that passed bcrypt for the given hash.
+type verifiedCred struct {
+	passwordHash string
+	secret       [32]byte // sha256(password)
 }
 
 type session struct {
@@ -39,6 +52,7 @@ func NewCache(store stores.UserStore, anonymousAllow bool, aclCheckOnSubscribe b
 		anonymousAllow:      anonymousAllow,
 		aclCheckOnSubscribe: aclCheckOnSubscribe,
 		sessions:            map[string]session{},
+		verified:            map[string]verifiedCred{},
 	}
 }
 
@@ -115,6 +129,11 @@ func (c *Cache) Refresh(ctx context.Context) error {
 	c.mu.Lock()
 	c.users = usersMap
 	c.rulesByUser = rulesByUser
+	for name, v := range c.verified {
+		if usersMap[name].PasswordHash != v.passwordHash {
+			delete(c.verified, name)
+		}
+	}
 	c.mu.Unlock()
 	return nil
 }
@@ -155,9 +174,23 @@ func (c *Cache) Validate(username, password string) bool {
 	if !ok || !u.Enabled {
 		return false
 	}
-	// Bcrypt verification goes through the store to avoid duplicating the cost.
-	res, err := c.store.ValidateCredentials(context.Background(), username, password)
-	return err == nil && res != nil
+	// A password that already passed bcrypt against this exact hash skips it.
+	// A changed, deleted or disabled user changes c.users on Refresh, so the
+	// stored hash no longer matches (same idea as ValidateSession).
+	secret := sha256.Sum256([]byte(password))
+	c.mu.RLock()
+	v, hit := c.verified[username]
+	c.mu.RUnlock()
+	if hit && v.passwordHash == u.PasswordHash && subtle.ConstantTimeCompare(secret[:], v.secret[:]) == 1 {
+		return true
+	}
+	if compareHash([]byte(u.PasswordHash), []byte(password)) != nil {
+		return false
+	}
+	c.mu.Lock()
+	c.verified[username] = verifiedCred{passwordHash: u.PasswordHash, secret: secret}
+	c.mu.Unlock()
+	return true
 }
 
 // Lookup returns the user from cache if present.

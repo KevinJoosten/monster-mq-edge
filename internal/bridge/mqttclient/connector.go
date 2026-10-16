@@ -447,12 +447,6 @@ func mapInboundTopic(a Address, remoteTopic string) string {
 
 func (c *Connector) startOutbound(ctx context.Context) {
 	filters := c.cfg.OutboundFilters()
-	addrByFilter := map[string]Address{}
-	for _, a := range c.cfg.Addresses {
-		if strings.EqualFold(a.Mode, "PUBLISH") {
-			addrByFilter[a.LocalTopic] = a
-		}
-	}
 	if len(filters) == 0 {
 		return
 	}
@@ -478,7 +472,7 @@ func (c *Connector) startOutbound(ctx context.Context) {
 				if msg.Inline && msg.ClientID == c.localClientID() {
 					continue
 				}
-				matches := matchingAddresses(addrByFilter, msg.TopicName)
+				matches := matchingAddresses(c.cfg.Addresses, msg.TopicName)
 				if len(matches) == 0 {
 					c.logger.Warn("bridge outbound topic mapping failed", "name", c.name, "localTopic", msg.TopicName)
 					continue
@@ -497,10 +491,10 @@ func (c *Connector) startOutbound(ctx context.Context) {
 	}()
 }
 
-func matchingAddresses(filters map[string]Address, topic string) []Address {
+func matchingAddresses(addrs []Address, topic string) []Address {
 	var out []Address
-	for filter, a := range filters {
-		if matchesLocalPattern(topic, filter) {
+	for _, a := range addrs {
+		if strings.EqualFold(a.Mode, "PUBLISH") && matchesLocalPattern(topic, a.LocalTopic) {
 			out = append(out, a)
 		}
 	}
@@ -528,12 +522,6 @@ func (c *Connector) startQueueWriter(ctx context.Context) {
 	q := c.queue
 	if q == nil {
 		return
-	}
-	addrByFilter := map[string]Address{}
-	for _, a := range c.cfg.Addresses {
-		if strings.EqualFold(a.Mode, "PUBLISH") {
-			addrByFilter[a.LocalTopic] = a
-		}
 	}
 	c.wg.Add(1)
 	go func() {
@@ -567,7 +555,7 @@ func (c *Connector) startQueueWriter(ctx context.Context) {
 			allPublished := true
 		publishLoop:
 			for _, message := range messages {
-				matches := matchingAddresses(addrByFilter, message.TopicName)
+				matches := matchingAddresses(c.cfg.Addresses, message.TopicName)
 				if len(matches) == 0 {
 					c.logger.Warn("dropping buffered bridge message; no publish address matches anymore", "name", c.name, "topic", message.TopicName)
 					continue

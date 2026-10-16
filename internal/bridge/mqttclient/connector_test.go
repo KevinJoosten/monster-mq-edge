@@ -806,3 +806,19 @@ func TestFailedStartClosesTheBuffer(t *testing.T) {
 		t.Error("the bridge buffer is still open after a failed Start")
 	}
 }
+
+func TestOutboundMultiplePublishAddressesSameLocalTopic(t *testing.T) {
+	tr := &fakeTransport{connected: true}
+	bus := newFakeBus()
+	cfg := Config{Addresses: []Address{
+		{Mode: "PUBLISH", LocalTopic: "plant/#", RemoteTopic: "cloud-a", RemovePath: true},
+		{Mode: "PUBLISH", LocalTopic: "plant/#", RemoteTopic: "cloud-b", RemovePath: true},
+	}}
+	startWithFake(t, cfg, tr, &recorder{}, bus)
+	bus.ch <- stores.BrokerMessage{TopicName: "plant/line1/temp", Payload: []byte("42")}
+	pubs := waitSent(t, tr, 2)
+	got := []string{pubs[0].topic, pubs[1].topic}
+	if want := []string{"cloud-a/line1/temp", "cloud-b/line1/temp"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remote topics = %v, want %v", got, want)
+	}
+}

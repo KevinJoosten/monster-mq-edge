@@ -441,7 +441,11 @@ func TestGraphQLAuthenticationAndAuthorization(t *testing.T) {
 	})
 	defer srv.Close()
 
-	unauthenticated := gqlRequest(t, url, `{ currentUser { username isAdmin } }`, nil, "")
+	currentAnon := gqlQuery(t, url, `{ currentUser { username isAdmin } }`, nil)
+	if currentAnon["currentUser"] != nil {
+		t.Fatalf("expected nil currentUser when unauthenticated, got: %v", currentAnon)
+	}
+	unauthenticated := gqlRequest(t, url, `{ users { username isAdmin } }`, nil, "")
 	if !graphqlErrorContains(unauthenticated, "authentication required") {
 		t.Fatalf("unauthenticated query was not rejected: %v", unauthenticated)
 	}

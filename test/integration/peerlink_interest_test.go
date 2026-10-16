@@ -275,7 +275,9 @@ func TestPeerLinkInterestMixed(t *testing.T) {
 	off.Interest = config.PeerLinkInterestOff
 	a := startPL(t, "ir10a", 27460, 27461, []config.PeerConfig{plPeer("ir10b", 0), plPeer("ir10c", 0), off}, plInterest)
 	b := startInterestPL(t, "ir10b", 27462, 0, []config.PeerConfig{plPullOnly("ir10a", 27461)}, []string{"m/1"}, plInterest)
-	c := startInterestPL(t, "ir10c", 27464, 0, []config.PeerConfig{plPullOnly("ir10a", 27461)}, []string{"m/#"})
+	c := startInterestPL(t, "ir10c", 27464, 0, []config.PeerConfig{plPullOnly("ir10a", 27461)}, []string{"m/#"}, func(c *config.Config) {
+		c.PeerLink.Interest.Enabled = boolPtr(false)
+	})
 	d := startInterestPL(t, "ir10d", 27466, 0, []config.PeerConfig{plPullOnly("ir10a", 27461)}, []string{"m/#"}, plInterest)
 	b.waitStreaming("ir10a")
 	c.waitStreaming("ir10a")

@@ -73,14 +73,14 @@ func TestLocalhostAuth_Allowed(t *testing.T) {
 		t.Fatal("timed out waiting for MQTT message on localhost")
 	}
 
-	// 2. GraphQL query without Authorization header on 127.0.0.1
+	// 2. Protected GraphQL query without Authorization header on 127.0.0.1
 	localGqlURL := fmt.Sprintf("http://127.0.0.1:%d/graphql", gqlPort)
-	res := gqlRequest(t, localGqlURL, `query { broker { version } }`, nil, "")
+	res := gqlRequest(t, localGqlURL, `query { users { username } }`, nil, "")
 	if errs, ok := res["errors"]; ok {
 		t.Fatalf("expected GraphQL query to succeed without auth on localhost, got errors: %v", errs)
 	}
 	data, ok := res["data"].(map[string]any)
-	if !ok || data["broker"] == nil {
+	if !ok || data["users"] == nil {
 		t.Fatalf("unexpected GraphQL response: %v", res)
 	}
 
@@ -181,9 +181,9 @@ func TestLocalhostAuth_DeniedByDefault(t *testing.T) {
 		t.Fatal("expected anonymous MQTT connect to fail when AllowAnonymousLocalhost is false")
 	}
 
-	// 2. GraphQL query without auth from 127.0.0.1 should be rejected
+	// 2. Protected GraphQL query without auth from 127.0.0.1 should be rejected
 	localGqlURL := fmt.Sprintf("http://127.0.0.1:%d/graphql", gqlPort)
-	res := gqlRequest(t, localGqlURL, `query { broker { version } }`, nil, "")
+	res := gqlRequest(t, localGqlURL, `query { users { username } }`, nil, "")
 	if _, ok := res["errors"]; !ok {
 		t.Fatalf("expected GraphQL query to fail when unauthenticated, got: %v", res)
 	}

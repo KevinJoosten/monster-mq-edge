@@ -363,9 +363,10 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		IsRetain:    pk.FixedHeader.Retain,
 		IsDup:       pk.FixedHeader.Dup,
 		ClientID:    cl.ID,
+		Inline:      cl.Net.Inline,
 		Time:        time.Now().UTC(),
 	}
-	h.dispatch(msg, pk.Properties.MessageExpiryInterval, hasBus, hasArchive)
+	h.dispatch(msg, &pk.Properties, hasBus, hasArchive)
 }
 
 // publishedReplica dispatches a PeerLink replica with the publisher, time and
@@ -396,16 +397,28 @@ func (h *StorageHook) publishedReplica(pk *packets.Packet, f *packets.Forward) {
 		IsRetain:    pk.FixedHeader.Retain,
 		IsDup:       f.Dup,
 		ClientID:    f.ClientID,
+		Inline:      f.Inline,
 		Time:        t,
 		OriginNode:  f.SourceNode,
 	}
-	h.dispatch(msg, pk.Properties.MessageExpiryInterval, hasBus, hasArchive)
+	h.dispatch(msg, &pk.Properties, hasBus, hasArchive)
 }
 
-func (h *StorageHook) dispatch(msg stores.BrokerMessage, expiry uint32, hasBus, hasArchive bool) {
-	if expiry > 0 {
-		msg.MessageExpiryInterval = &expiry
+func (h *StorageHook) dispatch(msg stores.BrokerMessage, p *packets.Properties, hasBus, hasArchive bool) {
+	if p.MessageExpiryInterval > 0 {
+		v := p.MessageExpiryInterval
+		msg.MessageExpiryInterval = &v
 	}
+	if p.PayloadFormatFlag {
+		v := p.PayloadFormat
+		msg.PayloadFormatIndicator = &v
+	}
+	msg.ContentType = p.ContentType
+	msg.ResponseTopic = p.ResponseTopic
+	if len(p.CorrelationData) > 0 {
+		msg.CorrelationData = append([]byte(nil), p.CorrelationData...)
+	}
+	msg.UserProperties = userPropsFromPacket(p.User)
 	if hasBus {
 		h.bus.Publish(msg)
 	}
@@ -718,6 +731,7 @@ func (h *StorageHook) OnSelectRetainedMessages(filter string) ([]packets.Packet,
 			},
 			TopicName: msg.TopicName,
 			Payload:   msg.Payload,
+			Origin:    msg.ClientID, // as on the in-memory path: No Local skips a client's own retained message
 		}
 		pk.Created = msg.Time.Unix()
 		if msg.MessageExpiryInterval != nil && *msg.MessageExpiryInterval > 0 {

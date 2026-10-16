@@ -165,6 +165,17 @@ func (e *peerEnv) get(t *testing.T, topic string) *stores.BrokerMessage {
 	return m
 }
 
+// A replica of a message a bridge brought in keeps the inline flag, so the
+// same bridge on this node does not forward it back out.
+func TestStorageHookReplicaKeepsInline(t *testing.T) {
+	e := newPeerEnv(t, false)
+	e.inject(t, &packets.Forward{SourceNode: "oa-a", ClientID: "bridge:up", Inline: true}, "plant/b", "v", false, 0)
+	bus := e.busMsgs()
+	if len(bus) != 1 || !bus[0].Inline || bus[0].ClientID != "bridge:up" {
+		t.Fatalf("bus = %+v, want one inline message from bridge:up", bus)
+	}
+}
+
 func TestStorageHookReplicaDispatch(t *testing.T) {
 	e := newPeerEnv(t, false)
 	ts := time.Date(2026, 10, 3, 12, 0, 0, 123456789, time.UTC)
@@ -582,5 +593,22 @@ func TestStorageHookSelectRetainedSkipsExpired(t *testing.T) {
 	}
 	if pk, ok := got["t/forever"]; !ok || pk.Properties.MessageExpiryInterval != 0 {
 		t.Errorf("message without expiry: present=%v interval=%d", ok, pk.Properties.MessageExpiryInterval)
+	}
+}
+
+// A retained message replayed from the store keeps its publisher as origin,
+// so No Local skips a client's own retained message, as on the in-memory path.
+func TestStorageHookSelectRetainedKeepsOrigin(t *testing.T) {
+	e := newPeerEnv(t, false)
+	msg := stores.BrokerMessage{TopicName: "t/own", Payload: []byte("a"), IsRetain: true, ClientID: "pub-x", Time: time.Now()}
+	if err := e.retained.MessageStore.AddAll(context.Background(), []stores.BrokerMessage{msg}); err != nil {
+		t.Fatal(err)
+	}
+	pks, err := e.hook.OnSelectRetainedMessages("t/#")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pks) != 1 || pks[0].Origin != "pub-x" {
+		t.Fatalf("replayed %+v, want one packet with origin pub-x", pks)
 	}
 }

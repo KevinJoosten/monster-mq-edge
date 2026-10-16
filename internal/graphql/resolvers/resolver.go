@@ -944,13 +944,13 @@ func brokerMsgToRetained(m stores.BrokerMessage, fmt *generated.DataFormat) *gen
 	return r
 }
 
-func userPropsTo(p map[string]string) []*generated.UserProperty {
+func userPropsTo(p []stores.UserProperty) []*generated.UserProperty {
 	if len(p) == 0 {
 		return nil
 	}
 	out := make([]*generated.UserProperty, 0, len(p))
-	for k, v := range p {
-		out = append(out, &generated.UserProperty{Key: k, Value: v})
+	for _, u := range p {
+		out = append(out, &generated.UserProperty{Key: u.Key, Value: u.Value})
 	}
 	return out
 }

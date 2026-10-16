@@ -18,16 +18,27 @@ type BrokerMessage struct {
 	Time        time.Time `json:"time"`
 
 	// MQTT v5 properties (subset)
-	PayloadFormatIndicator *byte             `json:"payloadFormatIndicator,omitempty"`
-	MessageExpiryInterval  *uint32           `json:"messageExpiryInterval,omitempty"`
-	ContentType            string            `json:"contentType,omitempty"`
-	ResponseTopic          string            `json:"responseTopic,omitempty"`
-	CorrelationData        []byte            `json:"correlationData,omitempty"`
-	UserProperties         map[string]string `json:"userProperties,omitempty"`
+	PayloadFormatIndicator *byte          `json:"payloadFormatIndicator,omitempty"`
+	MessageExpiryInterval  *uint32        `json:"messageExpiryInterval,omitempty"`
+	ContentType            string         `json:"contentType,omitempty"`
+	ResponseTopic          string         `json:"responseTopic,omitempty"`
+	CorrelationData        []byte         `json:"correlationData,omitempty"`
+	UserProperties         []UserProperty `json:"userProperties,omitempty"`
+
+	// Inline is true when a broker-internal (inline) client published the
+	// message, such as a bridge. Not persisted.
+	Inline bool `json:"-" bson:"-"`
 
 	// OriginNode is the NodeId of the PeerLink source broker for a replica,
 	// empty for a local publish. In memory only: never stored or serialized.
 	OriginNode string `json:"-" bson:"-"`
+}
+
+// UserProperty is one MQTT 5 user property. A slice of them keeps order and
+// repeated keys, both of which MQTT 5 requires to survive forwarding.
+type UserProperty struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 // MqttSubscription mirrors MonsterMQ's MqttSubscription type.

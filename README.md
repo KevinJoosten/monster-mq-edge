@@ -12,7 +12,7 @@ on devices like the Raspberry Pi 4/5.
 - **Archive groups** (last-value + history fanout, retention purging) — same model as MonsterMQ Core.
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
 - **REST API** for publishing, bodyless current/retained/history reads, bulk and Influx writes, and SSE subscriptions.
-- **MQTT bridge** — forward local topics to a remote broker and vice versa.
+- **MQTT bridge** — forward local topics to a remote broker and vice versa, over MQTT 5 or MQTT 3.1.1 (per `protocolVersion`).
 - **PeerLink** — pull-based, in-memory forwarding of publishes between MonsterMQ Edge brokers (pairs and full meshes), with QoS, retain, MQTT 5 properties, publisher and publish time preserved. See [PeerLink](#peerlink-forwarding-between-brokers).
 - **Camera snapshots** — RTSP MJPEG and H.264 I/P/B streams to MQTT JPEG topics; [native Go decoder API and current limits](pkg/h264/README.md).
 - **Users + ACL** with bcrypt password hashing.
@@ -162,6 +162,49 @@ Features:
 
 Enabled features are also reported through GraphQL as `enabledFeatures`, using
 the same names as the config flags.
+
+### MQTT bridge behavior
+
+- `protocolVersion` picks the protocol, as in MonsterMQ Core: `3` or `4` is
+  MQTT 3.1.1, `5` (or no value) is MQTT 5. Bridges created in the dashboard
+  store `4`. `unix://` URLs need `4`. `cleanSession: false` keeps the remote
+  session indefinitely, as before.
+- With `5`, a remote that answers with an MQTT 3.1.1 CONNACK makes the bridge
+  fall back to 3.1.1 with a warning, until the bridge config changes or the
+  broker restarts. A remote that just closes the connection, one that refuses
+  with reason 0x84 (MQTT 5 turned off), or one behind `ws://`/`wss://`, is not
+  detected: set `4` there. With the PAHO buffer, messages queued for MQTT 5 at
+  the moment of the fallback are not sent; persisted ones stay in the `v5`
+  subdirectory of the buffer.
+- Over MQTT 5, live messages keep their properties and retain flag on every
+  hop, and remote subscriptions use No Local (except shared subscriptions,
+  where MQTT 5 forbids it). Retained messages replayed at (re)subscribe keep
+  only payload, retain flag and message expiry. Over 3.1.1 there are no
+  properties, inbound live messages lose the retain flag, and without No Local
+  overlapping topics come back once per hop (never in a loop).
+- Locally, bridged messages are published by client `bridge:<bridge name>`, and
+  the bridge never forwards what it brought in itself. So brokers can be chained
+  (A <- B <- C) with overlapping outbound and inbound mappings (for example
+  `data/#` both ways) without loops or duplicates. Exception: a shared inbound
+  subscription (`$share/...`, `$queue/...`) has no No Local, so the remote sends
+  the bridge's own messages back once; local subscribers see that copy, it is
+  not forwarded again. Network clients cannot use client IDs starting with
+  `bridge:`.
+- Use one bridge per pair of brokers, with the outbound and inbound mappings in
+  that bridge, and bridge from one side only; the brokers must not form a
+  cycle. Two bridges between the same brokers, or both sides bridging, loop:
+  No Local and the skip work per bridge connection.
+- A message is requeued only while the remote is down. Over MQTT 5 a message
+  the remote rejects (reason code 0x80 or higher) or one over its maximum
+  packet size is logged and dropped. Messages are sent at most at the remote's
+  Maximum QoS, and without retain flag when it announces no retained messages.
+  Time spent in the MONSTER buffer counts against Message Expiry; expired
+  messages are dropped. Without buffering, a message published while the remote
+  is down is lost.
+- Over MQTT 5, the PAHO buffer keeps a message until it is sent, not until the
+  remote acknowledges it: a QoS 1/2 message in flight during a crash is lost.
+  The MQTT 5 connection does not use proxy environment variables (`ALL_PROXY`).
+  Response Topic is forwarded unchanged, not rewritten by the topic mapping.
 
 ### WinCC bridge behavior
 
@@ -779,7 +822,7 @@ internal/
   stores/postgres/       → byte-compatible PostgreSQL implementations
   stores/mongodb/        → MongoDB implementations
   archive/               → archive group orchestrator + retention
-  bridge/mqttclient/     → MQTT-to-MQTT bridge (paho client)
+  bridge/mqttclient/     → MQTT-to-MQTT bridge (paho.golang for MQTT 5, paho.mqtt.golang for MQTT 3.1.1)
   bridge/rtspcamera/     → RTSP/HTTP/WS camera stream & snapshot bridge (MJPEG & H.264)
   bridge/winccua/        → WinCC Unified bridge (GraphQL/Open Pipe)
   bridge/winccoa/        → WinCC Open Architecture bridge (GraphQL)

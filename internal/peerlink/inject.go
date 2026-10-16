@@ -364,6 +364,7 @@ func (p *puller) applyRecord(ac *applyCtx, in *batchIn, v *wire.RecordView, fwd 
 		Dup:        v.Dup(),
 		Will:       v.Will(),
 		Snapshot:   v.Snapshot(),
+		Inline:     v.Inline(),
 	}
 	if len(v.Username) > 0 {
 		fwd.Username = p.intern.get(v.Username)

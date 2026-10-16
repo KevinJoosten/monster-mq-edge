@@ -208,7 +208,7 @@ func TestReceiverValidationAndPolicies(t *testing.T) {
 		rec("p/stale", "s", func(r *wire.Record) { r.CaptureMonoMs = fakeMonoNow - 5000 }),
 		retainedStale,
 		rec("p/flags", "f", func(r *wire.Record) { r.Flags = 1 << 12 }),
-		rec("p/ok", "ok", func(r *wire.Record) { r.Flags = 1; r.ExpirySec = 60; r.Username = []byte("user1") }),
+		rec("p/ok", "ok", func(r *wire.Record) { r.Flags = 1 | wire.FlagInline; r.ExpirySec = 60; r.Username = []byte("user1") }),
 	))
 	b := consumerOf(t, fs, func(c *config.PeerLinkConfig, d *Deps) {
 		c.Receive.MaxRecordAgeMs = 1000
@@ -232,7 +232,7 @@ func TestReceiverValidationAndPolicies(t *testing.T) {
 		t.Fatal("stale retained value not stored silently")
 	}
 	got := b.recv.byTopic("p/ok")
-	if len(got) != 1 || got[0].FixedHeader.Qos != 1 || got[0].Forward.Username != "user1" || got[0].Forward.Epoch != fakeEpoch || got[0].Forward.Offset != 10 {
+	if len(got) != 1 || got[0].FixedHeader.Qos != 1 || got[0].Forward.Username != "user1" || got[0].Forward.Epoch != fakeEpoch || got[0].Forward.Offset != 10 || !got[0].Forward.Inline {
 		t.Fatalf("p/ok %+v", got)
 	}
 	if e := got[0].Properties.MessageExpiryInterval; e == 0 || e > 60 {

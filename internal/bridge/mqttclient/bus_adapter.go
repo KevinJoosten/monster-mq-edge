@@ -16,7 +16,7 @@ type BusAdapter struct {
 	BridgeOutbound bool // PeerLink.Receive.BridgeOutbound
 }
 
-func (a *BusAdapter) Subscribe(filters []string, buffer int) (int, <-chan LocalMessage) {
+func (a *BusAdapter) Subscribe(filters []string, buffer int) (int, <-chan stores.BrokerMessage) {
 	var id int
 	var raw <-chan stores.BrokerMessage
 	if a.BridgeOutbound {
@@ -24,19 +24,14 @@ func (a *BusAdapter) Subscribe(filters []string, buffer int) (int, <-chan LocalM
 	} else {
 		id, raw = a.Bus.SubscribeLocal(filters, buffer)
 	}
-	out := make(chan LocalMessage, buffer)
+	out := make(chan stores.BrokerMessage, buffer)
 	go func() {
 		defer close(out)
 		for m := range raw {
 			if !a.forwards(m) {
 				continue
 			}
-			out <- LocalMessage{
-				Topic:   m.TopicName,
-				Payload: m.Payload,
-				QoS:     m.QoS,
-				Retain:  m.IsRetain,
-			}
+			out <- m
 		}
 	}()
 	return id, out

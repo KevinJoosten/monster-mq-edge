@@ -475,6 +475,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		warnPeerLinkDevices(ctx, cfg, storage, peerSetup, logger)
 	}
 
+	if err := server.AddHook(&bridgeIDHook{srv: server}, nil); err != nil {
+		return nil, fmt.Errorf("add bridge client id hook: %w", err)
+	}
 	if err := server.AddHook(storageHook, nil); err != nil {
 		return nil, fmt.Errorf("add storage hook: %w", err)
 	}
@@ -570,7 +573,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var bridges *mqttclient.Manager
 	if cfg.Features.MqttClient {
 		busAdapter := &mqttclient.BusAdapter{Bus: bus, BridgeOutbound: cfg.PeerLink.Enabled && cfg.PeerLink.Receive.BridgeOutbound}
-		bridges = mqttclient.NewManager(storage.DeviceConfig, publishFn, busAdapter, cfg.NodeID, logger)
+		bridges = mqttclient.NewManager(storage.DeviceConfig, NewInlinePublisher(server).Publish, busAdapter, cfg.NodeID, logger)
 		if collector != nil {
 			bridges.SetCounters(collector.IncBridgeIn, collector.IncBridgeOut)
 		}

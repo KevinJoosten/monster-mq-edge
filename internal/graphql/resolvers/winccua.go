@@ -403,6 +403,22 @@ func winCCUaConfigToGraphQL(c *winccua.ConnectionConfig) *generated.WinCCUaConne
 			fs := a.FilterString
 			ga.FilterString = &fs
 		}
+		if a.TagName != "" {
+			tn := a.TagName
+			ga.TagName = &tn
+		}
+		if a.JsonPath != "" {
+			jp := a.JsonPath
+			ga.JSONPath = &jp
+		}
+		if a.TimestampJsonPath != "" {
+			tjp := a.TimestampJsonPath
+			ga.TimestampJSONPath = &tjp
+		}
+		if a.TimestampFormat != "" {
+			tf := a.TimestampFormat
+			ga.TimestampFormat = &tf
+		}
 		out.Addresses = append(out.Addresses, ga)
 	}
 	return out
@@ -507,6 +523,21 @@ func winCCUaAddressInputToConfig(in generated.WinCCUaAddressInput) winccua.Addre
 	}
 	if a.PipeTagMode == "" && a.Type == winccua.AddressTypeTagValues {
 		a.PipeTagMode = winccua.PipeTagModeSingle
+	}
+	if in.TagName != nil {
+		a.TagName = *in.TagName
+	}
+	if in.JSONPath != nil {
+		a.JsonPath = *in.JSONPath
+	}
+	if in.TimestampJSONPath != nil {
+		a.TimestampJsonPath = *in.TimestampJSONPath
+	}
+	if in.TimestampFormat != nil {
+		a.TimestampFormat = *in.TimestampFormat
+	}
+	if a.TimestampFormat == "" && a.Type == winccua.AddressTypeTagWrite && a.TimestampJsonPath != "" {
+		a.TimestampFormat = winccua.TimestampFormatISO
 	}
 	return a
 }

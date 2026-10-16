@@ -1,8 +1,12 @@
 package winccua
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,8 +23,8 @@ type publisher struct {
 	transformConfig TransformConfig
 	messageFormat   string
 
-	mu        sync.Mutex
-	topicMap  map[string]string
+	mu       sync.Mutex
+	topicMap map[string]string
 }
 
 func newPublisher(namespace string, tc TransformConfig, format string) *publisher {
@@ -141,3 +145,213 @@ func parseTimestamp(s string) (time.Time, error) {
 	}
 	return time.Time{}, fmt.Errorf("unknown timestamp format: %s", s)
 }
+
+// extractWriteData extracts the tag value and optional ISO 8601 UTC timestamp
+// from an incoming MQTT payload according to the TAG_WRITE Address config.
+// When addr.JsonPath is blank, the raw payload is used 1:1 (coerced to a
+// native scalar when forGraphQL is true for GraphQL Variant inputs).
+func extractWriteData(payload []byte, addr Address, forGraphQL bool) (any, string, error) {
+	jsonPath := strings.TrimSpace(addr.JsonPath)
+	if jsonPath == "" {
+		raw := string(payload)
+		if forGraphQL {
+			return parseScalarValue(raw), "", nil
+		}
+		return raw, "", nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	dec.UseNumber()
+	var root any
+	if err := dec.Decode(&root); err != nil {
+		return nil, "", fmt.Errorf("decode json payload: %w", err)
+	}
+
+	val, ok := navigateJSONPath(root, jsonPath)
+	if !ok {
+		return nil, "", fmt.Errorf("jsonPath %q not found or null", jsonPath)
+	}
+	switch val.(type) {
+	case map[string]any, []any:
+		return nil, "", fmt.Errorf("jsonPath %q resolved to non-scalar value", jsonPath)
+	}
+
+	tsPath := strings.TrimSpace(addr.TimestampJsonPath)
+	if !forGraphQL || tsPath == "" {
+		return val, "", nil
+	}
+	rawTS, ok := navigateJSONPath(root, tsPath)
+	if !ok {
+		return nil, "", fmt.Errorf("timestampJsonPath %q not found or null", tsPath)
+	}
+	tsISO, err := parseWriteTimestamp(rawTS, addr.TimestampFormat)
+	if err != nil {
+		return nil, "", fmt.Errorf("timestampJsonPath %q: %w", tsPath, err)
+	}
+	return val, tsISO, nil
+}
+
+func navigateJSONPath(root any, path string) (any, bool) {
+	cur := root
+	for _, seg := range strings.Split(strings.TrimSpace(path), ".") {
+		if seg == "" {
+			continue
+		}
+		switch m := cur.(type) {
+		case map[string]any:
+			next, ok := m[seg]
+			if !ok {
+				return nil, false
+			}
+			cur = next
+		case []any:
+			idx, err := strconv.Atoi(seg)
+			if err != nil || idx < 0 || idx >= len(m) {
+				return nil, false
+			}
+			cur = m[idx]
+		default:
+			return nil, false
+		}
+	}
+	if cur == nil {
+		return nil, false
+	}
+	return cur, true
+}
+
+func parseWriteTimestamp(raw any, format string) (string, error) {
+	if format == "" {
+		format = TimestampFormatISO
+	}
+	switch format {
+	case TimestampFormatMS:
+		ms, err := toEpochMillis(raw)
+		if err != nil {
+			return "", err
+		}
+		return time.UnixMilli(ms).UTC().Format("2006-01-02T15:04:05.000Z"), nil
+	case TimestampFormatISO:
+		s, ok := raw.(string)
+		if !ok || strings.TrimSpace(s) == "" {
+			return "", fmt.Errorf("expected ISO timestamp string, got %T", raw)
+		}
+		t, err := parseTimestamp(strings.TrimSpace(s))
+		if err != nil {
+			return "", err
+		}
+		return t.UTC().Format(time.RFC3339Nano), nil
+	default:
+		return "", fmt.Errorf("unsupported timestamp format %q", format)
+	}
+}
+
+func toEpochMillis(raw any) (int64, error) {
+	switch v := raw.(type) {
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			return i, nil
+		}
+		if f, err := v.Float64(); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+			return int64(f), nil
+		}
+		return 0, fmt.Errorf("invalid millisecond timestamp %q", v.String())
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, fmt.Errorf("invalid millisecond timestamp %v", v)
+		}
+		return int64(v), nil
+	case string:
+		s := strings.TrimSpace(v)
+		if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+			return i, nil
+		}
+		if f, err := strconv.ParseFloat(s, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+			return int64(f), nil
+		}
+		return 0, fmt.Errorf("invalid millisecond timestamp %q", v)
+	default:
+		return 0, fmt.Errorf("expected millisecond number, got %T", raw)
+	}
+}
+
+func parseScalarValue(raw string) any {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return raw
+	}
+	if strings.EqualFold(trimmed, "true") {
+		return true
+	}
+	if strings.EqualFold(trimmed, "false") {
+		return false
+	}
+	if i, err := strconv.ParseInt(trimmed, 10, 64); err == nil {
+		return i
+	}
+	if f, err := strconv.ParseFloat(trimmed, 64); err == nil && !math.IsNaN(f) && !math.IsInf(f, 0) {
+		return f
+	}
+	return raw
+}
+
+func formatPipeValue(val any) string {
+	switch v := val.(type) {
+	case string:
+		return v
+	case json.Number:
+		return v.String()
+	case bool:
+		return strconv.FormatBool(v)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func startWriteSubscriber(ctx context.Context, subBus LocalSubscriber, addresses []Address, wg *sync.WaitGroup, handleWrite func(ctx context.Context, addr Address, payload []byte)) {
+	if subBus == nil {
+		return
+	}
+	byTopic := map[string][]Address{}
+	filters := make([]string, 0)
+	for _, a := range addresses {
+		if a.Type != AddressTypeTagWrite {
+			continue
+		}
+		topic := strings.TrimSpace(a.Topic)
+		if topic == "" {
+			continue
+		}
+		if _, exists := byTopic[topic]; !exists {
+			filters = append(filters, topic)
+		}
+		byTopic[topic] = append(byTopic[topic], a)
+	}
+	if len(filters) == 0 {
+		return
+	}
+	subID, ch := subBus.Subscribe(filters, 256)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer subBus.Unsubscribe(subID)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				for _, addr := range byTopic[msg.Topic] {
+					handleWrite(ctx, addr, msg.Payload)
+				}
+			}
+		}
+	}()
+}
+

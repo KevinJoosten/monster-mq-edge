@@ -23,7 +23,7 @@ type OA interface {
 
 // Limits of a Direction A document and device (§6.5).
 const (
-	MaxNodes           = 5000
+	MaxNodes           = 2000
 	MaxBindings        = 2000
 	MaxPatternBindings = 100
 	MaxExpandedDPEs    = 10000

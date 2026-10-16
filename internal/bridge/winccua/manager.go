@@ -13,6 +13,7 @@ import (
 type Manager struct {
 	store     stores.DeviceConfigStore
 	publisher LocalPublisher
+	subBus    LocalSubscriber
 	logger    *slog.Logger
 	nodeID    string
 
@@ -34,6 +35,10 @@ func NewManager(store stores.DeviceConfigStore, publisher LocalPublisher, nodeID
 		connectors: map[string]Connector{},
 		lastConfig: map[string]string{},
 	}
+}
+
+func (m *Manager) SetSubscriber(subBus LocalSubscriber) {
+	m.subBus = subBus
 }
 
 func (m *Manager) Start(ctx context.Context) error {
@@ -119,7 +124,7 @@ func (m *Manager) startDevice(_ context.Context, d stores.DeviceConfig) {
 	m.logger.Info("winccua starting connector",
 		"name", d.Name, "namespace", d.Namespace, "mode", cfg.DataAccessMode,
 		"addresses", len(cfg.Addresses))
-	c := New(d.Name, cfg, d.Namespace, m.publisher, m.logger)
+	c := New(d.Name, cfg, d.Namespace, m.publisher, m.subBus, m.logger)
 	// Always use the server context so the connector goroutine outlives the
 	// (potentially short-lived) request context from a Reload() call.
 	if err := c.Start(m.srvCtx); err != nil {

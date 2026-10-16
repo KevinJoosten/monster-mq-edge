@@ -34,11 +34,13 @@ type graphqlConnector struct {
 	cfg     *ConnectionConfig
 	pub     *publisher
 	publish LocalPublisher
+	subBus  LocalSubscriber
 	logger  *slog.Logger
 	metrics metrics
 
 	ctx     context.Context
 	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 	stopped chan struct{}
 
 	mu            sync.Mutex
@@ -50,7 +52,7 @@ type graphqlConnector struct {
 	httpClient *http.Client
 }
 
-func newGraphQLConnector(name string, cfg *ConnectionConfig, pub *publisher, publish LocalPublisher, logger *slog.Logger) *graphqlConnector {
+func newGraphQLConnector(name string, cfg *ConnectionConfig, pub *publisher, publish LocalPublisher, subBus LocalSubscriber, logger *slog.Logger) *graphqlConnector {
 	httpClient := &http.Client{
 		Timeout: time.Duration(cfg.ConnectionTimeout) * time.Millisecond,
 	}
@@ -64,6 +66,7 @@ func newGraphQLConnector(name string, cfg *ConnectionConfig, pub *publisher, pub
 		cfg:           cfg,
 		pub:           pub,
 		publish:       publish,
+		subBus:        subBus,
 		logger:        logger.With("device", name, "transport", "graphql"),
 		subscriptions: map[string]Address{},
 		stopped:       make(chan struct{}),
@@ -85,7 +88,16 @@ func (g *graphqlConnector) IsConnected() bool   { return g.metrics.connFlag.Load
 
 func (g *graphqlConnector) Start(ctx context.Context) error {
 	g.ctx, g.cancel = context.WithCancel(ctx)
-	go g.runLoop()
+	startWriteSubscriber(g.ctx, g.subBus, g.cfg.Addresses, &g.wg, g.writeTagValue)
+	g.wg.Add(1)
+	go func() {
+		defer g.wg.Done()
+		g.runLoop()
+	}()
+	go func() {
+		g.wg.Wait()
+		close(g.stopped)
+	}()
 	return nil
 }
 
@@ -98,7 +110,6 @@ func (g *graphqlConnector) Stop() {
 
 // runLoop owns the connect/subscribe/read cycle and drives reconnect.
 func (g *graphqlConnector) runLoop() {
-	defer close(g.stopped)
 	for {
 		if err := g.runOnce(g.ctx); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -165,7 +176,9 @@ func (g *graphqlConnector) authenticate(ctx context.Context) error {
 	if token == "" {
 		return errors.New("login response missing token")
 	}
+	g.mu.Lock()
 	g.authToken = token
+	g.mu.Unlock()
 	g.logger.Info("winccua graphql authenticated")
 	return nil
 }
@@ -218,12 +231,13 @@ func (g *graphqlConnector) openWebSocket(ctx context.Context) error {
 	}
 	g.mu.Lock()
 	g.ws = conn
+	token := g.authToken
 	g.mu.Unlock()
 	g.logger.Info("winccua graphql ws connected", "url", wsURL, "subprotocol", conn.Subprotocol())
 
 	initMsg := map[string]any{
 		"type":    "connection_init",
-		"payload": map[string]any{"Authorization": "Bearer " + g.authToken},
+		"payload": map[string]any{"Authorization": "Bearer " + token},
 	}
 	if err := conn.WriteJSON(initMsg); err != nil {
 		return fmt.Errorf("send connection_init: %w", err)
@@ -310,7 +324,10 @@ func (g *graphqlConnector) browseTags(ctx context.Context, addr Address) ([]stri
 	}
 	filtersJSON, _ := json.Marshal(addr.NameFilters)
 	q := fmt.Sprintf(`query { browse(nameFilters: %s) { name } }`, string(filtersJSON))
-	resp, err := g.postGraphQL(ctx, q, g.authToken)
+	g.mu.Lock()
+	token := g.authToken
+	g.mu.Unlock()
+	resp, err := g.postGraphQL(ctx, q, token)
 	if err != nil {
 		return nil, err
 	}
@@ -513,6 +530,77 @@ func (g *graphqlConnector) publishAlarm(addr Address, alarm map[string]any) {
 		return
 	}
 	g.metrics.inc()
+}
+
+func (g *graphqlConnector) writeTagValue(ctx context.Context, addr Address, payload []byte) {
+	val, tsISO, err := extractWriteData(payload, addr, true)
+	if err != nil {
+		g.logger.Warn("winccua graphql tag write payload error", "topic", addr.Topic, "tag", addr.TagName, "err", err)
+		return
+	}
+	g.mu.Lock()
+	token := g.authToken
+	g.mu.Unlock()
+	if token == "" {
+		g.logger.Warn("winccua graphql tag write skipped: not authenticated", "topic", addr.Topic, "tag", addr.TagName)
+		return
+	}
+	mut, err := buildWriteTagValuesMutation(addr.TagName, val, tsISO)
+	if err != nil {
+		g.logger.Warn("winccua graphql build writeTagValues failed", "topic", addr.Topic, "tag", addr.TagName, "err", err)
+		return
+	}
+	resp, err := g.postGraphQL(ctx, mut, token)
+	if err != nil {
+		g.logger.Warn("winccua graphql writeTagValues request failed", "topic", addr.Topic, "tag", addr.TagName, "err", err)
+		return
+	}
+	if errs, ok := resp["errors"]; ok && errs != nil {
+		g.logger.Warn("winccua graphql writeTagValues graphql errors", "topic", addr.Topic, "tag", addr.TagName, "errors", errs)
+		return
+	}
+	data, _ := resp["data"].(map[string]any)
+	if data == nil {
+		return
+	}
+	list, _ := data["writeTagValues"].([]any)
+	for _, item := range list {
+		m, _ := item.(map[string]any)
+		if m == nil {
+			continue
+		}
+		if errObj, ok := m["error"].(map[string]any); ok && errObj != nil {
+			if !tagErrorIsZero(errObj["code"]) {
+				desc, _ := errObj["description"].(string)
+				g.logger.Warn("winccua graphql writeTagValues error", "tag", addr.TagName, "code", errObj["code"], "desc", desc)
+			}
+		}
+	}
+}
+
+func buildWriteTagValuesMutation(tagName string, value any, timestampISO string) (string, error) {
+	nameJSON, err := json.Marshal(tagName)
+	if err != nil {
+		return "", err
+	}
+	valJSON, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	if timestampISO != "" {
+		tsJSON, err := json.Marshal(timestampISO)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf(
+			`mutation { writeTagValues(input: [{ name: %s, value: %s, timestamp: %s }]) { name error { code description } } }`,
+			string(nameJSON), string(valJSON), string(tsJSON),
+		), nil
+	}
+	return fmt.Sprintf(
+		`mutation { writeTagValues(input: [{ name: %s, value: %s }]) { name error { code description } } }`,
+		string(nameJSON), string(valJSON),
+	), nil
 }
 
 func joinStr(parts []string, sep string) string {

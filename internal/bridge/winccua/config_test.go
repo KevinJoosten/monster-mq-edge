@@ -161,3 +161,68 @@ func TestTagErrorIsZero(t *testing.T) {
 		}
 	}
 }
+
+func TestValidate_TagWriteAddress(t *testing.T) {
+	validRaw := Address{
+		Type:    AddressTypeTagWrite,
+		Topic:   "plant1/cmd/setpoint",
+		TagName: "HMI_Setpoint_1",
+	}
+	if errs := validRaw.Validate(); len(errs) > 0 {
+		t.Fatalf("expected valid raw TAG_WRITE, got %v", errs)
+	}
+
+	validJSONWithTS := Address{
+		Type:              AddressTypeTagWrite,
+		Topic:             "plant1/cmd/setpoint",
+		TagName:           "HMI_Setpoint_1",
+		JsonPath:          "data.value",
+		TimestampJsonPath: "data.ts",
+		TimestampFormat:   TimestampFormatMS,
+	}
+	if errs := validJSONWithTS.Validate(); len(errs) > 0 {
+		t.Fatalf("expected valid JSON TAG_WRITE with timestamp, got %v", errs)
+	}
+
+	invalidCases := []struct {
+		name string
+		addr Address
+	}{
+		{
+			name: "missing tagName",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/setpoint"},
+		},
+		{
+			name: "topic with + wildcard",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/+/setpoint", TagName: "Tag_1"},
+		},
+		{
+			name: "topic with # wildcard",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/#", TagName: "Tag_1"},
+		},
+		{
+			name: "tagName with * wildcard",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/setpoint", TagName: "HMI_*"},
+		},
+		{
+			name: "tagName with ? wildcard",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/setpoint", TagName: "HMI_?"},
+		},
+		{
+			name: "timestampJsonPath without jsonPath",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/setpoint", TagName: "Tag_1", TimestampJsonPath: "ts"},
+		},
+		{
+			name: "invalid timestampFormat",
+			addr: Address{Type: AddressTypeTagWrite, Topic: "cmd/setpoint", TagName: "Tag_1", JsonPath: "v", TimestampJsonPath: "ts", TimestampFormat: "EPOCH_SEC"},
+		},
+	}
+	for _, tc := range invalidCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if errs := tc.addr.Validate(); len(errs) == 0 {
+				t.Errorf("expected validation error for %s, got none", tc.name)
+			}
+		})
+	}
+}
+

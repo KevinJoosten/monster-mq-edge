@@ -30,36 +30,39 @@ type pipeConnector struct {
 	cfg     *ConnectionConfig
 	pub     *publisher
 	publish LocalPublisher
+	subBus  LocalSubscriber
 	logger  *slog.Logger
 	metrics metrics
 
 	ctx     context.Context
 	cancel  context.CancelFunc
+	wg      sync.WaitGroup
 	stopped chan struct{}
 
-	mu               sync.Mutex
-	conn             io.ReadWriteCloser
-	cookieSeq        int64
-	activeSubs       map[string]Address // cookie → address
-	pendingBrowses   map[string]*browseState
+	mu             sync.Mutex
+	conn           io.ReadWriteCloser
+	cookieSeq      int64
+	activeSubs     map[string]Address // cookie → address
+	pendingBrowses map[string]*browseState
 
 	writeMu        sync.Mutex // serialize writes on the pipe handle
 	firstTagLogged atomic.Bool
 }
 
 type browseState struct {
-	address Address
+	address  Address
 	pageDone chan []string
 	pageErr  chan error
 	accum    []string
 }
 
-func newPipeConnector(name string, cfg *ConnectionConfig, pub *publisher, publish LocalPublisher, logger *slog.Logger) *pipeConnector {
+func newPipeConnector(name string, cfg *ConnectionConfig, pub *publisher, publish LocalPublisher, subBus LocalSubscriber, logger *slog.Logger) *pipeConnector {
 	return &pipeConnector{
 		name:           name,
 		cfg:            cfg,
 		pub:            pub,
 		publish:        publish,
+		subBus:         subBus,
 		logger:         logger.With("device", name, "transport", "openpipe"),
 		activeSubs:     map[string]Address{},
 		pendingBrowses: map[string]*browseState{},
@@ -72,7 +75,16 @@ func (p *pipeConnector) IsConnected() bool   { return p.metrics.connFlag.Load() 
 
 func (p *pipeConnector) Start(ctx context.Context) error {
 	p.ctx, p.cancel = context.WithCancel(ctx)
-	go p.runLoop()
+	startWriteSubscriber(p.ctx, p.subBus, p.cfg.Addresses, &p.wg, p.writeTagValue)
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.runLoop()
+	}()
+	go func() {
+		p.wg.Wait()
+		close(p.stopped)
+	}()
 	return nil
 }
 
@@ -84,7 +96,6 @@ func (p *pipeConnector) Stop() {
 }
 
 func (p *pipeConnector) runLoop() {
-	defer close(p.stopped)
 	for {
 		if err := p.runOnce(p.ctx); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -435,9 +446,30 @@ func (p *pipeConnector) handleMessage(line string) {
 		p.mu.Lock()
 		delete(p.activeSubs, cookie)
 		p.mu.Unlock()
+	case "NotifyWriteTag":
+		p.handleWriteTagNotification(msg)
 	default:
 		if len(t) >= 5 && t[:5] == "Error" {
 			p.handleErrorMessage(msg, t)
+		}
+	}
+}
+
+func (p *pipeConnector) handleWriteTagNotification(msg map[string]any) {
+	params, _ := msg["Params"].(map[string]any)
+	if params == nil {
+		return
+	}
+	tagsArr, _ := params["Tags"].([]any)
+	for _, item := range tagsArr {
+		tag, _ := item.(map[string]any)
+		if tag == nil {
+			continue
+		}
+		if !tagErrorIsZero(tag["ErrorCode"]) {
+			desc, _ := tag["ErrorDescription"].(string)
+			name, _ := tag["Name"].(string)
+			p.logger.Warn("winccua pipe write tag error", "tag", name, "code", tag["ErrorCode"], "desc", desc)
 		}
 	}
 }
@@ -626,6 +658,30 @@ func (p *pipeConnector) publishAlarm(addr Address, alarm map[string]any) {
 		return
 	}
 	p.metrics.inc()
+}
+
+func (p *pipeConnector) writeTagValue(_ context.Context, addr Address, payload []byte) {
+	val, _, err := extractWriteData(payload, addr, false)
+	if err != nil {
+		p.logger.Warn("winccua pipe tag write payload error", "topic", addr.Topic, "tag", addr.TagName, "err", err)
+		return
+	}
+	cookie := p.nextCookie("writetag")
+	err = p.sendCommand(map[string]any{
+		"Message": "WriteTag",
+		"Params": map[string]any{
+			"Tags": []map[string]any{
+				{
+					"Name":  addr.TagName,
+					"Value": formatPipeValue(val),
+				},
+			},
+		},
+		"ClientCookie": cookie,
+	})
+	if err != nil {
+		p.logger.Warn("winccua pipe write tag failed", "topic", addr.Topic, "tag", addr.TagName, "err", err)
+	}
 }
 
 // tagErrorIsZero treats nil, the integer 0, the string "0", and an empty

@@ -6,6 +6,7 @@
 enum WinCCUaAddressType {
     TAG_VALUES
     ACTIVE_ALARMS
+    TAG_WRITE
 }
 
 enum WinCCUaMessageFormat {
@@ -30,6 +31,10 @@ type WinCCUaAddress {
     systemNames: [String!]
     filterString: String
     pipeTagMode: String
+    tagName: String
+    jsonPath: String
+    timestampJsonPath: String
+    timestampFormat: String
 }
 
 type WinCCUaTransformConfig {
@@ -108,6 +113,10 @@ input WinCCUaAddressInput {
     systemNames: [String!]
     filterString: String
     pipeTagMode: String = "SINGLE"
+    tagName: String
+    jsonPath: String
+    timestampJsonPath: String
+    timestampFormat: String
 }
 
 input WinCCUaClientInput {

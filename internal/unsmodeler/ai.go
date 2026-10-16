@@ -44,6 +44,8 @@ How to work:
 - Prefer one pattern binding for many uniform datapoints of one type below a common node; use datapoint
   bindings for single equipment and element bindings for single values that belong at a specific place.
 - Select only meaningful value elements; leave out internal or diagnostic elements unless asked for.
+- Use layout "object" (one JSON topic per datapoint in the shape of its type) when the user asks for it or
+  when a datapoint's elements belong together and are used together; otherwise keep one topic per element.
 - Keep every existing node of the current draft (with its id) unless the user asks to change it.
 Call validate with the complete document, correct every error it reports and call it again until it reports
 no errors. Then answer with the final document only.`
@@ -414,6 +416,7 @@ func (m *Manager) promptA(s *Settings, req AiRunRequest, draft *Document) (strin
 		"- Bind only data of the user's selection (listed in the user message). Do not change or remove existing nodes bound outside the selection.\n" +
 		"- Keep the id of every existing node; omit id for new nodes. Do not write aiGenerated or aiRun.\n" +
 		"- System is the remote system name; omit it for the local system.\n" +
+		"- layout object applies to datapoint and pattern bindings only; its elements have no topic and each element path appears once.\n" +
 		"- The final answer is the complete document that passed validate without errors (only the JSON, no explanation), " +
 		"or the single word VALIDATED to use the last document that passed validate without errors.\n")
 	var u strings.Builder

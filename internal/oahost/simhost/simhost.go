@@ -12,6 +12,7 @@ import (
 	"path"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -54,6 +55,7 @@ type connection struct {
 	attrs    []string // FlagAttrs: further attributes of every name
 	noSource bool
 	stime    bool // FlagSourceTime: items carry the element's _online.._stime
+	group    bool // FlagGroup: every hotlink carries all names
 }
 
 type query struct {
@@ -360,6 +362,9 @@ func (h *Host) Get(address string) (oahost.Value, error) {
 type pendingEvent struct {
 	ref  uint64
 	data []byte
+	// group marks the hotlink of a FlagGroup connection; a multi-name
+	// dpSet delivers only its last one, like one WinCC OA hotlink.
+	group bool
 }
 
 func (h *Host) emit(evs []pendingEvent) {
@@ -429,6 +434,12 @@ func (h *Host) setLocked(address string, v oahost.Value, own bool, stime time.Ti
 	var evs []pendingEvent
 	for ref, c := range h.conns {
 		if own && c.noSource {
+			continue
+		}
+		if c.group {
+			if slices.ContainsFunc(c.names, func(n string) bool { return h.dpeOf(n) == full }) {
+				evs = append(evs, pendingEvent{ref: ref, data: h.groupItems(c), group: true})
+			}
 			continue
 		}
 		for _, n := range c.names {
@@ -790,7 +801,40 @@ func (h *Host) dpSet(m oahost.Message) ([]pendingEvent, error) {
 		h.sets.Add(1)
 		all = append(all, evs...)
 	}
-	return all, nil
+	// One set message is one hotlink per group connection: keep its last
+	// event, which carries every value of the set.
+	last := map[uint64]int{}
+	for i, e := range all {
+		if e.group {
+			last[e.ref] = i
+		}
+	}
+	out := all[:0]
+	for i, e := range all {
+		if !e.group || last[e.ref] == i {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// groupItems renders one event with the current item of every name of a
+// FlagGroup connection.
+func (h *Host) groupItems(c *connection) []byte {
+	var w oahost.Writer
+	for _, n := range c.names {
+		_, d, el, attr, err := h.lookup(n)
+		if err != nil {
+			continue
+		}
+		w.String(oahost.TagName, n)
+		w.Value(oahost.TagValue, h.readAttr(d, el, attr))
+		if c.stime {
+			h.writeSTime(&w, d, el)
+		}
+		h.writeAttrs(&w, c, d, el)
+	}
+	return w.Bytes()
 }
 
 func (h *Host) dpGet(m oahost.Message, w *oahost.Writer) error {
@@ -811,11 +855,14 @@ func (h *Host) dpConnect(m oahost.Message) ([]pendingEvent, error) {
 	if len(names) > h.BatchLimit {
 		return nil, fmt.Errorf("%w: %d names exceed maxConnectMessageSize %d", oahost.ErrOA, len(names), h.BatchLimit)
 	}
-	c := &connection{noSource: flags&oahost.FlagNoSource != 0, stime: flags&oahost.FlagSourceTime != 0}
+	c := &connection{noSource: flags&oahost.FlagNoSource != 0, stime: flags&oahost.FlagSourceTime != 0, group: flags&oahost.FlagGroup != 0}
 	if flags&oahost.FlagAttrs != 0 {
 		for _, a := range m.All(oahost.TagAttr) {
 			c.attrs = append(c.attrs, string(a))
 		}
+	}
+	if c.group && len(names)*oahost.GroupItems(flags, len(c.attrs)) > oahost.MaxGroupItems {
+		return nil, fmt.Errorf("%w: group connect of %d items exceeds maxConnectMessageSize %d", oahost.ErrOA, len(names)*oahost.GroupItems(flags, len(c.attrs)), oahost.MaxGroupItems)
 	}
 	var w oahost.Writer
 	w.U32(oahost.TagFlags, oahost.FlagAnswer)

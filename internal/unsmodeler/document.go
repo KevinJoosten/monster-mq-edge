@@ -42,6 +42,13 @@ const (
 	KindPattern   = "pattern"
 )
 
+// Binding layouts of datapoint and pattern bindings: one topic per element,
+// or one topic per datapoint with a JSON object in the shape of the type.
+const (
+	LayoutElements = "elements"
+	LayoutObject   = "object"
+)
+
 // Binding binds WinCC OA data of one datapoint type to a node.
 type Binding struct {
 	Kind      string              `json:"kind"`
@@ -50,8 +57,15 @@ type Binding struct {
 	Datapoint string              `json:"datapoint,omitempty"`
 	Element   *string             `json:"element,omitempty"`
 	Pattern   string              `json:"pattern,omitempty"`
+	Layout    string              `json:"layout,omitempty"`
 	Elements  []*ElementSelection `json:"elements,omitempty"`
 	Overrides *Overrides          `json:"overrides,omitempty"`
+}
+
+// ObjectLayout reports whether a datapoint or pattern binding publishes one
+// object topic per datapoint.
+func (b *Binding) ObjectLayout() bool {
+	return b.Layout == LayoutObject && (b.Kind == KindDatapoint || b.Kind == KindPattern)
 }
 
 // ElementSelection is one selected element of a datapoint or pattern binding.

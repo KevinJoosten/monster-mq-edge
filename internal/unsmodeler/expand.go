@@ -47,10 +47,36 @@ type Target struct {
 	Sem        Semantics
 	// Pattern is set for the targets of a pattern binding.
 	Pattern *PatternSpec
+	// Object is set for the elements of an object layout binding: they
+	// publish together as one JSON object on Object.Topic (= Topic).
+	Object *ObjectSpec
 }
 
 // DPE returns the DPE name, System:DP.element (the root as System:DP.).
 func (t *Target) DPE() string { return t.System + ":" + t.DP + "." + t.Element }
+
+// key identifies the target in the runtime: its topic, or for an element of
+// an object the object topic and the element path.
+func (t *Target) key() string {
+	if t.Object != nil {
+		return t.Topic + "\x00" + t.Element
+	}
+	return t.Topic
+}
+
+// ObjectSpec is the object topic of one datapoint of an object layout
+// binding (§4.4): the payload is a JSON object in the shape of the
+// datapoint type with one leaf per selected element.
+type ObjectSpec struct {
+	Topic      string
+	BindingPtr string
+	NodeID     string
+	NodePtr    string
+	System     string
+	DP         string
+	// Sem are the binding level semantics; retain and qos of the object.
+	Sem Semantics
+}
 
 // PatternSpec is a pattern binding: every datapoint of Type on System
 // matching Pattern publishes Elements below NodeTopic/<dp>.
@@ -66,6 +92,22 @@ type PatternSpec struct {
 	// BindingSem are the semantics of the binding level (element overrides
 	// not applied), used by the union of query fields.
 	BindingSem Semantics
+	// Object: every datapoint publishes one object topic NodeTopic/<dp>.
+	Object bool
+}
+
+// payloads returns the payload fields of the selected elements.
+func (p *PatternSpec) payloads() [][]PayloadField {
+	var out [][]PayloadField
+	for _, e := range p.Elements {
+		out = append(out, e.Sem.Payload)
+	}
+	return out
+}
+
+// ObjectFor returns the object of datapoint dp of an object pattern.
+func (p *PatternSpec) ObjectFor(system, dp string) *ObjectSpec {
+	return &ObjectSpec{Topic: p.NodeTopic + "/" + winccoanative.EncodeName(dp, false), BindingPtr: p.BindingPtr, NodeID: p.NodeID, NodePtr: p.NodePtr, System: system, DP: dp, Sem: p.BindingSem}
 }
 
 // PatternElement is one selected element of a pattern binding.
@@ -81,6 +123,9 @@ type PatternElement struct {
 // TopicFor returns the topic of element e of datapoint dp.
 func (p *PatternSpec) TopicFor(dp string, e PatternElement) string {
 	base := p.NodeTopic + "/" + winccoanative.EncodeName(dp, false)
+	if p.Object {
+		return base
+	}
 	return joinRel(base, elementRel(e.Path, e.Rel))
 }
 
@@ -335,14 +380,24 @@ func (x *expander) binding(n *Node, ptr, topic string, sem Semantics) {
 		if !checkDP() {
 			return
 		}
-		for _, pe := range x.elements(b, bptr, bsem, ts, online) {
+		var obj *ObjectSpec
+		if b.ObjectLayout() {
+			obj = &ObjectSpec{Topic: topic, BindingPtr: bptr, NodeID: n.ID, NodePtr: ptr, System: sys, DP: b.Datapoint, Sem: bsem}
+		}
+		elems := x.elements(b, bptr, bsem, ts, online)
+		x.checkObject(b, bptr, elems)
+		for _, pe := range elems {
 			t := base
 			t.Topic, t.Ptr, t.DP, t.Element, t.Sem, t.ElemKind, t.OaType = joinRel(topic, elementRel(pe.Path, pe.Rel)), pe.Ptr, b.Datapoint, pe.Path, pe.Sem, pe.ElemKind, pe.OaType
+			if obj != nil {
+				t.Topic, t.Object = topic, obj
+			}
 			add(&t)
 		}
 	case KindPattern:
-		spec := &PatternSpec{BindingPtr: bptr, NodeID: n.ID, NodePtr: ptr, NodeTopic: topic, System: sys, Type: b.Type, Pattern: b.Pattern, BindingSem: bsem}
+		spec := &PatternSpec{BindingPtr: bptr, NodeID: n.ID, NodePtr: ptr, NodeTopic: topic, System: sys, Type: b.Type, Pattern: b.Pattern, BindingSem: bsem, Object: b.ObjectLayout()}
 		spec.Elements = x.elements(b, bptr, bsem, ts, online)
+		x.checkObject(b, bptr, spec.Elements)
 		x.out.Patterns = append(x.out.Patterns, spec)
 		if !online {
 			return
@@ -356,9 +411,13 @@ func (x *expander) binding(n *Node, ptr, topic string, sem Semantics) {
 			x.issue(SeverityWarning, bptr+"/pattern", "pattern %s matches no datapoint of type %s now; datapoints created later are picked up", quoteJSON(b.Pattern), b.Type)
 		}
 		for _, dp := range dps {
+			var obj *ObjectSpec
+			if spec.Object {
+				obj = spec.ObjectFor(sys, dp)
+			}
 			for _, pe := range spec.Elements {
 				t := base
-				t.Topic, t.Ptr, t.DP, t.Element, t.Sem, t.ElemKind, t.OaType, t.Pattern = spec.TopicFor(dp, pe), pe.Ptr, dp, pe.Path, pe.Sem, pe.ElemKind, pe.OaType, spec
+				t.Topic, t.Ptr, t.DP, t.Element, t.Sem, t.ElemKind, t.OaType, t.Pattern, t.Object = spec.TopicFor(dp, pe), pe.Ptr, dp, pe.Path, pe.Sem, pe.ElemKind, pe.OaType, spec, obj
 				add(&t)
 			}
 		}
@@ -400,4 +459,29 @@ func (x *expander) elements(b *Binding, bptr string, bsem Semantics, ts *winccoa
 		out = append(out, pe)
 	}
 	return out
+}
+
+// checkObject reports the rules of an object layout binding: element topic
+// overrides do not apply, every element appears once, and the elements of
+// a datapoint should fit one WinCC OA connect.
+func (x *expander) checkObject(b *Binding, bptr string, elems []PatternElement) {
+	if !b.ObjectLayout() {
+		return
+	}
+	seen := map[string]bool{}
+	var payloads [][]PayloadField
+	for _, pe := range elems {
+		if pe.Rel != nil {
+			x.issue(SeverityWarning, pe.Ptr+"/topic", "layout object publishes one topic per datapoint; the element topic is ignored")
+		}
+		if seen[pe.Path] {
+			x.issue(SeverityError, pe.Ptr+"/path", "element %s is selected twice; layout object has one leaf per element", quoteJSON(pe.Path))
+		}
+		seen[pe.Path] = true
+		payloads = append(payloads, pe.Sem.Payload)
+	}
+	items := len(elems) * oahost.GroupItems(oahost.FlagSourceTime, len(dynamicAttrs(payloads...)))
+	if items > oahost.MaxGroupItems {
+		x.issue(SeverityWarning, bptr, "the %d elements need %d connect items, more than the %d of one WinCC OA dpConnect; each datapoint is connected in parts, so a change of several elements can publish the object more than once", len(elems), items, oahost.MaxGroupItems)
+	}
 }

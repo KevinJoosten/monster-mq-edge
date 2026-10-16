@@ -215,6 +215,26 @@ func (a API) SetElementMeta(ctx context.Context, dpe string, field MetaField, te
 // attribute does not exist) after its value and time.
 const FlagAttrs uint32 = 1 << 7
 
+// FlagGroup (connect): register all names of the request in one list
+// dpConnect, so every hotlink carries the current value of every name (one
+// event with all items) whenever one of them changes. The request then holds
+// at most MaxGroupItems connect items (names, their source times and
+// attributes).
+const FlagGroup uint32 = 1 << 8
+
+// MaxGroupItems is the maxConnectMessageSize of WinCC OA (default 100): the
+// connect items of one FlagGroup registration.
+const MaxGroupItems = 100
+
+// GroupItems returns the connect items one name of a FlagGroup request uses.
+func GroupItems(flags uint32, attrs int) int {
+	n := 1 + attrs
+	if flags&FlagSourceTime != 0 {
+		n++
+	}
+	return n
+}
+
 // TagAttr is a repeated attribute name of a FlagAttrs connect.
 const TagAttr byte = 23
 

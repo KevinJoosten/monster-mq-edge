@@ -181,7 +181,10 @@ func validateA(ctx context.Context, doc *Document, env ValidationEnv) ([]Issue, 
 	seen := map[string]*Target{}
 	for _, t := range exp.Targets {
 		if first, dup := seen[t.Topic]; dup {
-			if first.Ptr != t.Ptr || first.DPE() != t.DPE() {
+			if t.Object != nil && first.Object == t.Object {
+				continue
+			}
+			if first.Ptr != t.Ptr || first.DPE() != t.DPE() || first.Object != nil || t.Object != nil {
 				add(SeverityError, t.Ptr, "topic %s is also published by %s", quoteJSON(t.Topic), first.Ptr)
 			}
 			continue

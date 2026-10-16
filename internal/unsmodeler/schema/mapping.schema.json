@@ -99,7 +99,7 @@
       "additionalProperties": false
     },
     "Binding": {
-      "description": "Binds WinCC OA data of one datapoint type to a node. kind=element: one DPE, published on the node topic. kind=datapoint: one datapoint, topics <node>/<element path>. kind=pattern: all datapoints of the type matching pattern, topics <node>/<dp>/<element path> (<dp> without system); datapoints created later are picked up. DP and element names become topic levels percent-encoded like the native namespace ('%', '/', '+', '#' and control characters as %XX).",
+      "description": "Binds WinCC OA data of one datapoint type to a node. kind=element: one DPE, published on the node topic. kind=datapoint: one datapoint, topics <node>/<element path>. kind=pattern: all datapoints of the type matching pattern, topics <node>/<dp>/<element path> (<dp> without system); datapoints created later are picked up. With layout object a datapoint and pattern binding publish one JSON object topic per datapoint instead. DP and element names become topic levels percent-encoded like the native namespace ('%', '/', '+', '#' and control characters as %XX).",
       "type": "object",
       "required": ["kind", "type"],
       "properties": {
@@ -127,6 +127,10 @@
           "description": "kind pattern only: dpNames pattern for datapoint names, without system prefix and without '.'. '*' and '?' are wildcards, {a,b} lists alternatives. '*' matches all datapoints of the type. Internal and MMQ datapoints are always filtered out at runtime, whatever the pattern.",
           "$ref": "#/$defs/DpPattern"
         },
+        "layout": {
+          "description": "kind datapoint and pattern only. elements (default): one topic per element. object: one topic per datapoint, the node topic (datapoint) or <node>/<dp> (pattern); the payload is a JSON object in the shape of the datapoint type, struct levels as nested objects and each selected element a leaf with its payload (encoding raw: the bare value). All elements of a datapoint are connected in one dpConnect, so every change publishes the whole object once. Element topics do not apply; ..set accepts a partial object of elements.",
+          "enum": ["elements", "object"]
+        },
         "elements": {
           "description": "kind datapoint and pattern only: selected elements, in display order. Omit to select all value elements of the type (elements added to the type later are picked up by the next apply). The same path may appear twice with different topics.",
           "type": "array",
@@ -144,7 +148,7 @@
           "if": { "properties": { "kind": { "const": "element" } }, "required": ["kind"] },
           "then": {
             "required": ["datapoint", "element"],
-            "properties": { "datapoint": true, "element": true, "pattern": false, "elements": false }
+            "properties": { "datapoint": true, "element": true, "pattern": false, "elements": false, "layout": false }
           }
         },
         {

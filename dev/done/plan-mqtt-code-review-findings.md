@@ -8,10 +8,10 @@ with edge-specific modifications.
 
 ## Status
 
-The items still marked Open or Partially done are tracked in
-[plan-mqtt-inflight-quota-fixes.md](../plans/plan-mqtt-inflight-quota-fixes.md).
+All items from the review are resolved. See also
+[plan-mqtt-inflight-quota-fixes.md](plan-mqtt-inflight-quota-fixes.md).
 
-Last verified against the source on 2026-10-09. Regression tests for the fixes
+Last verified against the source on 2026-10-16. Regression tests for the fixes
 are in `internal/mqtt/review_fixes_test.go`,
 `internal/mqtt/packets/review_fixes_test.go`, `internal/mqtt/listeners/tcp_test.go`
 and `TestStorageHookSelectRetainedSkipsExpired` in `internal/broker/hook_storage_test.go`.
@@ -19,11 +19,11 @@ and `TestStorageHookSelectRetainedSkipsExpired` in `internal/broker/hook_storage
 | Finding | Status |
 |---|---|
 | P0 Truncated v5 SUBSCRIBE panics | **Done** (`packets.go` `SubscribeDecode` bounds-checks the options byte) |
-| P1 Deferred QoS send removes ack state | Open |
-| P1 QoS 2 ack handlers skip state validation | Open |
-| P1 Quota mixed atomic/mutex access | **Partially done**: data race removed through locked getters (`ReceiveQuota`, `SendQuota`, `MaximumSendQuota`); check-then-decrement is still not atomic |
+| P1 Deferred QoS send removes ack state | **Done** (`ClaimNextImmediate` restores normal expiry and keeps packet in `Inflight` until acked) |
+| P1 QoS 2 ack handlers skip state validation | **Done** (`processPuback`, `processPubrec`, `processPubrel`, `processPubcomp` validate stored packet type and adjust only the matching direction's quota) |
+| P1 Quota mixed atomic/mutex access | **Done** (locked getters and atomic `TryReserve*`/`SetOutbound`/`ClaimNextImmediate` reservation methods) |
 | P1 MEMORY retained store retains nothing | **Done** (fixed earlier) |
-| P1 CONNECT has no deadline/client-limit slot | **Partially done**: `Options.ConnectTimeout` (default 10s) closes connections that never send CONNECT; the client-limit slot is still taken only after CONNECT |
+| P1 CONNECT has no deadline/client-limit slot | **Done** (`Options.ConnectTimeout` closes silent sockets; `attachClient` reserves the `MaximumClients` slot before `readConnectionPacket`) |
 | P1 MaxMessageSize not applied | **Done** (fixed earlier, `broker/server.go`) |
 | P1 Topic alias resolved after ACL | **Done** (alias resolved first in `processPublish`; unknown alias disconnects with 0x94 Topic Alias Invalid) |
 | P1 StorageHook persists rejected subscriptions | **Done** (fixed earlier, `hook_storage.go`) |
@@ -43,7 +43,7 @@ and `TestStorageHookSelectRetainedSkipsExpired` in `internal/broker/hook_storage
 
 ## Findings
 
-### P1: Sending a deferred QoS message removes its acknowledgement state
+### P1: Sending a deferred QoS message removes its acknowledgement state — **Done**
 
 `processPacket` sends the next message deferred by a client's MQTT v5 Receive
 Maximum, then deletes that message from `Inflight` immediately.
@@ -71,7 +71,7 @@ Recommendation: keep the packet in `Inflight` after it is first written and
 remove it only in its corresponding acknowledgement handler. Replace the
 negative-expiry "deferred" marker with its normal expiry before sending.
 
-### P1: QoS 2 acknowledgement handlers do not validate state transitions
+### P1: QoS 2 acknowledgement handlers do not validate state transitions — **Done**
 
 `processPubrec`, `processPubrel`, and `processPubcomp` identify a flow only by
 packet ID. They do not require the existing in-flight packet to be in the
@@ -98,7 +98,7 @@ the valid state transition, and adjust only the quota belonging to that flow:
 `receiveQuota` when an inbound QoS flow completes and `sendQuota` when an
 outbound QoS flow completes.
 
-### P1: Quota access mixes mutex-protected writes with atomic reads — **Partially done**
+### P1: Quota access mixes mutex-protected writes with atomic reads — **Done**
 
 The edge change to `Inflight` writes quota fields as ordinary integers while
 holding `quotaMu`. Several server paths read those same fields through

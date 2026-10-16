@@ -442,9 +442,17 @@ func (s *Server) EstablishConnection(listener string, c net.Conn) error {
 // to the server, performs session housekeeping, and reads incoming packets.
 func (s *Server) attachClient(cl *Client, listener string) error {
 	defer s.Listeners.ClientsWg.Done()
+	defer cl.Stop(nil)
+
+	// Atomically reserve a slot as soon as the connection is accepted so that
+	// pending connections waiting for CONNECT also count against MaximumClients.
+	if newCount := atomic.AddInt64(&s.Info.ClientsConnected, 1); newCount > s.Options.Capabilities.MaximumClients {
+		atomic.AddInt64(&s.Info.ClientsConnected, -1)
+		return packets.ErrServerBusy
+	}
+	defer atomic.AddInt64(&s.Info.ClientsConnected, -1)
 
 	go cl.WriteLoop()
-	defer cl.Stop(nil)
 
 	if cl.Net.Conn != nil {
 		_ = cl.Net.Conn.SetDeadline(time.Now().Add(s.Options.ConnectTimeout)) // replaced by the keepalive deadline after CONNECT
@@ -455,19 +463,6 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 	}
 
 	cl.ParseConnect(listener, pk)
-
-	// Atomically reserve a slot before auth/session work to prevent TOCTOU races
-	// when multiple connections arrive simultaneously near the MaximumClients limit.
-	if newCount := atomic.AddInt64(&s.Info.ClientsConnected, 1); newCount > s.Options.Capabilities.MaximumClients {
-		atomic.AddInt64(&s.Info.ClientsConnected, -1)
-		if cl.Properties.ProtocolVersion < 5 {
-			s.SendConnack(cl, packets.ErrServerUnavailable, false, nil)
-		} else {
-			s.SendConnack(cl, packets.ErrServerBusy, false, nil)
-		}
-		return packets.ErrServerBusy
-	}
-	defer atomic.AddInt64(&s.Info.ClientsConnected, -1)
 
 	code := s.validateConnect(cl, pk) // [MQTT-3.1.4-1] [MQTT-3.1.4-2]
 	if code != packets.CodeSuccess {
@@ -812,15 +807,18 @@ func (s *Server) processPacket(cl *Client, pk packets.Packet) error {
 		return err
 	}
 
-	if cl.State.Inflight.Len() > 0 && cl.State.Inflight.SendQuota() > 0 {
-		next, ok := cl.State.Inflight.NextImmediate()
-		if ok {
-			_ = cl.WritePacket(next)
-			if ok := cl.State.Inflight.Delete(next.PacketID); ok {
-				atomic.AddInt64(&s.Info.Inflight, -1)
+	if next, ok := cl.State.Inflight.ClaimNextImmediate(func(p packets.Packet) int64 {
+		if expiry := minimum(s.Options.Capabilities.MaximumMessageExpiryInterval,
+			int64(p.Properties.MessageExpiryInterval)); expiry > 0 {
+			base := p.Created
+			if base <= 0 {
+				base = time.Now().Unix()
 			}
-			cl.State.Inflight.DecreaseSendQuota()
+			return base + expiry
 		}
+		return 0
+	}); ok {
+		_ = cl.WritePacket(next)
 	}
 
 	return nil
@@ -1003,8 +1001,17 @@ func (s *Server) processPublish(cl *Client, pk packets.Packet) error {
 		return nil
 	}
 
-	if pk.FixedHeader.Qos > 0 && cl.State.Inflight.ReceiveQuota() == 0 { // Receive Maximum only limits QoS 1/2
-		return s.DisconnectClient(cl, packets.ErrReceiveMaximum) // ~[MQTT-3.3.4-7] ~[MQTT-3.3.4-8]
+	quotaReserved := false
+	if pk.FixedHeader.Qos > 0 && !cl.Net.Inline {
+		if !cl.State.Inflight.TryReserveReceiveQuota() { // Receive Maximum only limits QoS 1/2
+			return s.DisconnectClient(cl, packets.ErrReceiveMaximum) // ~[MQTT-3.3.4-7] ~[MQTT-3.3.4-8]
+		}
+		quotaReserved = true
+		defer func() {
+			if quotaReserved {
+				cl.State.Inflight.IncreaseReceiveQuota()
+			}
+		}()
 	}
 
 	if !cl.Net.Inline && !s.hooks.OnACLCheck(cl, pk.TopicName, true) {
@@ -1085,7 +1092,6 @@ func (s *Server) processPublish(cl *Client, pk packets.Packet) error {
 		return nil
 	}
 
-	cl.State.Inflight.DecreaseReceiveQuota()
 	ack := s.buildAck(pk.PacketID, packets.Puback, 0, pk.Properties, packets.CodeSuccess) // [MQTT-4.3.2-4]
 	if pk.FixedHeader.Qos == 2 {
 		ack = s.buildAck(pk.PacketID, packets.Pubrec, 0, pk.Properties, packets.CodeSuccess) // [MQTT-3.3.4-1] [MQTT-4.3.3-8]
@@ -1094,6 +1100,9 @@ func (s *Server) processPublish(cl *Client, pk packets.Packet) error {
 	if ok := cl.State.Inflight.Set(ack); ok {
 		atomic.AddInt64(&s.Info.Inflight, 1)
 		s.hooks.OnQosPublish(cl, ack, ack.Created, 0)
+	}
+	if pk.FixedHeader.Qos == 2 {
+		quotaReserved = false // released when PUBREL completes or aborts the inbound QoS 2 flow
 	}
 
 	err = cl.WritePacket(ack)
@@ -1106,6 +1115,7 @@ func (s *Server) processPublish(cl *Client, pk packets.Packet) error {
 			atomic.AddInt64(&s.Info.Inflight, -1)
 		}
 		cl.State.Inflight.IncreaseReceiveQuota()
+		quotaReserved = false
 		s.hooks.OnQosComplete(cl, ack)
 	}
 
@@ -1327,17 +1337,15 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 		}
 
 		out.PacketID = uint16(i) // [MQTT-2.2.1-4]
-		sentQuota := cl.State.Inflight.SendQuota()
-
-		if ok := cl.State.Inflight.Set(out); ok { // [MQTT-4.3.2-3] [MQTT-4.3.3-3]
+		added, deferred := cl.State.Inflight.SetOutbound(out)
+		if deferred {
+			out.Expiry = -1
+		}
+		if added { // [MQTT-4.3.2-3] [MQTT-4.3.3-3]
 			atomic.AddInt64(&s.Info.Inflight, 1)
 			s.hooks.OnQosPublish(cl, out, out.Created, 0)
-			cl.State.Inflight.DecreaseSendQuota()
 		}
-
-		if sentQuota == 0 && cl.State.Inflight.MaximumSendQuota() > 0 {
-			out.Expiry = -1
-			cl.State.Inflight.Set(out)
+		if deferred {
 			return out, nil
 		}
 	}
@@ -1353,7 +1361,9 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 		atomic.AddInt64(&s.Info.MessagesDropped, 1)
 		cl.ops.hooks.OnPublishDropped(cl, pk)
 		if out.FixedHeader.Qos > 0 {
-			cl.State.Inflight.Delete(out.PacketID) // packet was dropped due to irregular circumstances, so rollback inflight.
+			if cl.State.Inflight.Delete(out.PacketID) { // packet was dropped due to irregular circumstances, so rollback inflight.
+				atomic.AddInt64(&s.Info.Inflight, -1)
+			}
 			cl.State.Inflight.IncreaseSendQuota()
 		}
 		return out, packets.ErrPendingClientWritesExceeded
@@ -1424,7 +1434,8 @@ func (s *Server) buildAck(packetID uint16, pkt, qos byte, properties packets.Pro
 
 // processPuback processes a Puback packet, denoting completion of a QOS 1 packet sent from the server.
 func (s *Server) processPuback(cl *Client, pk packets.Packet) error {
-	if _, ok := cl.State.Inflight.Get(pk.PacketID); !ok {
+	pki, ok := cl.State.Inflight.Get(pk.PacketID)
+	if !ok || pki.FixedHeader.Type != packets.Publish || pki.FixedHeader.Qos != 1 || pki.Expiry < 0 {
 		return nil // omit, but would be packets.ErrPacketIdentifierNotFound
 	}
 
@@ -1439,12 +1450,14 @@ func (s *Server) processPuback(cl *Client, pk packets.Packet) error {
 
 // processPubrec processes a Pubrec packet, denoting receipt of a QOS 2 packet sent from the server.
 func (s *Server) processPubrec(cl *Client, pk packets.Packet) error {
-	if _, ok := cl.State.Inflight.Get(pk.PacketID); !ok { // [MQTT-4.3.3-7] [MQTT-4.3.3-13]
+	pki, ok := cl.State.Inflight.Get(pk.PacketID)
+	if !ok || pki.FixedHeader.Type != packets.Publish || pki.FixedHeader.Qos != 2 || pki.Expiry < 0 { // [MQTT-4.3.3-7] [MQTT-4.3.3-13]
 		return cl.WritePacket(s.buildAck(pk.PacketID, packets.Pubrel, 1, pk.Properties, packets.ErrPacketIdentifierNotFound))
 	}
 
 	if pk.ReasonCode >= packets.ErrUnspecifiedError.Code || !pk.ReasonCodeValid() { // [MQTT-4.3.3-4]
 		if ok := cl.State.Inflight.Delete(pk.PacketID); ok {
+			cl.State.Inflight.IncreaseSendQuota()
 			atomic.AddInt64(&s.Info.Inflight, -1)
 		}
 		cl.ops.hooks.OnQosDropped(cl, pk)
@@ -1452,19 +1465,20 @@ func (s *Server) processPubrec(cl *Client, pk packets.Packet) error {
 	}
 
 	ack := s.buildAck(pk.PacketID, packets.Pubrel, 1, pk.Properties, packets.CodeSuccess) // [MQTT-4.3.3-4] ![MQTT-4.3.3-6]
-	cl.State.Inflight.DecreaseReceiveQuota()                                              // -1 RECV QUOTA
 	cl.State.Inflight.Set(ack)                                                            // [MQTT-4.3.3-5]
 	return cl.WritePacket(ack)
 }
 
 // processPubrel processes a Pubrel packet, denoting completion of a QOS 2 packet sent from the client.
 func (s *Server) processPubrel(cl *Client, pk packets.Packet) error {
-	if _, ok := cl.State.Inflight.Get(pk.PacketID); !ok { // [MQTT-4.3.3-7] [MQTT-4.3.3-13]
+	pki, ok := cl.State.Inflight.Get(pk.PacketID)
+	if !ok || pki.FixedHeader.Type != packets.Pubrec { // [MQTT-4.3.3-7] [MQTT-4.3.3-13]
 		return cl.WritePacket(s.buildAck(pk.PacketID, packets.Pubcomp, 0, pk.Properties, packets.ErrPacketIdentifierNotFound))
 	}
 
 	if pk.ReasonCode >= packets.ErrUnspecifiedError.Code || !pk.ReasonCodeValid() { // [MQTT-4.3.3-9]
 		if ok := cl.State.Inflight.Delete(pk.PacketID); ok {
+			cl.State.Inflight.IncreaseReceiveQuota()
 			atomic.AddInt64(&s.Info.Inflight, -1)
 		}
 		cl.ops.hooks.OnQosDropped(cl, pk)
@@ -1479,9 +1493,8 @@ func (s *Server) processPubrel(cl *Client, pk packets.Packet) error {
 		return err
 	}
 
-	cl.State.Inflight.IncreaseReceiveQuota()             // +1 RECV QUOTA
-	cl.State.Inflight.IncreaseSendQuota()                // +1 SENT QUOTA
 	if ok := cl.State.Inflight.Delete(pk.PacketID); ok { // [MQTT-4.3.3-12]
+		cl.State.Inflight.IncreaseReceiveQuota() // +1 RECV QUOTA
 		atomic.AddInt64(&s.Info.Inflight, -1)
 		s.hooks.OnQosComplete(cl, pk)
 	}
@@ -1491,10 +1504,14 @@ func (s *Server) processPubrel(cl *Client, pk packets.Packet) error {
 
 // processPubcomp processes a Pubcomp packet, denoting completion of a QOS 2 packet sent from the server.
 func (s *Server) processPubcomp(cl *Client, pk packets.Packet) error {
-	// regardless of whether the pubcomp is a success or failure, we end the qos flow, delete inflight, and restore the quotas.
-	cl.State.Inflight.IncreaseReceiveQuota() // +1 RECV QUOTA
-	cl.State.Inflight.IncreaseSendQuota()    // +1 SENT QUOTA
+	pki, ok := cl.State.Inflight.Get(pk.PacketID)
+	if !ok || pki.FixedHeader.Type != packets.Pubrel {
+		return nil
+	}
+
+	// regardless of whether the pubcomp is a success or failure, we end the qos flow, delete inflight, and restore the send quota.
 	if ok := cl.State.Inflight.Delete(pk.PacketID); ok {
+		cl.State.Inflight.IncreaseSendQuota() // +1 SENT QUOTA
 		atomic.AddInt64(&s.Info.Inflight, -1)
 		s.hooks.OnQosComplete(cl, pk)
 	}
@@ -1723,7 +1740,11 @@ func (s *Server) publishSysTopics() {
 	atomic.StoreInt64(&s.Info.Time, time.Now().Unix())
 	atomic.StoreInt64(&s.Info.Uptime, time.Now().Unix()-atomic.LoadInt64(&s.Info.Started))
 	atomic.StoreInt64(&s.Info.ClientsTotal, int64(s.Clients.Len()))
-	atomic.StoreInt64(&s.Info.ClientsDisconnected, atomic.LoadInt64(&s.Info.ClientsTotal)-atomic.LoadInt64(&s.Info.ClientsConnected))
+	disconnected := atomic.LoadInt64(&s.Info.ClientsTotal) - atomic.LoadInt64(&s.Info.ClientsConnected)
+	if disconnected < 0 {
+		disconnected = 0
+	}
+	atomic.StoreInt64(&s.Info.ClientsDisconnected, disconnected)
 
 	info := s.Info.Clone()
 	topics := map[string]string{

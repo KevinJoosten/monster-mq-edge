@@ -4,7 +4,7 @@ Created: 2026-10-09
 
 These are the items left open from the 2026-08-12 code review. The full findings
 and the fixes already made are in
-[plan-mqtt-code-review-findings.md](../done/plan-mqtt-code-review-findings.md).
+[plan-mqtt-code-review-findings.md](plan-mqtt-code-review-findings.md).
 All locations are in `internal/mqtt/`.
 
 The first three items involve the same state: `Inflight` entries plus the send

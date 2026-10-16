@@ -79,6 +79,9 @@ func (i *Inflight) GetAll(immediate bool) []packets.Packet {
 	}
 
 	sort.Slice(m, func(i, j int) bool {
+		if m[i].Created == m[j].Created {
+			return m[i].PacketID < m[j].PacketID
+		}
 		return uint16(m[i].Created) < uint16(m[j].Created)
 	})
 
@@ -95,6 +98,70 @@ func (i *Inflight) NextImmediate() (packets.Packet, bool) {
 	}
 
 	return packets.Packet{}, false
+}
+
+// SetOutbound atomically checks and reserves send quota (when a maximum send quota is configured)
+// and stores an outbound QoS > 0 packet in the inflight map. If the send quota is exhausted,
+// the packet is marked as deferred (Expiry = -1) before storing.
+func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
+	i.Lock()
+	defer i.Unlock()
+	i.quotaMu.Lock()
+	defer i.quotaMu.Unlock()
+
+	if i.maximumSendQuota > 0 {
+		if i.sendQuota <= 0 {
+			m.Expiry = -1
+			deferred = true
+		} else {
+			i.sendQuota--
+		}
+	}
+
+	_, existed := i.internal[m.PacketID]
+	i.internal[m.PacketID] = m
+	return !existed, deferred
+}
+
+// ClaimNextImmediate atomically finds the next deferred inflight packet (Expiry < 0),
+// reserves one unit of send quota, restores the packet's normal expiry using expiryFn,
+// updates it in-place in the inflight map, and returns it.
+func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (packets.Packet, bool) {
+	i.Lock()
+	defer i.Unlock()
+	i.quotaMu.Lock()
+	defer i.quotaMu.Unlock()
+
+	if i.maximumSendQuota > 0 && i.sendQuota <= 0 {
+		return packets.Packet{}, false
+	}
+
+	var next packets.Packet
+	found := false
+	for _, v := range i.internal {
+		if v.Expiry >= 0 {
+			continue
+		}
+		if !found || uint16(v.Created) < uint16(next.Created) || (v.Created == next.Created && v.PacketID < next.PacketID) {
+			next = v
+			found = true
+		}
+	}
+	if !found {
+		return packets.Packet{}, false
+	}
+
+	if i.maximumSendQuota > 0 {
+		i.sendQuota--
+	}
+	next.Expiry = 0
+	if expiryFn != nil {
+		if exp := expiryFn(next); exp > 0 {
+			next.Expiry = exp
+		}
+	}
+	i.internal[next.PacketID] = next
+	return next, true
 }
 
 // Delete removes an in-flight message from the map. Returns true if the message existed.
@@ -127,6 +194,12 @@ func (i *Inflight) MaximumSendQuota() int32 {
 	i.quotaMu.Lock()
 	defer i.quotaMu.Unlock()
 	return i.maximumSendQuota
+}
+
+// TryReserveReceiveQuota atomically checks and reduces the receive quota by 1.
+// Returns true if quota was reserved, false if quota was already 0.
+func (i *Inflight) TryReserveReceiveQuota() bool {
+	return i.DecreaseReceiveQuota()
 }
 
 // DecreaseReceiveQuota reduces the receive quota by 1.
@@ -162,6 +235,12 @@ func (i *Inflight) ResetReceiveQuota(n int32) {
 
 	i.maximumReceiveQuota = n
 	i.receiveQuota = n
+}
+
+// TryReserveSendQuota atomically checks and reduces the send quota by 1.
+// Returns true if quota was reserved, false if quota was already 0.
+func (i *Inflight) TryReserveSendQuota() bool {
+	return i.DecreaseSendQuota()
 }
 
 // DecreaseSendQuota reduces the send quota by 1.

@@ -2,8 +2,11 @@ package listeners
 
 import (
 	"crypto/tls"
+	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"log/slog"
 )
@@ -25,6 +28,21 @@ type EstablishFn func(id string, c net.Conn) error
 
 // CloseFn is a callback function for closing all listener clients.
 type CloseFn func(id string)
+
+// acceptFailed handles an Accept error and reports whether Serve should stop.
+// It stops only once the listener is closed; any other error (e.g. EMFILE when
+// the process hits its fd limit) is logged and retried with exponential backoff,
+// 5ms doubling up to 1s, like net/http.Server.Serve. The cap also bounds the
+// warning rate to one per second. Callers reset *delay to 0 after a good Accept.
+func acceptFailed(err error, end *uint32, delay *time.Duration, log *slog.Logger) bool {
+	if atomic.LoadUint32(end) == 1 || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	*delay = min(max(*delay*2, 5*time.Millisecond), time.Second)
+	log.Warn("accept failed, retrying", "error", err, "retry_in", *delay)
+	time.Sleep(*delay)
+	return false
+}
 
 // Listener is an interface for network listeners. A network listener listens
 // for incoming client connections and adds them to the server.

@@ -119,6 +119,8 @@ type fakeTransport struct {
 	connected bool
 	queued    bool // models the library queue: accepts while disconnected
 	err       error
+	failAt    int // one-based Publish call to fail once
+	calls     int
 	published []fakePublish
 	closed    bool
 	closeGate chan struct{} // when set, Close waits for it
@@ -127,6 +129,10 @@ type fakeTransport struct {
 func (f *fakeTransport) Publish(_ context.Context, topic string, msg stores.BrokerMessage, qos byte, retain bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.calls++
+	if f.calls == f.failAt {
+		return errTransportDown
+	}
 	if f.err != nil {
 		return f.err
 	}
@@ -820,5 +826,44 @@ func TestOutboundMultiplePublishAddressesSameLocalTopic(t *testing.T) {
 	got := []string{pubs[0].topic, pubs[1].topic}
 	if want := []string{"cloud-a/line1/temp", "cloud-b/line1/temp"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("remote topics = %v, want %v", got, want)
+	}
+}
+
+func TestBufferedOutboundRetryResumesAtFailedPublishAddress(t *testing.T) {
+	tr := &fakeTransport{connected: true, failAt: 2}
+	c := NewConnector("to-remote", Config{BrokerURL: "tcp://remote:1883", BufferEnabled: true, Addresses: []Address{
+		{Mode: "PUBLISH", LocalTopic: "plant/#", RemoteTopic: "cloud-a", RemovePath: true},
+		{Mode: "PUBLISH", LocalTopic: "plant/#", RemoteTopic: "cloud-b", RemovePath: true},
+	}}, (&recorder{}).publish, newFakeBus(), discard)
+	c.newTransport = func(_ context.Context, _ transportOptions) (transport, error) {
+		return tr, nil
+	}
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Stop)
+
+	c.queue.Add(stores.BrokerMessage{TopicName: "plant/line1/temp", Payload: []byte("42")})
+	deadline := time.Now().Add(5 * time.Second)
+	for c.queue.Size() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("buffer did not drain; sent=%v", tr.sent())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	pubs := tr.sent()
+	if len(pubs) != 2 {
+		t.Fatalf("remote publishes = %v, want exactly two successful mappings", pubs)
+	}
+	got := []string{pubs[0].topic, pubs[1].topic}
+	if want := []string{"cloud-a/line1/temp", "cloud-b/line1/temp"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("remote topics = %v, want %v", got, want)
+	}
+	tr.mu.Lock()
+	calls := tr.calls
+	tr.mu.Unlock()
+	if calls != 3 {
+		t.Fatalf("Publish calls = %d, want 3 (one failed and two successful)", calls)
 	}
 }

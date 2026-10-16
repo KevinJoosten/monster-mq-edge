@@ -526,6 +526,7 @@ func (c *Connector) startQueueWriter(ctx context.Context) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
+		progress := []int(nil)
 		for {
 			select {
 			case <-ctx.Done():
@@ -552,23 +553,29 @@ func (c *Connector) startQueueWriter(ctx context.Context) {
 					"capacity", q.Capacity(),
 				)
 			}
+			if len(progress) != len(messages) {
+				progress = make([]int, len(messages))
+			}
 			allPublished := true
 		publishLoop:
-			for _, message := range messages {
+			for i, message := range messages {
 				matches := matchingAddresses(c.cfg.Addresses, message.TopicName)
 				if len(matches) == 0 {
 					c.logger.Warn("dropping buffered bridge message; no publish address matches anymore", "name", c.name, "topic", message.TopicName)
 					continue
 				}
-				for _, addr := range matches {
-					if !c.publishLocalMessage(addr, message, true) {
+				for j := progress[i]; j < len(matches); j++ {
+					if !c.publishLocalMessage(matches[j], message, true) {
+						progress[i] = j
 						allPublished = false
 						break publishLoop
 					}
+					progress[i] = j + 1
 				}
 			}
 			if allPublished {
 				q.PollCommit()
+				progress = nil
 				if c.logger != nil {
 					c.logger.Debug("bridge queue flush committed",
 						"name", c.name,

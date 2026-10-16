@@ -1419,6 +1419,20 @@ type MqttClientConnectionConfig {
     receiveMaximum: Int
     maximumPacketSize: Long
     topicAliasMaximum: Int
+    # Path (on the broker host) to a PEM file with trusted CA certificates
+    tlsCaCertPath: String
+    # Path to the client certificate for mutual TLS: PEM certificate (chain) or PKCS12 bundle
+    tlsClientCertPath: String
+    # Path to the PEM private key for the client certificate (not used for PKCS12)
+    tlsClientKeyPath: String
+    # Whether a private key password is stored (the password itself is never returned)
+    tlsClientKeyPasswordSet: Boolean!
+    # Client key format: PEM or PKCS12
+    tlsClientKeyFormat: String!
+    # TLS ALPN protocols
+    tlsAlpnProtocols: [String!]
+    # TLS server name (SNI) and hostname used for certificate verification
+    tlsServerName: String
 }
 
 type MqttClient {
@@ -1477,6 +1491,20 @@ input MqttClientConnectionConfigInput {
     receiveMaximum: Int
     maximumPacketSize: Long
     topicAliasMaximum: Int
+    # Path (on the broker host) to a PEM file with trusted CA certificates. Replaces the default trust store when set.
+    tlsCaCertPath: String
+    # Path to the client certificate for mutual TLS: PEM certificate (chain) or PKCS12 bundle, see tlsClientKeyFormat
+    tlsClientCertPath: String
+    # Path to the PEM private key for the client certificate (not used for PKCS12)
+    tlsClientKeyPath: String
+    # Password of the private key or PKCS12 bundle. Null keeps the stored value, empty string clears it.
+    tlsClientKeyPassword: String
+    # Client key format: PEM or PKCS12 (default: PEM)
+    tlsClientKeyFormat: String = "PEM"
+    # TLS ALPN protocols, e.g. ["x-amzn-mqtt-ca"] for AWS IoT Core on port 443
+    tlsAlpnProtocols: [String!]
+    # TLS server name (SNI) and hostname used for certificate verification, defaults to the broker URL host
+    tlsServerName: String
 }
 
 input MqttClientInput {
@@ -3299,6 +3327,20 @@ func (ec *executionContext) childFields_MqttClientConnectionConfig(ctx context.C
 		return ec.fieldContext_MqttClientConnectionConfig_maximumPacketSize(ctx, field)
 	case "topicAliasMaximum":
 		return ec.fieldContext_MqttClientConnectionConfig_topicAliasMaximum(ctx, field)
+	case "tlsCaCertPath":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsCaCertPath(ctx, field)
+	case "tlsClientCertPath":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsClientCertPath(ctx, field)
+	case "tlsClientKeyPath":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyPath(ctx, field)
+	case "tlsClientKeyPasswordSet":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyPasswordSet(ctx, field)
+	case "tlsClientKeyFormat":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyFormat(ctx, field)
+	case "tlsAlpnProtocols":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsAlpnProtocols(ctx, field)
+	case "tlsServerName":
+		return ec.fieldContext_MqttClientConnectionConfig_tlsServerName(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type MqttClientConnectionConfig", field.Name)
 }
@@ -15210,6 +15252,167 @@ func (ec *executionContext) _MqttClientConnectionConfig_topicAliasMaximum(ctx co
 }
 func (ec *executionContext) fieldContext_MqttClientConnectionConfig_topicAliasMaximum(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type Int does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsCaCertPath(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsCaCertPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSCaCertPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsCaCertPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsClientCertPath(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsClientCertPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSClientCertPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsClientCertPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsClientKeyPath(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyPath(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSClientKeyPath, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsClientKeyPath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsClientKeyPasswordSet(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyPasswordSet(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSClientKeyPasswordSet, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsClientKeyPasswordSet(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsClientKeyFormat(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsClientKeyFormat(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSClientKeyFormat, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsClientKeyFormat(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsAlpnProtocols(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsAlpnProtocols(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSAlpnProtocols, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalOString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsAlpnProtocols(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _MqttClientConnectionConfig_tlsServerName(ctx context.Context, field graphql.CollectedField, obj *MqttClientConnectionConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_MqttClientConnectionConfig_tlsServerName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TLSServerName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_MqttClientConnectionConfig_tlsServerName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("MqttClientConnectionConfig", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
 func (ec *executionContext) _MqttClientMetrics_messagesIn(ctx context.Context, field graphql.CollectedField, obj *MqttClientMetrics) (ret graphql.Marshaler) {
@@ -34007,8 +34210,11 @@ func (ec *executionContext) unmarshalInputMqttClientConnectionConfigInput(ctx co
 	if _, present := asMap["protocolVersion"]; !present {
 		asMap["protocolVersion"] = 4
 	}
+	if _, present := asMap["tlsClientKeyFormat"]; !present {
+		asMap["tlsClientKeyFormat"] = "PEM"
+	}
 
-	fieldsInOrder := [...]string{"brokerUrl", "username", "password", "clientId", "cleanSession", "keepAlive", "reconnectDelay", "connectionTimeout", "addresses", "bufferEnabled", "bufferImplementation", "bufferSize", "persistBuffer", "deleteOldestMessages", "sslVerifyCertificate", "protocolVersion", "sessionExpiryInterval", "receiveMaximum", "maximumPacketSize", "topicAliasMaximum"}
+	fieldsInOrder := [...]string{"brokerUrl", "username", "password", "clientId", "cleanSession", "keepAlive", "reconnectDelay", "connectionTimeout", "addresses", "bufferEnabled", "bufferImplementation", "bufferSize", "persistBuffer", "deleteOldestMessages", "sslVerifyCertificate", "protocolVersion", "sessionExpiryInterval", "receiveMaximum", "maximumPacketSize", "topicAliasMaximum", "tlsCaCertPath", "tlsClientCertPath", "tlsClientKeyPath", "tlsClientKeyPassword", "tlsClientKeyFormat", "tlsAlpnProtocols", "tlsServerName"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -34155,6 +34361,55 @@ func (ec *executionContext) unmarshalInputMqttClientConnectionConfigInput(ctx co
 				return it, err
 			}
 			it.TopicAliasMaximum = data
+		case "tlsCaCertPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsCaCertPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSCaCertPath = data
+		case "tlsClientCertPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsClientCertPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSClientCertPath = data
+		case "tlsClientKeyPath":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsClientKeyPath"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSClientKeyPath = data
+		case "tlsClientKeyPassword":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsClientKeyPassword"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSClientKeyPassword = data
+		case "tlsClientKeyFormat":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsClientKeyFormat"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSClientKeyFormat = data
+		case "tlsAlpnProtocols":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsAlpnProtocols"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSAlpnProtocols = data
+		case "tlsServerName":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("tlsServerName"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TLSServerName = data
 		}
 	}
 	return it, nil
@@ -39713,6 +39968,41 @@ func (ec *executionContext) _MqttClientConnectionConfig(ctx context.Context, sel
 			}
 		case "topicAliasMaximum":
 			out.Values[i] = ec._MqttClientConnectionConfig_topicAliasMaximum(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tlsCaCertPath":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsCaCertPath(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tlsClientCertPath":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsClientCertPath(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tlsClientKeyPath":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsClientKeyPath(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tlsClientKeyPasswordSet":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsClientKeyPasswordSet(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tlsClientKeyFormat":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsClientKeyFormat(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "tlsAlpnProtocols":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsAlpnProtocols(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "tlsServerName":
+			out.Values[i] = ec._MqttClientConnectionConfig_tlsServerName(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}

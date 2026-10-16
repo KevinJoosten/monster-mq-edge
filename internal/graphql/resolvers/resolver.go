@@ -2532,7 +2532,11 @@ func (r *sessionMutationsResolver) RemoveSessions(ctx context.Context, _ *genera
 }
 
 func (r *mqttClientMutationsResolver) Create(ctx context.Context, _ *generated.MqttClientMutations, input generated.MqttClientInput) (*generated.MqttClientResult, error) {
-	cfgBytes, _ := json.Marshal(mqttClientConfigInputToMap(input.Config))
+	cfgMap := mqttClientConfigInputToMap(input.Config)
+	if errs := validateMqttClientConfig(cfgMap); len(errs) > 0 {
+		return &generated.MqttClientResult{Success: false, Errors: errs}, nil
+	}
+	cfgBytes, _ := json.Marshal(cfgMap)
 	d := stores.DeviceConfig{
 		Name: input.Name, Namespace: input.Namespace, NodeID: input.NodeID,
 		Type: "MQTT_CLIENT", Enabled: boolPtr(input.Enabled, true), Config: string(cfgBytes),
@@ -2557,6 +2561,9 @@ func (r *mqttClientMutationsResolver) Update(ctx context.Context, obj *generated
 	}
 
 	cfg := mqttClientConfigInputToMergedMap(input.Config, existing.Config)
+	if errs := validateMqttClientConfig(cfg); len(errs) > 0 {
+		return &generated.MqttClientResult{Success: false, Errors: errs}, nil
+	}
 	cfgBytes, _ := json.Marshal(cfg)
 
 	d := stores.DeviceConfig{
@@ -2779,7 +2786,61 @@ func mqttClientConfigInputToMap(in *generated.MqttClientConnectionConfigInput) m
 	if in.TopicAliasMaximum != nil {
 		m["topicAliasMaximum"] = *in.TopicAliasMaximum
 	}
+	for k, v := range tlsStringInputs(in) {
+		if v != nil && strings.TrimSpace(*v) != "" {
+			m[k] = strings.TrimSpace(*v)
+		}
+	}
+	m["tlsClientKeyFormat"] = strings.ToUpper(stringPtr(in.TLSClientKeyFormat, "PEM"))
+	if len(in.TLSAlpnProtocols) > 0 {
+		m["tlsAlpnProtocols"] = in.TLSAlpnProtocols
+	}
 	return m
+}
+
+// tlsStringInputs are the string tls* inputs where null keeps the stored value
+// on update and "" clears it, as in MonsterMQ Core.
+func tlsStringInputs(in *generated.MqttClientConnectionConfigInput) map[string]*string {
+	return map[string]*string{
+		"tlsCaCertPath":        in.TLSCaCertPath,
+		"tlsClientCertPath":    in.TLSClientCertPath,
+		"tlsClientKeyPath":     in.TLSClientKeyPath,
+		"tlsClientKeyPassword": in.TLSClientKeyPassword,
+		"tlsServerName":        in.TLSServerName,
+	}
+}
+
+// mergeTLSForUpdate mirrors Core's mergeMqttClientTlsForUpdate.
+func mergeTLSForUpdate(cfg, prev map[string]any, in *generated.MqttClientConnectionConfigInput) {
+	if in == nil {
+		return
+	}
+	for k, v := range tlsStringInputs(in) {
+		if old, ok := prev[k]; v == nil && ok {
+			cfg[k] = old
+		}
+	}
+	if old, ok := prev["tlsAlpnProtocols"]; in.TLSAlpnProtocols == nil && ok {
+		cfg["tlsAlpnProtocols"] = old
+	}
+	if asString(cfg["tlsClientCertPath"]) == "" {
+		delete(cfg, "tlsClientKeyPassword")
+	}
+	// An older dashboard sends the default PEM and no paths: keep a stored PKCS12.
+	if old := asString(prev["tlsClientKeyFormat"]); strings.EqualFold(old, "PKCS12") && cfg["tlsClientKeyFormat"] == "PEM" &&
+		in.TLSClientCertPath == nil && in.TLSClientKeyPath == nil {
+		cfg["tlsClientKeyFormat"] = old
+	}
+}
+
+// validateMqttClientConfig applies MonsterMQ Core's bridge config rules.
+func validateMqttClientConfig(cfg map[string]any) []string {
+	b, _ := json.Marshal(cfg)
+	var c mqttclient.Config
+	if err := json.Unmarshal(b, &c); err != nil {
+		return []string{err.Error()}
+	}
+	return mqttclient.ValidateConfig(c)
 }
 
 func mqttClientConfigInputToMergedMap(in *generated.MqttClientConnectionConfigInput, existingJSON string) map[string]any {
@@ -2806,6 +2867,7 @@ func mqttClientConfigInputToMergedMap(in *generated.MqttClientConnectionConfigIn
 	if prev, ok := prevCfg["redundancy"]; ok {
 		cfg["redundancy"] = prev
 	}
+	mergeTLSForUpdate(cfg, prevCfg, in)
 	return cfg
 }
 
@@ -2861,6 +2923,23 @@ func mapToConnectionConfig(m map[string]any) *generated.MqttClientConnectionConf
 	if v, ok := m["topicAliasMaximum"]; ok {
 		tam := asInt(v, 0)
 		c.TopicAliasMaximum = &tam
+	}
+	optional := func(k string) *string {
+		if v := asString(m[k]); v != "" {
+			return &v
+		}
+		return nil
+	}
+	c.TLSCaCertPath = optional("tlsCaCertPath")
+	c.TLSClientCertPath = optional("tlsClientCertPath")
+	c.TLSClientKeyPath = optional("tlsClientKeyPath")
+	c.TLSServerName = optional("tlsServerName")
+	c.TLSClientKeyPasswordSet = asString(m["tlsClientKeyPassword"]) != ""
+	c.TLSClientKeyFormat = strings.ToUpper(asStringDefault(m["tlsClientKeyFormat"], "PEM"))
+	if raw, ok := m["tlsAlpnProtocols"].([]any); ok {
+		for _, p := range raw {
+			c.TLSAlpnProtocols = append(c.TLSAlpnProtocols, asString(p))
+		}
 	}
 	c.Addresses = []*generated.MqttClientAddress{}
 	if raw, ok := m["addresses"].([]any); ok {

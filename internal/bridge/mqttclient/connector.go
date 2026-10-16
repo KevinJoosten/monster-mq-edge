@@ -51,6 +51,16 @@ type Config struct {
 	ProtocolVersion int `json:"protocolVersion,omitempty"`
 	// Redundancy is the component mode of contract C6: ALWAYS (default), HOT_STANDBY or COLD_STANDBY.
 	Redundancy string `json:"redundancy,omitempty"`
+
+	// TLS, as MonsterMQ Core's MqttClientConnectionConfig (issue #20).
+	SslVerifyCertificate *bool    `json:"sslVerifyCertificate,omitempty"`
+	TlsCaCertPath        string   `json:"tlsCaCertPath,omitempty"`
+	TlsClientCertPath    string   `json:"tlsClientCertPath,omitempty"`
+	TlsClientKeyPath     string   `json:"tlsClientKeyPath,omitempty"`
+	TlsClientKeyPassword string   `json:"tlsClientKeyPassword,omitempty"`
+	TlsClientKeyFormat   string   `json:"tlsClientKeyFormat,omitempty"`
+	TlsAlpnProtocols     []string `json:"tlsAlpnProtocols,omitempty"`
+	TlsServerName        string   `json:"tlsServerName,omitempty"`
 }
 
 // Standby reports whether the bridge has a HOT_STANDBY or COLD_STANDBY mode.
@@ -190,6 +200,10 @@ func (c *Connector) LatestMetrics() MetricsSnapshot {
 
 // Start dials the remote broker and registers inbound/outbound forwarders.
 func (c *Connector) Start(ctx context.Context) error {
+	if errs := c.cfg.tlsErrors(); len(errs) > 0 {
+		// A config error is not retried, as in MonsterMQ Core.
+		return fmt.Errorf("Invalid MQTT client configuration: %s", strings.Join(errs, "; "))
+	}
 	u, err := parseBrokerURL(c.cfg.BrokerURL)
 	if err != nil {
 		return fmt.Errorf("bridge %s: %w", c.name, err)
@@ -200,7 +214,11 @@ func (c *Connector) Start(ctx context.Context) error {
 	}
 	var tlsCfg *tls.Config
 	if isTLSScheme(u) {
-		tlsCfg = &tls.Config{MinVersion: tls.VersionTLS12}
+		if tlsCfg, err = buildTLSConfig(c.cfg); err != nil {
+			// Files are read again on every connection attempt: one that is
+			// missing now (not yet provisioned, being renewed) is retried.
+			c.logger.Warn("Invalid MQTT client TLS configuration", "name", c.name, "err", err)
+		}
 	}
 	if err := c.initQueue(); err != nil {
 		return err

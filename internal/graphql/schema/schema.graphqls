@@ -489,6 +489,20 @@ type MqttClientConnectionConfig {
     receiveMaximum: Int
     maximumPacketSize: Long
     topicAliasMaximum: Int
+    # Path (on the broker host) to a PEM file with trusted CA certificates
+    tlsCaCertPath: String
+    # Path to the client certificate for mutual TLS: PEM certificate (chain) or PKCS12 bundle
+    tlsClientCertPath: String
+    # Path to the PEM private key for the client certificate (not used for PKCS12)
+    tlsClientKeyPath: String
+    # Whether a private key password is stored (the password itself is never returned)
+    tlsClientKeyPasswordSet: Boolean!
+    # Client key format: PEM or PKCS12
+    tlsClientKeyFormat: String!
+    # TLS ALPN protocols
+    tlsAlpnProtocols: [String!]
+    # TLS server name (SNI) and hostname used for certificate verification
+    tlsServerName: String
 }
 
 type MqttClient {
@@ -547,6 +561,20 @@ input MqttClientConnectionConfigInput {
     receiveMaximum: Int
     maximumPacketSize: Long
     topicAliasMaximum: Int
+    # Path (on the broker host) to a PEM file with trusted CA certificates. Replaces the default trust store when set.
+    tlsCaCertPath: String
+    # Path to the client certificate for mutual TLS: PEM certificate (chain) or PKCS12 bundle, see tlsClientKeyFormat
+    tlsClientCertPath: String
+    # Path to the PEM private key for the client certificate (not used for PKCS12)
+    tlsClientKeyPath: String
+    # Password of the private key or PKCS12 bundle. Null keeps the stored value, empty string clears it.
+    tlsClientKeyPassword: String
+    # Client key format: PEM or PKCS12 (default: PEM)
+    tlsClientKeyFormat: String = "PEM"
+    # TLS ALPN protocols, e.g. ["x-amzn-mqtt-ca"] for AWS IoT Core on port 443
+    tlsAlpnProtocols: [String!]
+    # TLS server name (SNI) and hostname used for certificate verification, defaults to the broker URL host
+    tlsServerName: String
 }
 
 input MqttClientInput {

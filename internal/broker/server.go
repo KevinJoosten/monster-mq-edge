@@ -34,6 +34,7 @@ import (
 	"monstermq.io/edge/internal/metrics"
 	"monstermq.io/edge/internal/oahost"
 	"monstermq.io/edge/internal/peerlink"
+	"monstermq.io/edge/internal/prometheus"
 	"monstermq.io/edge/internal/pubsub"
 	"monstermq.io/edge/internal/redfish"
 	"monstermq.io/edge/internal/restapi"
@@ -71,6 +72,7 @@ type Server struct {
 	scripts     *scripting.Manager
 	gqlSrv      *gql.Server
 	mcpSrv      *mcp.Server
+	prom        *prometheus.Server
 	redfishMgr  *redfish.Manager
 	hostMonitor *hostinfo.Collector
 	hmiSync     *hmi.SyncService
@@ -87,6 +89,7 @@ type Server struct {
 	// stopping a subsystem twice.
 	publishersStopped bool
 	gqlStopped        bool
+	promStopped       bool
 	// stopMu guards the stop functions set by Serve and read by Close,
 	// which run on different goroutines.
 	stopMu       sync.Mutex
@@ -742,11 +745,32 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		gqlSrv = gql.NewServer(cfg, resolver, hmiMgr, redfishMgr, rest, mcpHandler, tlsConfig, logger)
 	}
 
+	var promSrv *prometheus.Server
+	if cfg.Prometheus.Enabled {
+		var nativeNames func() winccoanative.Names
+		if nativeOn && cfg.WinCCOaNative.Namespace {
+			if native != nil {
+				nativeNames = native.Names
+			} else {
+				nativeNames = func() winccoanative.Names { return names }
+			}
+		}
+		promSrv = prometheus.New(prometheus.Deps{
+			Cfg:         cfg,
+			Archives:    archives,
+			Metrics:     storage.Metrics,
+			Collector:   collector,
+			Auth:        authCache,
+			NativeNames: nativeNames,
+			Logger:      logger,
+		})
+	}
+
 	return &Server{
 		cfg: cfg, logger: logger, mqtt: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, kafka: kafkaClients, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
-		mcpSrv: mcpSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
+		mcpSrv: mcpSrv, prom: promSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
 		storageHook: storageHook, native: native, peer: pl, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
 }
@@ -1057,6 +1081,13 @@ func (s *Server) Serve() error {
 			}
 		}()
 	}
+	if s.prom != nil {
+		go func() {
+			if err := s.prom.Start(); err != nil {
+				s.logger.Error("prometheus server error", "err", err)
+			}
+		}()
+	}
 	return s.mqtt.Serve()
 }
 
@@ -1079,6 +1110,7 @@ func (s *Server) Close() error {
 	if s.collector != nil {
 		s.collector.Stop()
 	}
+	s.stopPrometheus()
 	s.stopGraphQL()
 	if s.archives != nil {
 		s.archives.Stop()
@@ -1109,6 +1141,7 @@ func (s *Server) closePeerLink() {
 	s.peer.BeginDrain()
 	s.mqtt.CloseListeners()
 	s.stopPublishers()
+	s.stopPrometheus()
 	s.stopGraphQL()
 	s.stopPeerStatus()
 	// Drain has its own budget: Log.DrainOnShutdownMs plus a margin for the
@@ -1159,6 +1192,16 @@ func (s *Server) stopPublishers() {
 		defer cancel()
 		_ = s.redfishMgr.Stop(ctx)
 	}
+}
+
+func (s *Server) stopPrometheus() {
+	if s.promStopped || s.prom == nil {
+		return
+	}
+	s.promStopped = true
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.prom.Stop(ctx)
 }
 
 // stopGraphQL stops the GraphQL/HTTP server, which also serves the REST and

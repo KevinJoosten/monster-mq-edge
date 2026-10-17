@@ -260,6 +260,35 @@
         "Enabled": { "type": "boolean", "description": "Enable the Model Context Protocol (MCP) server mounted at /mcp." }
       }
     },
+    "Prometheus": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Prometheus Metrics Server",
+      "description": "Prometheus-compatible metrics exporter (/metrics) and range query API for Grafana integration",
+      "properties": {
+        "Enabled": {
+          "type": "boolean",
+          "title": "Enable Prometheus",
+          "description": "Enable Prometheus metrics exporter HTTP server",
+          "default": false
+        },
+        "Port": {
+          "type": "integer",
+          "title": "Prometheus Port",
+          "description": "Port for Prometheus metrics HTTP endpoint",
+          "default": 3001,
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "RawQueryLimit": {
+          "type": "integer",
+          "title": "Raw Query Limit",
+          "description": "Maximum number of raw records returned for fine-grained sub-minute step queries",
+          "default": 10000,
+          "minimum": 1
+        }
+      }
+    },
     "Features": {
       "type": "object",
       "additionalProperties": false,

@@ -78,6 +78,11 @@ HMI:
 MCP:
   Enabled: false                  # Model Context Protocol (MCP) server mounted at /mcp
 
+Prometheus:
+  Enabled: false
+  Port: 3001
+  RawQueryLimit: 10000
+
 Features:
   MqttClient: true
   WinCCUa: false

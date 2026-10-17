@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -413,6 +414,12 @@ type GenAiOpenRouterConfig struct {
 	TimeoutSeconds int    `yaml:"TimeoutSeconds"`
 }
 
+type PrometheusConfig struct {
+	Enabled       bool `yaml:"Enabled"`
+	Port          int  `yaml:"Port"`
+	RawQueryLimit int  `yaml:"RawQueryLimit"`
+}
+
 type Config struct {
 	NodeID         string    `yaml:"NodeId"`
 	TCP            Listener  `yaml:"TCP"`
@@ -442,6 +449,7 @@ type Config struct {
 	Dashboard      DashboardConfig      `yaml:"Dashboard"`
 	RestApi        RestApiConfig        `yaml:"RestApi"`
 	MCP            MCPConfig            `yaml:"MCP"`
+	Prometheus     PrometheusConfig     `yaml:"Prometheus"`
 	GenAI          GenAIConfig          `yaml:"GenAI"`
 	Features       FeaturesConfig       `yaml:"Features"`
 	HostMonitoring HostMonitoringConfig `yaml:"HostMonitoring"`
@@ -516,8 +524,9 @@ func Default() *Config {
 			RequireHTTPSFromOutside: false,
 		},
 		Dashboard: DashboardConfig{Enabled: true, Path: ""},
-		RestApi:   RestApiConfig{Enabled: true},
-		MCP:       MCPConfig{Enabled: false},
+		RestApi:    RestApiConfig{Enabled: true},
+		MCP:        MCPConfig{Enabled: false},
+		Prometheus: PrometheusConfig{Enabled: false, Port: 3001, RawQueryLimit: 10000},
 		GenAI: GenAIConfig{
 			Enabled: false,
 			Assistant: GenAiAssistantConfig{
@@ -713,6 +722,15 @@ func (c *Config) Validate() error {
 	}
 	if c.Runtime.MemoryLimitMB < 0 {
 		return fmt.Errorf("Runtime.MemoryLimitMB must be non-negative")
+	}
+	if c.Prometheus.Enabled {
+		if c.Prometheus.Port < 1 || c.Prometheus.Port > 65535 {
+			return fmt.Errorf("Prometheus.Port %d must be between 1 and 65535", c.Prometheus.Port)
+		}
+		if c.Prometheus.RawQueryLimit < 1 {
+			slog.Warn("Prometheus.RawQueryLimit must be >= 1; falling back to 10000", "value", c.Prometheus.RawQueryLimit)
+			c.Prometheus.RawQueryLimit = 10000
+		}
 	}
 	// A disabled PeerLink section is only decoded (strictly, in Load), so
 	// the example block with placeholders stays valid.

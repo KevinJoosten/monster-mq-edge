@@ -106,6 +106,7 @@ internal/
   bridge/winccua/          # WinCC Unified bridge (GraphQL ws + Open Pipe)
   auth/                    # bcrypt + ACL cache
   graphql/                 # gqlgen schema, generated, resolvers, server
+  prometheus/              # Prometheus /metrics scrape endpoint and PromQL HTTP API
   pubsub/                  # in-process bus for `topicUpdates` subscription
   metrics/, log/, version/
   oahost/                  # WinCC OA embedding contract (TLV, request client);

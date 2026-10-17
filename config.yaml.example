@@ -89,6 +89,11 @@ HMI:
 MCP:
   Enabled: false
 
+Prometheus:
+  Enabled: false
+  Port: 3001
+  RawQueryLimit: 10000
+
 Features:
   DeviceImportExport: true
   MqttClient: true

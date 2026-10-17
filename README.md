@@ -12,6 +12,7 @@ on devices like the Raspberry Pi 4/5.
 - **Archive groups** (last-value + history fanout, retention purging) — same model as MonsterMQ Core.
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
 - **REST API** for publishing, bodyless current/retained/history reads, bulk and Influx writes, and SSE subscriptions.
+- **Prometheus & Grafana API** — `/metrics` scrape endpoint and PromQL HTTP API (`/api/v1/query`, `/api/v1/query_range`, `/api/v1/series`, `/api/v1/labels`) for Grafana's Prometheus data source. See [doc/grafana.md](doc/grafana.md).
 - **MQTT bridge** — forward local topics to a remote broker and vice versa, over MQTT 5 or MQTT 3.1.1 (per `protocolVersion`).
 - **Kafka client bridge** — consume a Kafka topic into MQTT and produce MQTT topics to Kafka, record-compatible with MonsterMQ Core. See [doc/kafka-client.md](doc/kafka-client.md).
 - **PeerLink** — pull-based, in-memory forwarding of publishes between MonsterMQ Edge brokers (pairs and full meshes), with QoS, retain, MQTT 5 properties, publisher and publish time preserved. See [PeerLink](#peerlink-forwarding-between-brokers).

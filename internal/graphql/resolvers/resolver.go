@@ -73,6 +73,10 @@ type Resolver struct {
 	UnsMgr *unsmodeler.Manager
 	// NativeNames returns the native namespace names (nil: defaults).
 	NativeNames func() winccoanative.Names
+	// ProtocolSessions closes non-MQTT protocol sessions (NATS, Redis).
+	ProtocolSessions interface {
+		Close(clientID string) bool
+	}
 
 	// Publish injects a message into the local broker (used by the publish mutation).
 	Publish func(topic string, payload []byte, retain bool, qos byte) error
@@ -836,6 +840,10 @@ func (r *queryResolver) Session(ctx context.Context, clientID string, nodeID *st
 	return sessionToGraphQL(*info), nil
 }
 
+func isProtocolSessionID(id string) bool {
+	return strings.HasPrefix(id, "nats-") || strings.HasPrefix(id, "redis-") || strings.HasPrefix(id, "mcp-")
+}
+
 func sessionToGraphQL(info stores.SessionInfo) *generated.Session {
 	addr := info.ClientAddress
 	infoStr := info.Information
@@ -848,20 +856,28 @@ func sessionToGraphQL(info stores.SessionInfo) *generated.Session {
 			pv = meta.ProtocolVersion
 		}
 	}
-	rm := info.ReceiveMaximum
-	mps := info.MaximumPacketSize
-	tam := info.TopicAliasMaximum
+	var pvPtr, rmPtr, tamPtr *int
+	var mpsPtr *int64
+	if pv != 0 || !isProtocolSessionID(info.ClientID) {
+		rm := info.ReceiveMaximum
+		mps := info.MaximumPacketSize
+		tam := info.TopicAliasMaximum
+		pvPtr = &pv
+		rmPtr = &rm
+		mpsPtr = &mps
+		tamPtr = &tam
+	}
 	return &generated.Session{
 		ClientID: info.ClientID, NodeID: info.NodeID,
 		CleanSession:          info.CleanSession,
 		Connected:             info.Connected,
 		ClientAddress:         &addr,
 		Information:           &infoStr,
-		ProtocolVersion:       &pv,
+		ProtocolVersion:       pvPtr,
 		SessionExpiryInterval: info.SessionExpiryInterval,
-		ReceiveMaximum:        &rm,
-		MaximumPacketSize:     &mps,
-		TopicAliasMaximum:     &tam,
+		ReceiveMaximum:        rmPtr,
+		MaximumPacketSize:     mpsPtr,
+		TopicAliasMaximum:     tamPtr,
 	}
 }
 
@@ -2493,6 +2509,10 @@ func (r *sessionMutationsResolver) RemoveSessions(ctx context.Context, _ *genera
 			nodeID := r.NodeID
 			results = append(results, &generated.SessionRemovalDetail{ClientID: id, Success: false, Error: &msg, NodeID: &nodeID})
 			continue
+		}
+
+		if r.ProtocolSessions != nil {
+			r.ProtocolSessions.Close(id)
 		}
 
 		// 1. Disconnect and delete client from MQTT engine memory

@@ -81,6 +81,7 @@ func (b nativeBroker) PublishCurrentValue(clientID, filter, topic string, payloa
 		QoS:       1,
 		IsRetain:  true,
 		Time:      time.Now().UTC(),
+		Initial:   true,
 	})
 	return nil
 }

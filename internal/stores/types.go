@@ -32,6 +32,10 @@ type BrokerMessage struct {
 	// message, such as a bridge. Not persisted.
 	Inline bool `json:"-" bson:"-"`
 
+	// Initial is true for a current value delivered at subscribe time (e.g.
+	// WinCC OA native interest). Not persisted.
+	Initial bool `json:"-" bson:"-"`
+
 	// OriginNode is the NodeId of the PeerLink source broker for a replica,
 	// empty for a local publish. In memory only: never stored or serialized.
 	OriginNode string `json:"-" bson:"-"`

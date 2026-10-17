@@ -214,4 +214,10 @@ func TestAllowCanonicalAlias(t *testing.T) {
 		{"oa/types/T/secret/x", true, false},
 		{"oa/tags/secret/x", false, false},
 	})
+	if !c.AllowClient("alice", "redis-server-1", "oa/types/T/open/x", false) {
+		t.Error("AllowClient should allow open canonical alias")
+	}
+	if c.AllowClient("alice", "redis-server-1", "oa/types/T/secret/x", false) {
+		t.Error("AllowClient should deny secret canonical alias")
+	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"monstermq.io/edge/internal/config"
 	"monstermq.io/edge/internal/graphql/generated"
+	"monstermq.io/edge/internal/stores"
 )
 
 func TestMqttClientConfigUpdatePreservesAddressesWhenOmitted(t *testing.T) {
@@ -101,6 +102,29 @@ func TestScriptDocumentationAndSkill(t *testing.T) {
 	}
 	if len(skill) == 0 {
 		t.Errorf("expected non-empty default ScriptSkill")
+	}
+}
+
+func TestSessionToGraphQLProtocolSessions(t *testing.T) {
+	for _, id := range []string{"nats-123", "redis-1", "mcp-abc"} {
+		gql := sessionToGraphQL(stores.SessionInfo{
+			ClientID:    id,
+			Connected:   true,
+			Information: `{"RemoteAddress":"127.0.0.1:1234","ProtocolVersion":"NATS","SSL":false}`,
+		})
+		if gql.ProtocolVersion != nil || gql.ReceiveMaximum != nil || gql.MaximumPacketSize != nil || gql.TopicAliasMaximum != nil {
+			t.Errorf("%s: expected nil MQTT protocol fields, got pv=%v rm=%v mps=%v tam=%v",
+				id, gql.ProtocolVersion, gql.ReceiveMaximum, gql.MaximumPacketSize, gql.TopicAliasMaximum)
+		}
+	}
+
+	mqttGQL := sessionToGraphQL(stores.SessionInfo{
+		ClientID:        "sensor-1",
+		ProtocolVersion: 5,
+		ReceiveMaximum:  65535,
+	})
+	if mqttGQL.ProtocolVersion == nil || *mqttGQL.ProtocolVersion != 5 {
+		t.Errorf("mqtt session ProtocolVersion = %v, want 5", mqttGQL.ProtocolVersion)
 	}
 }
 

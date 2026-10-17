@@ -235,31 +235,20 @@ func (c *Cache) lookup(username string) (stores.User, bool) {
 // topic) are still evaluated against ACL rules — the MQTT engine calls OnACLCheck in
 // publishToClient with the actual topic before delivering each message.
 func (c *Cache) Allow(username, topic string, write bool) bool {
-	if !c.AllowClient(username, "", topic, write) {
-		return false
-	}
-	// An alias (e.g. a WinCC OA type path) must never widen access: its
-	// canonical form has to be allowed too, as for MQTT clients.
-	c.mu.RLock()
-	canonical := c.canonical
-	c.mu.RUnlock()
-	if canonical != nil {
-		if ct, ok := canonical(topic); ok && ct != topic {
-			return c.AllowClient(username, "", ct, write)
-		}
-	}
-	return true
+	return c.AllowClient(username, "", topic, write)
 }
 
-// SetCanonical installs the alias mapping Allow applies to in-process
-// callers (GraphQL, REST). The MQTT auth hook applies it itself.
+// SetCanonical installs the alias mapping Allow and AllowClient apply so an
+// alias (e.g. a WinCC OA type path) never widens access.
 func (c *Cache) SetCanonical(f func(topic string) (string, bool)) {
 	c.mu.Lock()
 	c.canonical = f
+	c.decisions = nil
+	c.decisionsGen++
 	c.mu.Unlock()
 }
 
-// AllowClient is Allow with the MQTT client ID used for %c substitution in ACL
+// AllowClient is Allow with the client ID used for %c substitution in ACL
 // patterns (%u is replaced with the username).
 //
 // Verdicts are memoized until the next Refresh: with AclCheckOnSubscription
@@ -269,11 +258,19 @@ func (c *Cache) AllowClient(username, clientID, topic string, write bool) bool {
 	c.mu.RLock()
 	ok, hit := c.decisions[key]
 	gen := c.decisionsGen
+	canonical := c.canonical
 	c.mu.RUnlock()
 	if hit {
 		return ok
 	}
 	ok = c.allowClient(username, clientID, topic, write)
+	// An alias (e.g. a WinCC OA type path) must never widen access: its
+	// canonical form has to be allowed too, as for MQTT clients.
+	if ok && canonical != nil {
+		if ct, mapped := canonical(topic); mapped && ct != topic {
+			ok = c.allowClient(username, clientID, ct, write)
+		}
+	}
 	c.mu.Lock()
 	if c.decisionsGen == gen && len(topic)+len(clientID)+len(username) <= maxACLMemoKeyLen {
 		if c.decisions == nil || len(c.decisions) >= maxACLDecisions {

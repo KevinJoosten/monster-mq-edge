@@ -65,6 +65,14 @@ func (p *InlinePublisher) client(id string) *mqtt.Client {
 	return cl
 }
 
+// Release removes the cached inline client for clientID so per-connection
+// protocol session IDs do not accumulate after disconnect.
+func (p *InlinePublisher) Release(clientID string) {
+	p.mu.Lock()
+	delete(p.clients, clientID)
+	p.mu.Unlock()
+}
+
 // bridgeIDHook refuses network clients whose ID takes an inline publisher's
 // prefix. For "bridge:" No Local would hide from them what the MQTT bridge of
 // that name brings in. For "kafkaclient-" (only while the Kafka feature is on)

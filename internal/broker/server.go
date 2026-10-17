@@ -78,7 +78,8 @@ type Server struct {
 	hmiSync     *hmi.SyncService
 	storageHook *StorageHook
 	native      *winccoanative.Service
-	peer        *peerlink.Manager
+	peer          *peerlink.Manager
+	protoSessions *ProtocolSessions
 	refreshStop context.CancelFunc
 	// peerStatus wakes the native status refresher after a PeerLink state
 	// change; nil unless PeerLink and the native namespace are both on.
@@ -697,12 +698,15 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		logger.Info("mcp server enabled", "path", "/mcp")
 	}
 
+	protoSessions := NewProtocolSessions()
+
 	// 9. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled && (cfg.GraphQL.HTTPEnabled() || cfg.GraphQL.TLSEnabled()) {
 		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn, hmiMgr, redfishMgr, rtspCameras, scripts)
 		resolver.PeerLinkMgr = pl
 		resolver.KafkaClients = kafkaClients
+		resolver.ProtocolSessions = protoSessions
 		if nativeOn {
 			resolver.Browse = browse
 			resolver.UnsMgr = unsMgr
@@ -771,7 +775,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, kafka: kafkaClients, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
 		mcpSrv: mcpSrv, prom: promSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
-		storageHook: storageHook, native: native, peer: pl, peerStatus: peerStatus, refreshStop: refreshStop,
+		storageHook: storageHook, native: native, peer: pl, protoSessions: protoSessions, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
 }
 
@@ -1225,6 +1229,7 @@ func (s *Server) Bridges() *mqttclient.Manager            { return s.bridges }
 func (s *Server) KafkaClients() *kafkaclient.Manager      { return s.kafka }
 func (s *Server) AuthCache() *mauth.Cache                 { return s.authCache }
 func (s *Server) MQTT() *mqtt.Server                      { return s.mqtt }
+func (s *Server) ProtocolSessions() *ProtocolSessions     { return s.protoSessions }
 
 // WinCCOa returns the WinCC OA device manager (nil when the feature is off).
 func (s *Server) WinCCOa() *winccoa.Manager { return s.winCCOa }

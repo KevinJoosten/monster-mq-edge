@@ -88,3 +88,48 @@ func seedLegacyInline(t *testing.T, path string) {
 		t.Fatal(err)
 	}
 }
+
+func TestProtocolSessionDashboardRemoval(t *testing.T) {
+	srv, url := startWithGraphQL(t, 23061, 28061)
+	defer srv.Close()
+
+	ctx := context.Background()
+	const id = "nats-test-session"
+	if err := srv.Storage().Sessions.SetClient(ctx, stores.SessionInfo{
+		ClientID:      id,
+		NodeID:        "edge-test",
+		CleanSession:  true,
+		Connected:     true,
+		UpdateTime:    time.Now().UTC(),
+		ClientAddress: "127.0.0.1:4222",
+		Information:   `{"RemoteAddress":"127.0.0.1:54321","LocalAddress":"127.0.0.1:4222","ProtocolVersion":"NATS","SSL":false}`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	closed := false
+	srv.ProtocolSessions().Register(id, func() {
+		closed = true
+	})
+
+	data := gqlQuery(t, url, `{ session(clientId: "nats-test-session") { clientId connected protocolVersion receiveMaximum maximumPacketSize topicAliasMaximum information } }`, nil)
+	sess, ok := data["session"].(map[string]any)
+	if !ok || sess == nil {
+		t.Fatalf("session not found: %v", data)
+	}
+	if sess["connected"] != true || sess["protocolVersion"] != nil || sess["receiveMaximum"] != nil || sess["maximumPacketSize"] != nil || sess["topicAliasMaximum"] != nil {
+		t.Fatalf("unexpected protocol session fields: %v", sess)
+	}
+
+	res := gqlQuery(t, url, `mutation { session { removeSessions(clientIds: ["nats-test-session"]) { success removedCount } } }`, nil)
+	if r := res["session"].(map[string]any)["removeSessions"].(map[string]any); r["success"] != true || r["removedCount"] != float64(1) {
+		t.Fatalf("removeSessions failed: %v", r)
+	}
+	if !closed {
+		t.Fatal("expected ProtocolSessions close callback to run on removeSessions")
+	}
+	present, err := srv.Storage().Sessions.IsPresent(ctx, id)
+	if err != nil || present {
+		t.Fatalf("expected session to be removed from store, present=%v err=%v", present, err)
+	}
+}

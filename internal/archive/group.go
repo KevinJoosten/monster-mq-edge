@@ -139,6 +139,12 @@ func (g *Group) Matches(topic string, retain bool) bool {
 	if g.cfg.RetainedOnly && !retain {
 		return false
 	}
+	return g.MatchesFilter(topic)
+}
+
+// MatchesFilter reports whether topic matches the group's topic filters.
+// Unlike Matches it ignores the read-only and retained-only flags.
+func (g *Group) MatchesFilter(topic string) bool {
 	if len(g.cfg.TopicFilters) == 0 {
 		return true
 	}

@@ -240,3 +240,24 @@ func TestGroupReadOnly(t *testing.T) {
 		t.Fatalf("expected archive to receive 0 writes (ArchiveReadOnly=true), got %d", arCount)
 	}
 }
+
+func TestGroupMatchesFilter(t *testing.T) {
+	group := NewGroup(stores.ArchiveGroupConfig{
+		Name:            "ro-retained",
+		Enabled:         false,
+		TopicFilters:    []string{"plant/+/temp"},
+		LastValReadOnly: true,
+		ArchiveReadOnly: true,
+		RetainedOnly:    true,
+	}, nil, nil, nil)
+
+	if group.Matches("plant/line1/temp", false) {
+		t.Fatal("Matches should return false when disabled, read-only, and non-retained")
+	}
+	if !group.MatchesFilter("plant/line1/temp") {
+		t.Fatal("MatchesFilter should return true for matching topic regardless of flags")
+	}
+	if group.MatchesFilter("other/line1/temp") {
+		t.Fatal("MatchesFilter should return false for non-matching topic")
+	}
+}

@@ -9,6 +9,7 @@ import (
 
 	mqtt "monstermq.io/edge/internal/mqtt"
 	"monstermq.io/edge/internal/mqtt/packets"
+	"monstermq.io/edge/internal/stores"
 	"monstermq.io/edge/internal/winccoanative"
 )
 
@@ -127,12 +128,27 @@ const inlinePublisher = "\x00inline"
 // service publishes its own values through it). handled reports a publish
 // the native namespace consumed or rejected; the caller must not deliver it.
 func (h *WinCCOaNativeHook) InlinePublish(topic string, payload []byte, retain bool, qos byte) (handled bool, err error) {
-	pk := packets.Packet{
-		FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: qos, Retain: retain},
-		TopicName:   topic,
-		Payload:     payload,
+	return h.InlinePublishMessage(inlinePublisher, stores.BrokerMessage{
+		TopicName: topic,
+		Payload:   payload,
+		IsRetain:  retain,
+		QoS:       qos,
+	})
+}
+
+// InlinePublishMessage is InlinePublish for a protocol session, preserving its
+// client ID, response topic and correlation data.
+func (h *WinCCOaNativeHook) InlinePublishMessage(clientID string, msg stores.BrokerMessage) (handled bool, err error) {
+	if clientID == "" {
+		clientID = inlinePublisher
 	}
-	_, err = h.handlePublish(inlinePublisher, pk)
+	pk := packets.Packet{
+		FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: msg.QoS, Retain: msg.IsRetain},
+		TopicName:   msg.TopicName,
+		Payload:     msg.Payload,
+		Properties:  propsToPacket(msg),
+	}
+	_, err = h.handlePublish(clientID, pk)
 	if errors.Is(err, packets.CodeSuccessIgnore) {
 		return true, nil
 	}

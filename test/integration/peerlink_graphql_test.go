@@ -77,7 +77,8 @@ func TestPeerLinkGraphQLQuery(t *testing.T) {
 
 // Without PeerLink the query answers enabled false and no peers.
 func TestPeerLinkGraphQLQueryDisabled(t *testing.T) {
-	startWithGraphQL(t, 27914, 27915, func(c *config.Config) { c.NodeID = "plgqoff" })
+	srv, _ := startWithGraphQL(t, 27914, 27915, func(c *config.Config) { c.NodeID = "plgqoff" })
+	defer srv.Close()
 	res := gqlQuery(t, "http://127.0.0.1:27915/graphql", peerLinkGQL, nil)
 	pl := res["peerLink"].(map[string]any)
 	if pl["enabled"] != false || pl["nodeId"] != "plgqoff" || len(pl["peers"].([]any)) != 0 || pl["status"] != nil ||

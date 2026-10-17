@@ -14,6 +14,14 @@
     "TCPS": { "$ref": "#/$defs/Listener", "description": "MQTT over TLS listener (uses KeyStorePath/KeyStorePassword)." },
     "WS":   { "$ref": "#/$defs/Listener", "description": "MQTT over WebSocket listener." },
     "WSS":  { "$ref": "#/$defs/Listener", "description": "MQTT over WebSocket+TLS listener." },
+    "NATS": {
+      "type": "integer",
+      "title": "NATS Port",
+      "description": "NATS protocol listener port (0=disabled, default: 0)",
+      "default": 0,
+      "minimum": 0,
+      "maximum": 65535
+    },
     "SSL": {
       "type": "object",
       "title": "SSL / TLS Encryption",

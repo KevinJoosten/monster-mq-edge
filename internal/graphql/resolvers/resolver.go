@@ -765,7 +765,7 @@ func (r *queryResolver) BrokerConfig(ctx context.Context) (*generated.BrokerConf
 	c := r.Cfg
 	return &generated.BrokerConfig{
 		NodeID: c.NodeID, Version: r.Version, Clustered: false,
-		TCPPort: c.TCP.Port, WsPort: c.WS.Port, TcpsPort: c.TCPS.Port, WssPort: c.WSS.Port, NatsPort: 0,
+		TCPPort: c.TCP.Port, WsPort: c.WS.Port, TcpsPort: c.TCPS.Port, WssPort: c.WSS.Port, NatsPort: c.NATS,
 		SessionStoreType: string(c.SessionStore()), RetainedStoreType: string(c.RetainedStore()), ConfigStoreType: string(c.ConfigStore()),
 		UserManagementEnabled: c.UserManagement.Enabled, AnonymousEnabled: c.UserManagement.AnonymousEnabled,
 		PostgresURL: c.Postgres.URL, PostgresUser: c.Postgres.User,

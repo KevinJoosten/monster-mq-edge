@@ -32,6 +32,7 @@ import (
 	mlog "monstermq.io/edge/internal/log"
 	"monstermq.io/edge/internal/mcp"
 	"monstermq.io/edge/internal/metrics"
+	"monstermq.io/edge/internal/nats"
 	"monstermq.io/edge/internal/oahost"
 	"monstermq.io/edge/internal/peerlink"
 	"monstermq.io/edge/internal/prometheus"
@@ -82,6 +83,7 @@ type Server struct {
 	peer          *peerlink.Manager
 	protoSessions *ProtocolSessions
 	redis         *redisserver.Server
+	nats          *nats.Server
 	refreshStop context.CancelFunc
 	// peerStatus wakes the native status refresher after a PeerLink state
 	// change; nil unless PeerLink and the native namespace are both on.
@@ -702,6 +704,43 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 
 	protoSessions := NewProtocolSessions()
 
+	var natsSrv *nats.Server
+	if cfg.NATS > 0 {
+		var nativeValWrite func(string) (string, bool)
+		if native != nil {
+			nativeValWrite = func(topic string) (string, bool) {
+				return NativeValueWrite(native.Names(), topic)
+			}
+		}
+		var counter nats.ClientCounter
+		if collector != nil {
+			counter = collector
+		}
+		inlinePub := NewInlinePublisher(server)
+		protoPub := NewProtocolPublish(unsHook, nativeHook, inlinePub)
+		deps := nats.Deps{
+			Port:                  cfg.NATS,
+			NodeID:                cfg.NodeID,
+			UserManagementEnabled: cfg.UserManagement.Enabled,
+			AuthCache:             authCache,
+			Bus:                   bus,
+			Publish:               protoPub,
+			Release:               inlinePub.Release,
+			NativeValueWrite:      nativeValWrite,
+			Sessions:              storage.Sessions,
+			ProtoSessions:         protoSessions,
+			ArchiveManager:        archives,
+			Counter:               counter,
+			Logger:                logger,
+		}
+		var err error
+		natsSrv, err = nats.New(deps)
+		if err != nil {
+			return nil, fmt.Errorf("start nats server: %w", err)
+		}
+		*undo = append(*undo, func() { _ = natsSrv.Close() })
+	}
+
 	// 9. GraphQL server (HTTP + WebSocket)
 	var gqlSrv *gql.Server
 	if cfg.GraphQL.Enabled && (cfg.GraphQL.HTTPEnabled() || cfg.GraphQL.TLSEnabled()) {
@@ -811,7 +850,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, kafka: kafkaClients, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
 		mcpSrv: mcpSrv, prom: promSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
-		storageHook: storageHook, native: native, peer: pl, protoSessions: protoSessions, redis: redisSrv, peerStatus: peerStatus, refreshStop: refreshStop,
+		storageHook: storageHook, native: native, peer: pl, protoSessions: protoSessions, redis: redisSrv, nats: natsSrv, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
 }
 
@@ -1133,6 +1172,9 @@ func (s *Server) Serve() error {
 			}
 		}()
 	}
+	if s.nats != nil {
+		go s.nats.Serve()
+	}
 	return s.mqtt.Serve()
 }
 
@@ -1207,6 +1249,9 @@ func (s *Server) stopPublishers() {
 	s.publishersStopped = true
 	if s.redis != nil {
 		_ = s.redis.Close()
+	}
+	if s.nats != nil {
+		_ = s.nats.Close()
 	}
 	if s.bridges != nil {
 		s.bridges.Stop()
@@ -1286,3 +1331,11 @@ func (s *Server) PeerLink() *peerlink.Manager { return s.peer }
 
 // RedisServer returns the Redis protocol server (nil when disabled).
 func (s *Server) RedisServer() *redisserver.Server { return s.redis }
+
+// NatsPort returns the listening port of the NATS server, or 0 if disabled.
+func (s *Server) NatsPort() int {
+	if s.nats == nil {
+		return 0
+	}
+	return s.nats.Port()
+}

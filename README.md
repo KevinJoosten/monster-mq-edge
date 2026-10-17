@@ -165,6 +165,9 @@ Features:
   [doc/redis-server.md](doc/redis-server.md).
 - `RtspCamera` enables the RTSP / HTTP / WebSocket / USB (V4L2) video stream
   bridge for capturing frames and publishing JPEG snapshots into MQTT topics.
+- The inbound native NATS protocol server is configured by its listener port
+  (`NATS: 4222`, `0` = disabled) rather than a feature flag, matching MonsterMQ
+  Core; see [doc/nats.md](doc/nats.md).
 
 Enabled features are also reported through GraphQL as `enabledFeatures`, using
 the same names as the config flags.

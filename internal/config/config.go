@@ -479,6 +479,7 @@ type Config struct {
 	TCPS           Listener  `yaml:"TCPS"`
 	WS             Listener  `yaml:"WS"`
 	WSS            Listener  `yaml:"WSS"`
+	NATS           int       `yaml:"NATS"`
 	SSL            SSLConfig `yaml:"SSL"`
 	MaxMessageSize int       `yaml:"MaxMessageSize"`
 
@@ -565,6 +566,7 @@ func Default() *Config {
 		TCPS:             Listener{Enabled: false, Port: 8883},
 		WS:               Listener{Enabled: false, Port: 1884},
 		WSS:              Listener{Enabled: false, Port: 8884},
+		NATS:             0,
 		MaxMessageSize:   1048576,
 		DefaultStoreType: StoreSQLite,
 		SQLite:           SQLiteConfig{Path: "./data/monstermq.db"},
@@ -705,6 +707,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxMessageSize < 0 {
 		return fmt.Errorf("MaxMessageSize must be non-negative")
+	}
+	if c.NATS < 0 || c.NATS > 65535 {
+		return fmt.Errorf("NATS port must be between 0 and 65535")
 	}
 	if err := c.WinCCOaNative.validate(); err != nil {
 		return err

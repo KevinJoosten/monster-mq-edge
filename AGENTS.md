@@ -21,9 +21,11 @@ The short version:
 - Lightweight subset of MonsterMQ Core's device subsystems. Currently:
   MQTT bridge (`bridge/mqttclient/`), Kafka client bridge
   (`bridge/kafkaclient/`, signed off 2026-10-16), WinCC Unified bridge
-  (`bridge/winccua/`, GraphQL or Open Pipe transports) and Redis protocol server
-  (`internal/redisserver/`, signed off 2026-10-17). Heavyweight ones
-  (NATS, Redis client bridge, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
+  (`bridge/winccua/`, GraphQL or Open Pipe transports), Redis protocol server
+  (`internal/redisserver/`, signed off 2026-10-17) and NATS protocol
+  server (`nats/`, signed off 2026-10-17; the outbound NATS client bridge
+  remains off-limits). Heavyweight ones
+  (Redis client bridge, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
   JDBC/InfluxDB/TimeBase loggers, OPC UA) remain off-limits unless the
   user signs off on adding them — see the parity rule below before
   introducing any new device type.
@@ -105,6 +107,7 @@ internal/
   bridge/mqttclient/       # paho-based outbound MQTT bridge
   bridge/kafkaclient/      # MQTT <-> Kafka bridge (franz-go), KAFKA-Client devices
   bridge/winccua/          # WinCC Unified bridge (GraphQL ws + Open Pipe)
+  nats/                    # NATS protocol server and JetStream KV facade
   auth/                    # bcrypt + ACL cache
   graphql/                 # gqlgen schema, generated, resolvers, server
   prometheus/              # Prometheus /metrics scrape endpoint and PromQL HTTP API

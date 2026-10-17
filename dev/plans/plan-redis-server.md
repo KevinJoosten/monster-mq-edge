@@ -37,7 +37,7 @@ Conventions in this plan:
    `enabledFeatures` gains `"RedisServer"` (`Features.kt:10`).
 3. **Storage.** The new column and field are `redis_db_number`, exactly as main has them today. Main
    needs no storage change.
-4. **Main-side changes (D3).** The main bugs listed under "Main-side tasks" are fixed in main in the same
+4. **Main-side changes (D3).** The main bugs listed under "Main-side tasks" (issue monster-mq#203) are fixed in main in the same
    release.
 5. **Native writes (D4).** Redis `SET`/`MSET` may write WinCC OA tag values through S2.
 6. **No new production dependency.** The RESP parser is hand-rolled. `github.com/redis/go-redis/v9` is a
@@ -425,24 +425,9 @@ MQTT clients are rendered as their JSON text (main's `getString` throws). Addres
 
 ## Main-side tasks
 
-These land in `main/broker/src/main/kotlin/` in the same release (D3).
-
-| Fix | Change in main |
-|---|---|
-| F1 | <ul><li>Replace `redisPatternToMqtt` (:1373-1377) and `globMatches` (:1379-1392) with the algorithm above.</li><li>Apply the post-filter in the KEYS and SCAN callbacks (:1184-1187, :1214-1217) and in the PSUBSCRIBE listener (:1249-1265).</li><li>Use the new glob in HSCAN (:765, :770).</li></ul> |
-| F2 | `handleScan` (:1175, :1186): the yield stops at `keysLimit` only; COUNT is parsed and ignored. |
-| F3, F4 | <ul><li>Track subscriptions as kind plus requested name -> listener ID instead of `listenerIds` (:77, :1245-1249).</li><li>Skip duplicates in `handleSubscribe` (:1235-1272).</li><li>Rewrite `handleUnsubscribe` (:1274-1286) with the F3 replies.</li><li>`cleanup` (:1548-1557) is unchanged in effect.</li></ul> |
-| F5 | <ul><li>Every handler that writes after `executeBlocking` or `readStored` returns the `Future` of its reply: :542-545, :569-575, :593-601, :1059-1079, :1120-1126, :1144-1146, :1164-1170, :1182-1198, :1212-1222, :1448-1458, :1467-1473.</li><li>`handle` completes `promise` from that future instead of at :269.</li></ul> |
-| F6 | <ul><li>All connections run on the RedisServer verticle context (:57-60). A `HashMap<String, Future<Void>>` keyed by `group + "\u0000" + topic` therefore needs no lock; it chains SET, MSET, typed writes, DEL and JSON.DEL on the same key.</li><li>Inside `mutateTypedValue` (:1437-1459), write the new envelope to `lastValStore` (`addAll`) in the `executeBlocking` before publishing, so the next chained read sees it.</li></ul> |
-| F7 | <ul><li>`validateWrite` (:1314-1322) gains the read-only step (skipped for `handlePublish`, :1230).</li><li>`handleDel` (:1105-1127) and `handleJsonDel` (:1040-1080) check `group.lastValReadOnly` after the group lookup.</li><li>Text as in `NatsJetStreamKv.kt:345-348`, prefixed with `ERR`.</li></ul> |
-| F8 | `handleMset` (:614-632): one loop calls `validateWrite` for all pairs, a second loop publishes. |
-| F9 | <ul><li>Catch `IllegalArgumentException` around `parser.next()` (:145-151) and reply `ERR Protocol error: <text>` with Redis's texts.</li><li>Then call `close()`. Treat `len < 0` (:1655-1656) as `invalid bulk length`.</li></ul> |
-| F10 | `graphql/ArchiveGroupResolver.kt`: after parsing `redisDbNumber` in create (:668) and update (:936-940), reject a number that another group already has as its `getRedisDbNumber()`. |
-| F11 | Call `sessionHandler.incrementMessagesIn("redis-$id")` in `publishTopicUnchecked` (:1298-1312) and `incrementMessagesOut("redis-$id")` per delivery (:1251-1264). These are `SessionHandler.kt:725-731`; `setClient` creates the entry at `:1055`. |
-
-| F12 | In the SUBSCRIBE/PSUBSCRIBE listener (:1249-1265), before writing, drop the message when `userManager.isUserManagementEnabled() && !userManager.isAdmin(user) && !userManager.canSubscribe(user, message.topicName, "redis-server-$id")`, where `user = username ?: "Anonymous"`. This is the same check and admin skip as `MqttClient.kt:1331-1336`. Dropped messages are not counted (F11). |
-
-Not ported back: the E items (edge-only). Main's `getRedisDbNumber` and storage already match.
+The main side is tracked in [vogler75/monster-mq#203](https://github.com/vogler75/monster-mq/issues/203). That issue holds the fix plan for F1-F12, with the `RedisServer.kt` and
+`ArchiveGroupResolver.kt` lines and the matching tests. It ships in the same release as this plan (D3). The E items
+are edge-only and are not ported back. Main's `getRedisDbNumber` and its storage already match.
 
 ## Package layout
 
@@ -559,7 +544,7 @@ Not ported back: the E items (edge-only). Main's `getRedisDbNumber` and storage 
      - Add `redisserver/` to the repository layout (:88-128).
    - Config samples.
 
-Main-side tasks run in parallel in the main repo and ship in the same release.
+The main-side fixes (monster-mq#203) run in parallel in the main repo and ship in the same release.
 
 ## Tests
 
@@ -672,7 +657,7 @@ All tests live in `test/integration/` and drive the broker through its real list
 - **Schema.** Edge's SDL is still a strict subset of main's.
 - **Tests.** Every case above passes. `go vet` and `make test-race` are clean. `config_schema_test.go`
   passes.
-- **Main.** The main-side tasks are merged in the same release. For F1-F12 both brokers give identical
+- **Main.** monster-mq#203 is merged in the same release. For F1-F12 both brokers give identical
   replies.
 
 ## Risks

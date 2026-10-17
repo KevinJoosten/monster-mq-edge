@@ -20,7 +20,7 @@ under `main/broker/src/main/kotlin/`.
    `Features.Nats` (`Features.kt:8`, used in `NatsClientConfig*.kt`), and starts the server from the `NATS`
    port alone (`Monster.kt:1034`, `1511`). Resolver *behaviour* changes in two places (session
    `protocolVersion`, session removal), both to match main.
-3. **Main bugs are fixed in both repos (D3).** See "Main-side tasks". Two fixes were found during this
+3. **Main bugs are fixed in both repos (D3).** See "Main-side tasks" (issue monster-mq#202). Two fixes were found during this
    revision and are added under D3: delivery-time ACL (F6) and bounded input (F7).
 4. **KV put may write WinCC OA tag values (D4)** through S2. Plain `PUB` keeps MQTT semantics.
 5. **Test-only dependency.** `github.com/nats-io/nats.go` is imported only by `test/integration`. The broker
@@ -234,18 +234,9 @@ error replies have no `type`, except 10059.
 
 ## Main-side tasks
 
-These land in the same release (D3). Paths are under `main/broker/src/main/kotlin/`.
-
-| # | Fix | Where |
-|---|---|---|
-| M1 | F1 | `NatsClient.kt:264-298`: parse the arguments and byte counts before `checkAuth()` (265) and the ACL (288-293). On rejection, set `pendingPub` with a new `discard` flag (data class at 43) and still call `fixedSizeMode(numBytes + 2)`. `handlePubPayload` (300-323) returns early for `discard`. |
-| M2 | F2 | `NatsClient.kt:226-230`: if `sidToTopic` already has the SID, run the UNSUB removal first. Move the body of 250-261 into `removeSid(sid)`, shared with UNSUB. |
-| M3 | F3 | `NatsClient.kt:192-202`: `socket.pause()` before `userManager.authenticate`, `socket.resume()` in `onComplete` after success. |
-| M4 | F4 | `NatsClient.kt:239-262`: parse `parts.getOrNull(1)`. Keep per-SID `delivered` and `max` counters and call `removeSid` when they meet; the delivery loop is at 419-426. |
-| M5 | F5 | `sessionHandler.incrementMessagesIn(clientId)` after `publishMessage` (`NatsClient.kt:322`) and in `NatsJetStreamKv.kt:369`. `incrementMessagesOut(clientId)` per write in `NatsClient.kt:423` and per entry in `NatsJetStreamKv.kt:541-555` (`SessionHandler.kt:725-730`). |
-| M6 | F6 | `NatsClient.kt:414-429`: check `canSubscribe(message.topicName)` once per message before the SID loop, skipped for admins as in `MqttClient.kt:1331-1336`. Same in `NatsJetStreamKv.kt:84-90` and for snapshot entries at 450-452. |
-| M7 | F7 | `NatsClient.kt:278-283`: `numBytes > 1048576` -> `writeError("Maximum Payload Violation")`, then close. `NatsClient.kt:73-75`: `parser.maxRecordSize(65536)`; its exception handler sends `-ERR 'Maximum Control Line Exceeded'` and closes. |
-| M8 | Docs | `main/doc/nats.md:41-58`: state that queue groups are ignored; document UNSUB `max_msgs`, the payload and line limits, and delivery-time ACL. |
+The main side is tracked in [vogler75/monster-mq#202](https://github.com/vogler75/monster-mq/issues/202). That issue holds the fix plan for F1-F7, with the `NatsClient.kt` /
+`NatsJetStreamKv.kt` lines and the matching tests, plus the `doc/nats.md` update. It ships in the same release as
+this plan (D3).
 
 ## Package layout
 
@@ -329,14 +320,14 @@ Connection lifecycle in edge:
      - README: a feature line under "Feature flags" (`README.md:141`) noting that NATS is a port, not a flag.
      - `AGENTS.md`: list the NATS server as signed off 2026-10-17 at :21-28 (the client bridge stays
        off-limits), and add `nats/  # NATS protocol server and JetStream KV facade` to the layout at :88-128.
-   - Main: M1-M4, M7, M8, and the core parts of M5 and M6.
+   - Main: the core-protocol parts of monster-mq#202.
 2. **KV.**
    - S2 `NativeValueWrite` in `internal/broker/protocol_publish.go`.
    - `internal/nats/{jetstream,kv_consumer}.go`.
    - `Initial` flag (`stores/types.go`, `native_bus.go`).
    - `test/integration/nats_kv_test.go`.
    - KV section in `doc/nats.md`.
-   - Main: the KV parts of M5 and M6.
+   - Main: the KV parts of monster-mq#202 (counters and delivery-time ACL).
 3. **WinCC OA cases** (`test/integration/winccoa_nats_test.go`).
    - W1-W5 need only simhost and may land with phase 1.
    - W6-W10 wait for archive M2 (stores) and M3 (group provisioning).
@@ -453,7 +444,7 @@ All tests are in `test/integration/` and use real listeners. Raw cases use a TCP
 
 ## Acceptance criteria
 
-- For the same inputs, edge and main (after M1-M8) send the same INFO line, `-ERR` texts, MSG/HMSG frames,
+- For the same inputs, edge and main (after monster-mq#202) send the same INFO line, `-ERR` texts, MSG/HMSG frames,
   JetStream JSON and error codes. The only differences are the E items.
 - `nats pub/sub/request/reply` and `nats kv ls/info/get/put/del/create/update/keys/watch` work against edge
   with bucket = archive group, and interoperate with MQTT clients both ways.
@@ -478,5 +469,5 @@ All tests are in `test/integration/` and use real listeners. Raw cases use a TCP
   under load reconnect.
 - **One bus subscription per SID.** Many SIDs on wide native filters each hold a native interest. This is
   the same cost as one MQTT subscription each.
-- **Main changes M1-M8 must ship in the same release**, or edge and main answer differently (D3).
+- **Main changes (monster-mq#202) must ship in the same release**, or edge and main answer differently (D3).
 - **nats.go behaviour** (ordered-consumer resets, header use) depends on its version. Pin it in `go.mod`.

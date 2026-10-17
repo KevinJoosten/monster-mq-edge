@@ -24,7 +24,7 @@ this plan reads).
 > No other type, field, argument or default changes.
 >
 > Impact:
-> - Dashboard: it gets a new option value (Main-side tasks, D-1 to D-3).
+> - Dashboard: it gets a new option value (issue monster-mq#205).
 > - Main: it accepts the value, runs no such group, and reports a clear error.
 > - Edge: only edge embedded in `WCCOAmmq` runs such a group.
 >
@@ -756,7 +756,7 @@ nothing. Protocol servers write WinCC OA tags only through S2.
 | X3 | Broad filters on a WINCCOA store are limited to tags (C3) and to `QueryMaxRows` rows | n/a | [edge-only] |
 | X4 | `GetHistory` without a start time reads the last 24 h | SQL archives have no lower bound | [edge-only] |
 | X5 | Wildcard history covers at most 1000 DPEs | n/a | [edge-only] |
-| X6 | Aggregation: field `""` means the DPE value; Bool counts as 1/0; result cap 1,000,000 cells; 30 s budget. SQL casts the stored payload instead: a `{"time":..,"value":..}` payload gives 0 in SQLite (`sqlite/message_archive.go:293`) and an error in Postgres (`postgres.go:520`), both 1:1 with main | see Open decisions | [edge-only] |
+| X6 | Aggregation: field `""` means the DPE value; Bool counts as 1/0; result cap 1,000,000 cells; 30 s budget. SQL casts the stored payload instead: a `{"time":..,"value":..}` payload gives 0 in SQLite (`sqlite/message_archive.go:293`) and an error in Postgres (`postgres.go:520`), both 1:1 with main | fixed separately in monster-mq#207 | [edge-only] |
 | X7 | `GetArchiveStats` returns no data for a WINCCOA archive | SQL counts rows | [edge-only] |
 | X8 | History of explicit attributes other than `_online.._value`, and the `topics` branch and status topics, are not served by WINCCOA stores | n/a | [edge-only] |
 | X9 | PeerLink interest leaves out groups whose two stores are read-only | main adds every deployed group's filters (`peerlink/PeerLinkManager.kt:257-262`) | [fix: both] |
@@ -764,43 +764,17 @@ nothing. Protocol servers write WinCC OA tags only through S2.
 
 ## Main-side tasks
 
-These land in the same release as edge M3 (D2, D3). The common message, M, is: `"WINCCOA stores need MonsterMQ Edge
-embedded in the WinCC OA manager (WCCOAmmq) with WinCCOaNative.Namespace enabled"`.
+The main and dashboard sides are tracked as issues. They land in the same release as edge M3 (D2, D3):
 
-1. **M-1 SDL.** Append `WINCCOA` to `schema-types.graphqls:27-35` and `:37-44`.
-2. **M-2 Enums.** Append `WINCCOA` to `stores/IMessageStore.kt:7-15` and `stores/IMessageArchive.kt:11-18`. Config
-   rows with the value then parse (they are skipped today, `ArchiveConfigStoreSQLite.kt:157-166`).
-3. **M-3 Deploy error.**
-   - `handlers/ArchiveGroup.kt` `createMessageStore` (`:243`) and `createArchive` (`:489`) get a `WINCCOA` branch
-     that logs SEVERE with M and calls `callback(false)`.
-   - The startup path already skips a failed group and starts the others ("Skipping ArchiveGroup [...]",
-     `ArchiveHandler.kt:369-374`, `:393-397`).
-   - `validateStoreConfiguration` (`:780-815`) and `validateArchiveConfiguration` (`:818-858`) accept `WINCCOA`
-     without checks, so import and load work and the failure appears as the deploy error.
-4. **M-4 GraphQL.** Archive-group create and update reject `WINCCOA` with M, after `valueOf`
-   (`graphql/ArchiveGroupResolver.kt:685`, `:695`, `:898`, `:913`).
-5. **M-5 Exhaustive `when`s.** Kotlin rejects non-exhaustive `when`s over enums. The known sites:
-   - `ArchiveGroupResolver.kt:1371` and `:1414`: return `null`;
-   - `extensions/McpHandler.kt:72-75`: `false`;
-   - `handlers/ArchiveHandler.kt:648`: fail with M;
-   - `Monster.kt:2016`: fail with `"WINCCOA is not supported for this store"`;
-   - any other site the compiler reports gets the same treatment.
-6. **M-6 [fix: both] X9.** `refreshStaticInterest` (`PeerLinkManager.kt:257-262`) skips groups with
-   `lastValReadOnly && archiveReadOnly`.
-7. **M-7 Tests.**
-   - A WINCCOA row (SQLite and Postgres config stores) loads; the group is not deployed and the others run.
-   - GraphQL create with WINCCOA returns M.
-   - The X9 interest test.
-
-Dashboard (`dashboard/src`), same release:
-1. **D-1** Add `<option value="WINCCOA">WinCC OA</option>` to both type selects (`pages/archive-group-detail.html:96-104`,
-   `:112-119`).
-2. **D-2** `js/archive-group-detail.js:249-261`: keep `WINCCOA` in the allowed sets when the loaded group uses it, or
-   when `enabledFeatures` contains `UnsModeler`, the embedded indicator the sidebar already uses
-   (`js/sidebar.js:271-274`). Otherwise remove the option, as is done for other unavailable types. This way a save
-   never rewrites the type.
-3. **D-3** For WINCCOA, show the read-only boxes checked and disabled, and the retention help (`:597-607`) as "No
-   retention: WinCC OA manages its archive". `archive-groups.js:200-212` already shows `-` as the connection label.
+- [vogler75/monster-mq#205](https://github.com/vogler75/monster-mq/issues/205): the lockstep change for D2.
+  - `WINCCOA` in main's SDL and Kotlin enums.
+  - The deploy error, with message M: `"WINCCOA stores need MonsterMQ Edge embedded in the WinCC OA manager (WCCOAmmq)
+    with WinCCOaNative.Namespace enabled"`.
+  - GraphQL create/update rejection, the exhaustive `when` sites and the tests.
+  - The dashboard type options (vogler75/monster-mq-dashboard).
+- [vogler75/monster-mq#206](https://github.com/vogler75/monster-mq/issues/206): X9 [fix: both]. PeerLink static interest skips groups with both stores read-only.
+- [vogler75/monster-mq#207](https://github.com/vogler75/monster-mq/issues/207): the SQL aggregation bug behind X6. Field `""` over JSON payloads returns 0 in SQLite and fails in
+  Postgres, in both repos.
 
 ## Milestones
 
@@ -841,9 +815,9 @@ Tasks: §2.1-§2.7.
 - `internal/graphql/schema/schema.graphqls` plus `make gen` output, `internal/graphql/resolvers/resolver.go`
 - `internal/restapi/handler.go`, `internal/mcp/tools.go`
 
-Tasks: §3.1-§3.6. The SDL change merges only together with main M-1 (D2).
+Tasks: §3.1-§3.6. The SDL change merges only together with main's SDL change in monster-mq#205 (D2).
 
-**M4: main and dashboard lockstep.** Tasks M-1 to M-7 and D-1 to D-3 (Main-side tasks).
+**M4: main and dashboard lockstep.** Issues monster-mq#205 and monster-mq#206 (Main-side tasks).
 
 **M5: docs.** Files:
 - `winccoa/doc/winccoa-archive.md` (new: group, fallback, bounds, deviations)
@@ -955,10 +929,9 @@ Live cases (`winccoa_live_test.go`):
   History moves only when Default has no archive covering the topic.
 - **Long aggregations.** These are sequential pages per DPE, bounded by the 30 s budget.
 
-## Open decisions
+## Follow-ups
 
-1. SQL aggregation with field `""` over JSON object payloads gives 0 in SQLite and an error in Postgres, in both repos
-   (X6). Recommendation: a separate **[fix: both]** ticket that returns `NULL` for non-numeric payloads; it is not
-   part of this plan.
-2. Reading the `topics` branch (MMQTopic) through WINCCOA stores. Recommendation: a follow-up only if a user needs
-   it; the Default group already holds those messages.
+1. **SQL aggregation with field `""` over JSON object payloads** (X6). In both repos it gives 0 in SQLite and an
+   error in Postgres. Tracked in [vogler75/monster-mq#207](https://github.com/vogler75/monster-mq/issues/207); not part of this plan.
+2. **Reading the `topics` branch (MMQTopic) through WINCCOA stores.** A follow-up only if a user needs it; the Default
+   group already holds those messages.

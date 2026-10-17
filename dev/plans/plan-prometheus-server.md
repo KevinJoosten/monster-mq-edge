@@ -356,42 +356,9 @@ preflight status code may differ; one node instead of a cluster (E6). They are l
 
 ## Main-side tasks
 
-These land in main in the same release (D3):
-
-1. **F1:** `PrometheusServer.kt:764`: change `\[\w+]` to `\[(\w+)]` so `groupValues[3]` (`:774`) exists. Add a test
-   for each of the four functions.
-2. **F2:** add a `metricsIntervalSeconds: Int` constructor parameter (`kt:38-45`). Hoist `collectionInterval` out of
-   the metrics block (`Monster.kt:1360-1363`) and pass it at `Monster.kt:1381`. In `handleQueryRangeMetric`
-   (`kt:540-549`), compute `from` and `limit` as in F2, call `getBrokerMetricsHistory(nodeId, from, endTime, null,
-   limit)`, and sort ascending before `downsampleByStep`.
-3. **F3:** add `router.post("/api/v1/labels")` next to `kt:92` and `router.get("/api/v1/series")` next to `kt:94`.
-   Update the header comment (`kt:28-37`) and the endpoint table in `doc/grafana.md:67-74`.
-4. **F4:** in `handleSeries` (`kt:320-324`), fall back to the selector's leading metric name when `__name__` is
-   absent.
-5. **F6:** at `Monster.kt:1379`, warn and use 10000 when `RawQueryLimit < 1`. Fix `doc/grafana.md:57` ("0 means
-   unlimited").
-6. **F7 read ACL:**
-   - **Identity.** `validateAuthentication` (`kt:887-946`) stores the user name in the routing context, for example
-     `ctx.put("prometheusUser", name)`:
-     - `Const.ANONYMOUS_USER` for the anonymous case (`kt:892-896`);
-     - `JwtService.extractUsername(token)` for Bearer (`kt:906-910`);
-     - `parts[0]` for Basic, before `ctx.next()` (`kt:924-926`).
-     With user management off (`kt:888`) nothing is stored and nothing is checked.
-   - **Check.** Add a helper `canRead(ctx, topic)` that returns `true` when user management is off or
-     `userManager.isAdmin(user)`, else `userManager.canSubscribe(user, topic)` (`UserManager.kt:138`, `:153`). This
-     follows the delivery-time filter in `MqttClient.kt:1330-1336`.
-   - **Handlers to change:**
-     - `/metrics`: pass `ctx` through `renderMetrics` (`kt:144-147`) into `appendTopicValueMetrics` (`kt:172`),
-       and skip denied `message.topicName` before any line is appended (`kt:175-178`).
-     - `label/topic/values`: add only allowed topics; the 5000 cap counts allowed topics only (`kt:252-255`).
-     - `label/field/values`: inspect only allowed topics (`kt:277-290`).
-     - `/series`: skip denied topics before adding entries (`kt:334-357`).
-     - `/query`: skip denied `message.topicName` (`kt:625-640`).
-     - `/query_range`: return an empty matrix for a denied topic without wildcards, before `executeBlocking`
-       (`kt:415-428`). On the raw path, skip records whose `topic` is denied (`kt:441-456`; the record carries
-       `topic`, `MessageArchiveSQLite.kt:188`).
-     - `metrics{...}` handlers (`kt:513-614`) stay unchanged.
-   - **Tests:** the same allow/deny/admin/anonymous cases as edge.
+The main side is tracked in [vogler75/monster-mq#204](https://github.com/vogler75/monster-mq/issues/204). That issue holds the fix plan for F1-F4, F6 and F7, with the
+`PrometheusServer.kt` / `Monster.kt` lines, the F2 window algorithm and the matching tests. It ships in the same
+release as this plan (D3). F5 is an edge-only store fix.
 
 ## Package layout
 
@@ -485,7 +452,7 @@ These land in main in the same release (D3):
 7. **Docs and main-side tasks.**
    - Files: `doc/grafana.md`, `README.md`, `AGENTS.md`; in main, `PrometheusServer.kt`, `Monster.kt`,
      `doc/grafana.md`.
-   - Tasks: the "Main-side tasks" list; same release.
+   - Tasks: main-side fixes in monster-mq#204; same release.
 
 Phases 1-5 do not depend on the archive plan. Phase 6 waits for archive M2 (stores) and M3 (provisioning and
 `ResolveGroupForTopic`).
@@ -612,11 +579,11 @@ All tests are in `test/integration/` and drive the broker through its real liste
 - A Grafana Prometheus data source pointed at edge `:3001` (Basic auth when user management is on) can:
   - browse metrics, labels and series;
   - plot `topics{...}` and `metrics{...}` instant and range queries, including `*_over_time`;
-  - plot the same dashboard against main after the main-side tasks.
+  - plot the same dashboard against main after monster-mq#204.
 - For the same stored data and users, edge and main give byte-identical JSON for the tested endpoints, except for
   E1-E6.
 - A non-admin user never receives topic data their read ACL denies, on any endpoint, in either broker (F7).
-- The main-side tasks are merged in main in the same release.
+- monster-mq#204 is merged in main in the same release.
 - Zero CGO; `make build-arm64` succeeds.
 
 ## Risks

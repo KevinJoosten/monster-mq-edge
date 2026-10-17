@@ -57,6 +57,32 @@ goto :parse_args
 :done_parse
 
 if "!BUILD!"=="true" (
+    if not exist "dashboard" (
+        if exist "..\dashboard" (
+            echo Symlink 'dashboard' not found. Creating symlink to ..\dashboard...
+            mklink /D "dashboard" "..\dashboard" >nul 2>&1
+            if !errorlevel! neq 0 (
+                mklink /J "dashboard" "..\dashboard" >nul 2>&1
+            )
+        ) else (
+            echo Error: Dashboard not found! Neither ./dashboard nor ../dashboard exists. 1>&2
+            exit /b 1
+        )
+    )
+
+    if not exist "dashboard\dist" (
+        echo Building dashboard...
+        pushd "dashboard" && (call npm run build & popd)
+        if !errorlevel! neq 0 (
+            echo Error: Failed to build dashboard. 1>&2
+            exit /b 1
+        )
+    )
+
+    echo Syncing dashboard from dashboard/dist...
+    if not exist "internal\dashboard\dist" mkdir "internal\dashboard\dist"
+    xcopy /E /I /Y "dashboard\dist\*" "internal\dashboard\dist\" >nul
+
     echo Building monstermq-edge...
     if not exist bin mkdir bin
     set "CGO_ENABLED=0"

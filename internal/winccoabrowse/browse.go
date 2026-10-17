@@ -103,6 +103,14 @@ type ElementInfo struct {
 	Status       uint64
 }
 
+// ArchiveGroup is one WinCC OA value archive group (NGA _NGA_Group, HDB _ValueArchive, or RDB _RDBArchiveGroups).
+type ArchiveGroup struct {
+	Name        string `json:"name"`        // short group name, e.g. "EVENT", "DEFAULT", "ValueArchive_0"
+	DpName      string `json:"dpName"`      // DP name without system, e.g. "_NGA_G_EVENT", "_ValueArchive_0"
+	DisplayName string `json:"displayName"` // human-readable name from WinCC OA
+	Kind        string `json:"kind"`        // "NGA", "HDB", or "RDB"
+}
+
 // Service browses WinCC OA through the embedding host.
 type Service struct {
 	api     oahost.API
@@ -567,3 +575,180 @@ func (s *Service) MatchDatapoints(ctx context.Context, system, pattern, typeName
 	sort.Strings(out)
 	return dedupSorted(out), nil
 }
+
+// ArchiveGroups returns value archive groups available in the WinCC OA system
+// (NGA _NGA_Group, HDB _ValueArchive, RDB _RDBArchiveGroups).
+func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGroup, error) {
+	name, _, err := s.System(ctx, system)
+	if err != nil {
+		return nil, err
+	}
+	var groups []ArchiveGroup
+
+	// 1. NGA (_NGA_Group)
+	ngaNames, err := s.api.DpNames(ctx, name+":*", "_NGA_Group", s.timeout)
+	if err == nil && len(ngaNames) > 0 {
+		for _, full := range ngaNames {
+			_, dp := splitSystem(full)
+			dp = strings.TrimSuffix(dp, ".")
+			if strings.HasSuffix(dp, "_2") || strings.EqualFold(dp, "_NGA_G_ALERT") || strings.HasSuffix(strings.ToUpper(dp), "_ALERT") {
+				continue
+			}
+			short := strings.TrimPrefix(dp, "_NGA_G_")
+			disp := short
+
+			// Best-effort attribute read for displayName/groupName and isAlert
+			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".displayName", name + ":" + dp + ".groupName", name + ":" + dp + ".isAlert"}, s.timeout); err == nil && len(vals) == 3 {
+				if vals[2].Bool {
+					continue
+				}
+				if s := strings.TrimSpace(vals[0].Str); s != "" {
+					disp = s
+				} else if s := strings.TrimSpace(vals[1].Str); s != "" {
+					disp = s
+				}
+			} else {
+				if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".displayName"}, s.timeout); err == nil && len(vals) == 1 {
+					if s := strings.TrimSpace(vals[0].Str); s != "" {
+						disp = s
+					}
+				} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".groupName"}, s.timeout); err == nil && len(vals) == 1 {
+					if s := strings.TrimSpace(vals[0].Str); s != "" {
+						disp = s
+					}
+				}
+			}
+
+			groups = append(groups, ArchiveGroup{
+				Name:        short,
+				DpName:      dp,
+				DisplayName: disp,
+				Kind:        "NGA",
+			})
+		}
+	}
+
+	// 2. HDB / ValueArchive (_ValueArchive)
+	hdbNames, err := s.api.DpNames(ctx, name+":_ValueArchive_*", "_ValueArchive", s.timeout)
+	if err == nil && len(hdbNames) > 0 {
+		for _, full := range hdbNames {
+			_, dp := splitSystem(full)
+			dp = strings.TrimSuffix(dp, ".")
+			if strings.HasSuffix(dp, "_2") {
+				continue
+			}
+			groupName := strings.TrimPrefix(dp, "_")
+			disp := groupName
+
+			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".state", name + ":" + dp + ".general.arName"}, s.timeout); err == nil && len(vals) == 2 {
+				if vals[0].Int == 3 || vals[0].Uint == 3 {
+					continue
+				}
+				if s := strings.TrimSpace(vals[1].Str); s != "" {
+					disp = s
+					groupName = s
+				}
+			} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".state"}, s.timeout); err == nil && len(vals) == 1 {
+				if vals[0].Int == 3 || vals[0].Uint == 3 {
+					continue
+				}
+			}
+
+			groups = append(groups, ArchiveGroup{
+				Name:        groupName,
+				DpName:      dp,
+				DisplayName: disp,
+				Kind:        "HDB",
+			})
+		}
+	}
+
+	// 3. RDB (_RDBArchiveGroups)
+	rdbNames, err := s.api.DpNames(ctx, name+":*", "_RDBArchiveGroups", s.timeout)
+	if err == nil && len(rdbNames) > 0 {
+		for _, full := range rdbNames {
+			_, dp := splitSystem(full)
+			dp = strings.TrimSuffix(dp, ".")
+			if strings.HasSuffix(dp, "_2") || strings.EqualFold(dp, "_ALERT") || strings.HasSuffix(strings.ToUpper(dp), "_ALERT") {
+				continue
+			}
+			disp := strings.TrimPrefix(dp, "_")
+
+			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".isAlert", name + ":" + dp + ".templateName", name + ":" + dp + ".groupName"}, s.timeout); err == nil && len(vals) == 3 {
+				if vals[0].Bool || vals[1].Str == "CS" {
+					continue
+				}
+				if s := strings.TrimSpace(vals[2].Str); s != "" {
+					disp = s
+				}
+			}
+
+			groups = append(groups, ArchiveGroup{
+				Name:        disp,
+				DpName:      dp,
+				DisplayName: disp,
+				Kind:        "RDB",
+			})
+		}
+	}
+
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].Kind != groups[j].Kind {
+			return groups[i].Kind < groups[j].Kind
+		}
+		return groups[i].Name < groups[j].Name
+	})
+
+	return groups, nil
+}
+
+// ResolveArchiveGroup matches a user-specified archive group reference against
+// the discovered archive groups. It checks exact DpName, exact Name, exact
+// DisplayName, and then case-insensitive matches. It returns the resolved DpName
+// without system prefix (e.g. "_NGA_G_EVENT", "_ValueArchive_0"), or "" if no match.
+func ResolveArchiveGroup(groups []ArchiveGroup, ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	ref = strings.TrimSuffix(ref, ".")
+	if i := strings.Index(ref, ":"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	// 1. Exact match on DpName
+	for _, g := range groups {
+		if g.DpName == ref {
+			return g.DpName
+		}
+	}
+	// 2. Exact match on Name
+	for _, g := range groups {
+		if g.Name == ref {
+			return g.DpName
+		}
+	}
+	// 3. Exact match on DisplayName
+	for _, g := range groups {
+		if g.DisplayName == ref {
+			return g.DpName
+		}
+	}
+	// 4. Case-insensitive matches
+	for _, g := range groups {
+		if strings.EqualFold(g.DpName, ref) {
+			return g.DpName
+		}
+	}
+	for _, g := range groups {
+		if strings.EqualFold(g.Name, ref) {
+			return g.DpName
+		}
+	}
+	for _, g := range groups {
+		if strings.EqualFold(g.DisplayName, ref) {
+			return g.DpName
+		}
+	}
+	return ""
+}
+

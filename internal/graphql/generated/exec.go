@@ -304,6 +304,7 @@ type WinCCOaQueryResolver interface {
 	Datapoints(ctx context.Context, obj *WinCCOaQuery, system *string, pattern *string, typeArg *string, limit *int, offset *int) (*WinCCOaDatapointPage, error)
 	Elements(ctx context.Context, obj *WinCCOaQuery, dp string) ([]*WinCCOaElement, error)
 	ElementInfo(ctx context.Context, obj *WinCCOaQuery, dpes []string) ([]*WinCCOaElementInfo, error)
+	ArchiveGroups(ctx context.Context, obj *WinCCOaQuery, system *string) ([]*WinCCOaArchiveGroup, error)
 }
 type WinCCUaClientResolver interface {
 	Metrics(ctx context.Context, obj *WinCCUaClient) ([]*WinCCUaClientMetrics, error)
@@ -2185,6 +2186,10 @@ type UnsModelerConfig {
     oaPrefix: String
     "Direction B: write values after create."
     flowEnabled: Boolean!
+    "Direction B: archive values on created datapoints."
+    oaArchiveEnabled: Boolean!
+    "Direction B: default archive group for created datapoints (empty or null disables default archiving)."
+    oaArchiveGroup: String
 }
 
 type UnsModelerIssue {
@@ -2323,6 +2328,8 @@ input UnsModelerConfigInput {
     payloadDefaults: String
     oaPrefix: String
     flowEnabled: Boolean
+    oaArchiveEnabled: Boolean
+    oaArchiveGroup: String
 }
 
 input UnsModelerDeviceInput {
@@ -2499,6 +2506,20 @@ type WinCCOaQuery {
     elements(dp: String!): [WinCCOaElement!]!
     "Metadata and current value of at most 200 DPEs; a missing DPE is reported per item."
     elementInfo(dpes: [String!]!): [WinCCOaElementInfo!]!
+    "Value archive groups available in the WinCC OA system (NGA, HDB/ValueArchive, RDB)."
+    archiveGroups(system: String): [WinCCOaArchiveGroup!]!
+}
+
+"A WinCC OA value archive group (NGA _NGA_Group, HDB _ValueArchive, or RDB _RDBArchiveGroups)."
+type WinCCOaArchiveGroup {
+    "Short group name used in mapping documents and settings, e.g. EVENT, DEFAULT, ValueArchive_0."
+    name: String!
+    "Underlying WinCC OA datapoint name, e.g. _NGA_G_EVENT or _ValueArchive_0."
+    dpName: String!
+    "Human-readable display name from WinCC OA."
+    displayName: String!
+    "Archive backend kind: NGA, HDB, or RDB."
+    kind: String!
 }
 
 extend type Query {
@@ -4487,6 +4508,10 @@ func (ec *executionContext) childFields_UnsModelerConfig(ctx context.Context, fi
 		return ec.fieldContext_UnsModelerConfig_oaPrefix(ctx, field)
 	case "flowEnabled":
 		return ec.fieldContext_UnsModelerConfig_flowEnabled(ctx, field)
+	case "oaArchiveEnabled":
+		return ec.fieldContext_UnsModelerConfig_oaArchiveEnabled(ctx, field)
+	case "oaArchiveGroup":
+		return ec.fieldContext_UnsModelerConfig_oaArchiveGroup(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type UnsModelerConfig", field.Name)
 }
@@ -4767,6 +4792,20 @@ func (ec *executionContext) childFields_WinCCOaAddress(ctx context.Context, fiel
 	return nil, fmt.Errorf("no field named %q was found under type WinCCOaAddress", field.Name)
 }
 
+func (ec *executionContext) childFields_WinCCOaArchiveGroup(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_WinCCOaArchiveGroup_name(ctx, field)
+	case "dpName":
+		return ec.fieldContext_WinCCOaArchiveGroup_dpName(ctx, field)
+	case "displayName":
+		return ec.fieldContext_WinCCOaArchiveGroup_displayName(ctx, field)
+	case "kind":
+		return ec.fieldContext_WinCCOaArchiveGroup_kind(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type WinCCOaArchiveGroup", field.Name)
+}
+
 func (ec *executionContext) childFields_WinCCOaClient(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "name":
@@ -4961,6 +5000,8 @@ func (ec *executionContext) childFields_WinCCOaQuery(ctx context.Context, field 
 		return ec.fieldContext_WinCCOaQuery_elements(ctx, field)
 	case "elementInfo":
 		return ec.fieldContext_WinCCOaQuery_elementInfo(ctx, field)
+	case "archiveGroups":
+		return ec.fieldContext_WinCCOaQuery_archiveGroups(ctx, field)
 	}
 	return nil, fmt.Errorf("no field named %q was found under type WinCCOaQuery", field.Name)
 }
@@ -8328,6 +8369,20 @@ func (ec *executionContext) field_WinCCOaDeviceMutations_update_args(ctx context
 		return nil, err
 	}
 	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_WinCCOaQuery_archiveGroups_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "system",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["system"] = arg0
 	return args, nil
 }
 
@@ -27394,6 +27449,52 @@ func (ec *executionContext) fieldContext_UnsModelerConfig_flowEnabled(_ context.
 	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
+func (ec *executionContext) _UnsModelerConfig_oaArchiveEnabled(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_oaArchiveEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OaArchiveEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_oaArchiveEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _UnsModelerConfig_oaArchiveGroup(ctx context.Context, field graphql.CollectedField, obj *UnsModelerConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_UnsModelerConfig_oaArchiveGroup(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OaArchiveGroup, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_UnsModelerConfig_oaArchiveGroup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("UnsModelerConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _UnsModelerCreatePlan_types(ctx context.Context, field graphql.CollectedField, obj *UnsModelerCreatePlan) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -29986,6 +30087,98 @@ func (ec *executionContext) fieldContext_WinCCOaAddress_retained(_ context.Conte
 	return graphql.NewScalarFieldContext("WinCCOaAddress", field, false, false, errors.New("field of type Boolean does not have child fields"))
 }
 
+func (ec *executionContext) _WinCCOaArchiveGroup_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaArchiveGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaArchiveGroup_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaArchiveGroup_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaArchiveGroup", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaArchiveGroup_dpName(ctx context.Context, field graphql.CollectedField, obj *WinCCOaArchiveGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaArchiveGroup_dpName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DpName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaArchiveGroup_dpName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaArchiveGroup", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaArchiveGroup_displayName(ctx context.Context, field graphql.CollectedField, obj *WinCCOaArchiveGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaArchiveGroup_displayName(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DisplayName, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaArchiveGroup_displayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaArchiveGroup", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _WinCCOaArchiveGroup_kind(ctx context.Context, field graphql.CollectedField, obj *WinCCOaArchiveGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaArchiveGroup_kind(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaArchiveGroup_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("WinCCOaArchiveGroup", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _WinCCOaClient_name(ctx context.Context, field graphql.CollectedField, obj *WinCCOaClient) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -31966,6 +32159,50 @@ func (ec *executionContext) fieldContext_WinCCOaQuery_elementInfo(ctx context.Co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_WinCCOaQuery_elementInfo_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _WinCCOaQuery_archiveGroups(ctx context.Context, field graphql.CollectedField, obj *WinCCOaQuery) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_WinCCOaQuery_archiveGroups(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.WinCCOaQuery().ArchiveGroups(ctx, obj, fc.Args["system"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*WinCCOaArchiveGroup) graphql.Marshaler {
+			return ec.marshalNWinCCOaArchiveGroup2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaArchiveGroupᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_WinCCOaQuery_archiveGroups(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "WinCCOaQuery",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_WinCCOaArchiveGroup(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_WinCCOaQuery_archiveGroups_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -37085,7 +37322,7 @@ func (ec *executionContext) unmarshalInputUnsModelerConfigInput(ctx context.Cont
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"direction", "approvalMode", "systemPrompt", "aiMaxSteps", "aiTimeoutSec", "aiTokenBudget", "redundancy", "unsRoot", "allowWrite", "topicDefaults", "payloadDefaults", "oaPrefix", "flowEnabled"}
+	fieldsInOrder := [...]string{"direction", "approvalMode", "systemPrompt", "aiMaxSteps", "aiTimeoutSec", "aiTokenBudget", "redundancy", "unsRoot", "allowWrite", "topicDefaults", "payloadDefaults", "oaPrefix", "flowEnabled", "oaArchiveEnabled", "oaArchiveGroup"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -37183,6 +37420,20 @@ func (ec *executionContext) unmarshalInputUnsModelerConfigInput(ctx context.Cont
 				return it, err
 			}
 			it.FlowEnabled = data
+		case "oaArchiveEnabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("oaArchiveEnabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OaArchiveEnabled = data
+		case "oaArchiveGroup":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("oaArchiveGroup"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OaArchiveGroup = data
 		}
 	}
 	return it, nil
@@ -47785,6 +48036,16 @@ func (ec *executionContext) _UnsModelerConfig(ctx context.Context, sel ast.Selec
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "oaArchiveEnabled":
+			out.Values[i] = ec._UnsModelerConfig_oaArchiveEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "oaArchiveGroup":
+			out.Values[i] = ec._UnsModelerConfig_oaArchiveGroup(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -49525,6 +49786,59 @@ func (ec *executionContext) _WinCCOaAddress(ctx context.Context, sel ast.Selecti
 	return out
 }
 
+var winCCOaArchiveGroupImplementors = []string{"WinCCOaArchiveGroup"}
+
+func (ec *executionContext) _WinCCOaArchiveGroup(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaArchiveGroup) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, winCCOaArchiveGroupImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("WinCCOaArchiveGroup")
+		case "name":
+			out.Values[i] = ec._WinCCOaArchiveGroup_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "dpName":
+			out.Values[i] = ec._WinCCOaArchiveGroup_dpName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "displayName":
+			out.Values[i] = ec._WinCCOaArchiveGroup_displayName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._WinCCOaArchiveGroup_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var winCCOaClientImplementors = []string{"WinCCOaClient"}
 
 func (ec *executionContext) _WinCCOaClient(ctx context.Context, sel ast.SelectionSet, obj *WinCCOaClient) graphql.Marshaler {
@@ -50745,6 +51059,44 @@ func (ec *executionContext) _WinCCOaQuery(ctx context.Context, sel ast.Selection
 					}
 				}()
 				res = ec._WinCCOaQuery_elementInfo(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "archiveGroups":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._WinCCOaQuery_archiveGroups(ctx, field, obj)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -54485,6 +54837,32 @@ func (ec *executionContext) unmarshalNWinCCOaAddressInput2monstermqᚗioᚋedge�
 func (ec *executionContext) unmarshalNWinCCOaAddressInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaAddressInput(ctx context.Context, v any) (*WinCCOaAddressInput, error) {
 	res, err := ec.unmarshalInputWinCCOaAddressInput(ctx, v)
 	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNWinCCOaArchiveGroup2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaArchiveGroupᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaArchiveGroup) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNWinCCOaArchiveGroup2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaArchiveGroup(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNWinCCOaArchiveGroup2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaArchiveGroup(ctx context.Context, sel ast.SelectionSet, v *WinCCOaArchiveGroup) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._WinCCOaArchiveGroup(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalNWinCCOaClient2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐWinCCOaClientᚄ(ctx context.Context, sel ast.SelectionSet, v []*WinCCOaClient) graphql.Marshaler {

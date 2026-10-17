@@ -388,6 +388,10 @@
         "alert": {
           "description": "Alert handling written to _alert_hdl. analog for int, uint and float, binary for bool.",
           "$ref": "#/$defs/Alert"
+        },
+        "archive": {
+          "description": "WinCC OA archiving written to _archive.",
+          "$ref": "#/$defs/Archive"
         }
       },
       "additionalProperties": false,
@@ -555,6 +559,22 @@
       },
       "additionalProperties": false
     },
+    "Archive": {
+      "description": "WinCC OA archiving configuration for this value element written to _archive.",
+      "type": "object",
+      "required": ["enabled"],
+      "properties": {
+        "enabled": {
+          "description": "True to enable archiving in WinCC OA; false to explicitly disable.",
+          "type": "boolean"
+        },
+        "group": {
+          "description": "WinCC OA archive group name (short name, DP name or display name). Required when enabled is true unless a default archive group is set on the device.",
+          "$ref": "#/$defs/OaName"
+        }
+      },
+      "additionalProperties": false
+    },
     "Datapoint": {
       "description": "A datapoint to create, fed from MQTT topics. An existing datapoint of the same type is skipped and not changed.",
       "type": "object",
@@ -601,7 +621,8 @@
         "description": { "$ref": "#/$defs/ElementDescription" },
         "format": { "$ref": "#/$defs/Format" },
         "pvRange": { "$ref": "#/$defs/PvRange" },
-        "alert": { "$ref": "#/$defs/Alert" }
+        "alert": { "$ref": "#/$defs/Alert" },
+        "archive": { "$ref": "#/$defs/Archive" }
       },
       "additionalProperties": false
     },

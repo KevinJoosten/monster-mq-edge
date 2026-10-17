@@ -479,3 +479,166 @@ func TestFlowSourceTime(t *testing.T) {
 		}
 	}
 }
+
+func TestDirectionBArchiving(t *testing.T) {
+	// 1. Settings validation
+	sBad := settingsB()
+	sBad.OaArchiveEnabled = true
+	sBad.OaArchiveGroup = ""
+	issues := ValidateSettings(sBad, TopicRoots{})
+	if !hasIssue(issues, SeverityError, "/oaArchiveGroup", "required when WinCC OA archiving is enabled") {
+		t.Fatalf("expected required archive group issue, got %v", issues)
+	}
+
+	sInvalid := settingsB()
+	sInvalid.OaArchiveEnabled = true
+	sInvalid.OaArchiveGroup = "BAD NAME*"
+	issues = ValidateSettings(sInvalid, TopicRoots{})
+	if !hasIssue(issues, SeverityError, "/oaArchiveGroup", "must be a valid WinCC OA archive group name") {
+		t.Fatalf("expected invalid archive group issue, got %v", issues)
+	}
+
+	// 2. WinCC OA setup & validation
+	oa, sim := newSimOA(t)
+	sim.AddType(simhost.Type{Name: "_NGA_Group", Elements: map[string]uint32{
+		"":            simhost.ElemStruct,
+		"isAlert":     uint32(oahost.KindBool),
+		"displayName": uint32(oahost.KindString),
+	}})
+	if err := sim.CreateDP("System1", "_NGA_G_EVENT", "_NGA_Group"); err != nil {
+		t.Fatal(err)
+	}
+	_ = sim.Set("System1:_NGA_G_EVENT.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: false})
+	_ = sim.Set("System1:_NGA_G_EVENT.displayName", oahost.Value{Kind: oahost.KindString, Str: "Event Archive"})
+	if err := sim.CreateDP("System1", "_NGA_G_FAST", "_NGA_Group"); err != nil {
+		t.Fatal(err)
+	}
+	_ = sim.Set("System1:_NGA_G_FAST.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: false})
+	_ = sim.Set("System1:_NGA_G_FAST.displayName", oahost.Value{Kind: oahost.KindString, Str: "Fast Archive"})
+
+	s := settingsB()
+	s.OaArchiveEnabled = true
+	s.OaArchiveGroup = "EVENT"
+
+	// Document with non-existent archive group
+	docNonExistent := `{"schemaVersion":1,"direction":"mqtt_to_winccoa","source":{"mode":"live","topicFilters":["plant/#"]},
+		"types":[{"name":"UNS_T1","elements":[{"path":"v","elementType":"float","archive":{"enabled":true,"group":"NOSUCH"}}]}],"datapoints":[]}`
+	res, err := Validate(context.Background(), []byte(docNonExistent), ValidationEnv{Settings: s, Roots: TopicRoots{}, OA: oa})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasIssue(res.Issues, SeverityError, "/types/0/elements/0/archive/group", "does not exist in WinCC OA") {
+		t.Fatalf("expected non-existent archive group error, got %v", res.Issues)
+	}
+
+	// Document with archive enabled but no group when device default is off
+	sNoDefault := settingsB()
+	sNoDefault.OaArchiveEnabled = false
+	sNoDefault.OaArchiveGroup = ""
+	docNoGroup := `{"schemaVersion":1,"direction":"mqtt_to_winccoa","source":{"mode":"live","topicFilters":["plant/#"]},
+		"types":[{"name":"UNS_T1","elements":[{"path":"v","elementType":"float","archive":{"enabled":true}}]}],"datapoints":[]}`
+	res, err = Validate(context.Background(), []byte(docNoGroup), ValidationEnv{Settings: sNoDefault, Roots: TopicRoots{}, OA: oa})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasIssue(res.Issues, SeverityError, "/types/0/elements/0/archive", "archive.group is required when archiving is enabled") {
+		t.Fatalf("expected missing archive group error, got %v", res.Issues)
+	}
+
+	// 3. CreateInWinCCOa with device default + overrides
+	devs := &memDevices{m: map[string]stores.DeviceConfig{}}
+	m := NewManager(devs, oa, newCapture().pub, AlwaysActive{}, TopicRoots{Native: "winccoa"}, "n1", slog.New(slog.DiscardHandler))
+	docs := &memDocs{m: m}
+	sub := &fakeSub{}
+	m.SetSubscriber(sub)
+	t.Cleanup(m.Stop)
+	ctx := context.Background()
+
+	docArchiveB := `{"schemaVersion":1,"direction":"mqtt_to_winccoa","source":{"mode":"live","topicFilters":["plant/#"]},
+	 "types":[{"name":"UNS_Motor","elements":[
+	   {"path":"speed","elementType":"float"},
+	   {"path":"temp","elementType":"float","archive":{"enabled":true,"group":"FAST"}},
+	   {"path":"status","elementType":"string","archive":{"enabled":false}},
+	   {"path":"label","elementType":"string"}]}],
+	 "datapoints":[{"name":"UNS_M1","type":"UNS_Motor",
+	   "elements":[{"path":"speed","archive":{"enabled":false}}],
+	   "bindings":[
+	     {"element":"speed","topic":"plant/m1/speed"},
+	     {"element":"temp","topic":"plant/m1/temp"},
+	     {"element":"status","topic":"plant/m1/status"},
+	     {"element":"label","topic":"plant/m1/label"}
+	   ]}]}`
+
+	parsedDoc, err := ParseDocument([]byte(docArchiveB))
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := Plan(parsedDoc, s)
+	// temp (FAST) = 1, label (EVENT inherited) = 1; speed (opted out at dp level) = 0, status (opted out at type level) = 0.
+	if plan.ConfigWrites != 2 {
+		t.Fatalf("expected 2 config writes in plan, got %+v", plan)
+	}
+
+	_ = devs.Save(ctx, stores.DeviceConfig{Name: "dev-archive", Type: DeviceType, Enabled: true, NodeID: "n1", Config: s.Encode()})
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_ = docs.Save(ctx, "dev-archive", SlotDraft, []byte(docArchiveB))
+
+	createRes, issues, err := m.CreateInWinCCOa(ctx, "dev-archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if HasErrors(issues) {
+		t.Fatalf("create issues: %v", issues)
+	}
+	if createRes.ConfigWrites != 2 {
+		t.Fatalf("expected 2 config writes, got %d (objects: %+v)", createRes.ConfigWrites, createRes.Objects)
+	}
+
+	// 4. Verify WinCC OA config attributes written to simhost
+	getAttr := func(addr string) oahost.Value {
+		v, err := sim.Get(addr)
+		if err != nil {
+			t.Fatalf("get %s: %v", addr, err)
+		}
+		return v
+	}
+
+	// speed: opted out -> no _archive config
+	if v := getAttr("System1:UNS_M1.speed:_archive.._type"); v.Kind != oahost.KindNull {
+		t.Fatalf("speed should not be archived, got %+v", v)
+	}
+	// status: opted out -> no _archive config
+	if v := getAttr("System1:UNS_M1.status:_archive.._type"); v.Kind != oahost.KindNull {
+		t.Fatalf("status should not be archived, got %+v", v)
+	}
+	// temp: archived with FAST
+	if v := getAttr("System1:UNS_M1.temp:_archive.._type"); v.Int != 45 {
+		t.Fatalf("temp _archive.._type = %+v, want 45", v)
+	}
+	if v := getAttr("System1:UNS_M1.temp:_archive.1._type"); v.Int != 15 {
+		t.Fatalf("temp _archive.1._type = %+v, want 15", v)
+	}
+	if v := getAttr("System1:UNS_M1.temp:_archive.1._proc"); v.Int != 15 {
+		t.Fatalf("temp _archive.1._proc = %+v, want 15", v)
+	}
+	if v := getAttr("System1:UNS_M1.temp:_archive.1._class"); v.Str != "System1:_NGA_G_FAST." {
+		t.Fatalf("temp _archive.1._class = %+v, want System1:_NGA_G_FAST.", v)
+	}
+	if v := getAttr("System1:UNS_M1.temp:_archive.._archive"); !v.Bool {
+		t.Fatalf("temp _archive.._archive = %+v, want true", v)
+	}
+
+	// label: text element archived with EVENT (device default)
+	if v := getAttr("System1:UNS_M1.label:_archive.._type"); v.Int != 45 {
+		t.Fatalf("label _archive.._type = %+v, want 45", v)
+	}
+	if v := getAttr("System1:UNS_M1.label:_archive.1._class"); v.Str != "System1:_NGA_G_EVENT." {
+		t.Fatalf("label _archive.1._class = %+v, want System1:_NGA_G_EVENT.", v)
+	}
+	if v := getAttr("System1:UNS_M1.label:_archive.._archive"); !v.Bool {
+		t.Fatalf("label _archive.._archive = %+v, want true", v)
+	}
+}
+

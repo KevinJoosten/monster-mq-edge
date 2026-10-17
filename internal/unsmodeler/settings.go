@@ -45,8 +45,10 @@ type Settings struct {
 	PayloadDefaults json.RawMessage `json:"payloadDefaults,omitempty"`
 
 	// Direction B
-	OaPrefix    string `json:"oaPrefix,omitempty"`
-	FlowEnabled *bool  `json:"flowEnabled,omitempty"`
+	OaPrefix         string `json:"oaPrefix,omitempty"`
+	FlowEnabled      *bool  `json:"flowEnabled,omitempty"`
+	OaArchiveEnabled bool   `json:"oaArchiveEnabled,omitempty"`
+	OaArchiveGroup   string `json:"oaArchiveGroup,omitempty"`
 }
 
 // ParseSettings decodes a device configuration and fills the defaults.
@@ -184,6 +186,11 @@ func ValidateSettings(s *Settings, roots TopicRoots) []Issue {
 			add(SeverityError, "/oaPrefix", "is required for Direction B")
 		} else if !oaNameRe.MatchString(s.OaPrefix) || strings.HasPrefix(s.OaPrefix, "_") {
 			add(SeverityError, "/oaPrefix", "must be a WinCC OA name not starting with '_'")
+		}
+		if s.OaArchiveEnabled && strings.TrimSpace(s.OaArchiveGroup) == "" {
+			add(SeverityError, "/oaArchiveGroup", "is required when WinCC OA archiving is enabled")
+		} else if s.OaArchiveGroup != "" && !oaNameRe.MatchString(s.OaArchiveGroup) {
+			add(SeverityError, "/oaArchiveGroup", "must be a valid WinCC OA archive group name")
 		}
 		return out
 	}

@@ -1,6 +1,6 @@
 # Plan: WinCC OA Archiving (`_archive` Config & Archive Group Selection) in UNS Modeler
 
-- **Status:** Draft (awaiting human review and GraphQL schema approval)
+- **Status:** Completed
 - **Issue:** [vogler75/monster-mq-edge#41](https://github.com/vogler75/monster-mq-edge/issues/41)
 - **Date:** 2026-10-17
 - **Target:** `edge/internal/unsmodeler/`, `edge/internal/winccoabrowse/`, `edge/winccoa/manager/`, `dashboard/src/`

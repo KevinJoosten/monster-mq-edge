@@ -19,6 +19,7 @@ type OA interface {
 	TypeStructure(ctx context.Context, system, typeName string) (*winccoabrowse.TypeStructure, error)
 	DatapointTypes(ctx context.Context, system string, dps []string) ([]string, error)
 	MatchDatapoints(ctx context.Context, system, pattern, typeName string) ([]string, error)
+	ArchiveGroups(ctx context.Context, system string) ([]winccoabrowse.ArchiveGroup, error)
 }
 
 // Limits of a Direction A document and device (§6.5).

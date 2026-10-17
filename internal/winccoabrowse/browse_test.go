@@ -30,6 +30,17 @@ func newBrowse(t *testing.T) (*winccoabrowse.Service, *simhost.Host) {
 	sim.AddType(simhost.Type{Name: "Scalar", Elements: map[string]uint32{"": f}})
 	sim.AddType(simhost.Type{Name: "MMQConfigs", Elements: map[string]uint32{"": simhost.ElemStruct, "config": uint32(oahost.KindString)}})
 	sim.AddType(simhost.Type{Name: "_Internal", Elements: map[string]uint32{"": f}})
+	sim.AddType(simhost.Type{Name: "_NGA_Group", Elements: map[string]uint32{
+		"":            simhost.ElemStruct,
+		"isAlert":     uint32(oahost.KindBool),
+		"displayName": uint32(oahost.KindString),
+	}})
+	sim.AddType(simhost.Type{Name: "_ValueArchive", Elements: map[string]uint32{
+		"":               simhost.ElemStruct,
+		"state":          uint32(oahost.KindInt),
+		"general":        simhost.ElemStruct,
+		"general.arName": uint32(oahost.KindString),
+	}})
 	must := func(err error) {
 		t.Helper()
 		if err != nil {
@@ -42,6 +53,19 @@ func newBrowse(t *testing.T) (*winccoabrowse.Service, *simhost.Host) {
 	must(sim.CreateDP("System1", "Tag1", "Scalar"))
 	must(sim.CreateDP("System1", "_Hidden", "Scalar"))
 	must(sim.CreateDP("System1", "MMQConfigs_k1", "MMQConfigs"))
+	must(sim.CreateDP("System1", "_NGA_G_EVENT", "_NGA_Group"))
+	must(sim.Set("System1:_NGA_G_EVENT.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: false}))
+	must(sim.Set("System1:_NGA_G_EVENT.displayName", oahost.Value{Kind: oahost.KindString, Str: "Event Archive"}))
+	must(sim.CreateDP("System1", "_NGA_G_ALERT", "_NGA_Group"))
+	must(sim.Set("System1:_NGA_G_ALERT.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: true}))
+	must(sim.CreateDP("System1", "_NGA_G_RAW", "_NGA_Group")) // uninitialized attributes
+	must(sim.CreateDP("System1", "_NGA_G_EVENT_2", "_NGA_Group"))
+	must(sim.CreateDP("System1", "_ValueArchive_0", "_ValueArchive"))
+	must(sim.Set("System1:_ValueArchive_0.state", oahost.Value{Kind: oahost.KindInt, Int: 1}))
+	must(sim.Set("System1:_ValueArchive_0.general.arName", oahost.Value{Kind: oahost.KindString, Str: "ValueArchive_0"}))
+	must(sim.CreateDP("System1", "_ValueArchive_1", "_ValueArchive"))
+	must(sim.Set("System1:_ValueArchive_1.state", oahost.Value{Kind: oahost.KindInt, Int: 3})) // deleted
+	must(sim.CreateDP("System1", "_ValueArchive_0_2", "_ValueArchive"))
 	sim.AddSystem("Remote", true)
 	must(sim.CreateDP("Remote", "R1", "Scalar"))
 	sim.AddSystem("Down", false)
@@ -202,3 +226,48 @@ func TestElementsAndInfo(t *testing.T) {
 		t.Fatalf("too many: %v", err)
 	}
 }
+
+func TestArchiveGroups(t *testing.T) {
+	s, _ := newBrowse(t)
+	ctx := context.Background()
+	groups, err := s.ArchiveGroups(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups) != 3 {
+		t.Fatalf("expected 3 archive groups, got %d: %+v", len(groups), groups)
+	}
+	// Groups sorted by Kind then Name: "HDB" then "NGA"
+	if groups[0].Kind != "HDB" || groups[0].Name != "ValueArchive_0" || groups[0].DpName != "_ValueArchive_0" {
+		t.Fatalf("groups[0] = %+v", groups[0])
+	}
+	if groups[1].Kind != "NGA" || groups[1].Name != "EVENT" || groups[1].DpName != "_NGA_G_EVENT" || groups[1].DisplayName != "Event Archive" {
+		t.Fatalf("groups[1] = %+v", groups[1])
+	}
+	if groups[2].Kind != "NGA" || groups[2].Name != "RAW" || groups[2].DpName != "_NGA_G_RAW" || groups[2].DisplayName != "RAW" {
+		t.Fatalf("groups[2] = %+v", groups[2])
+	}
+
+	tests := []struct {
+		ref  string
+		want string
+	}{
+		{"EVENT", "_NGA_G_EVENT"},
+		{"event", "_NGA_G_EVENT"},
+		{"_NGA_G_EVENT", "_NGA_G_EVENT"},
+		{"Event Archive", "_NGA_G_EVENT"},
+		{"event archive", "_NGA_G_EVENT"},
+		{"System1:_NGA_G_EVENT.", "_NGA_G_EVENT"},
+		{"ValueArchive_0", "_ValueArchive_0"},
+		{"_ValueArchive_0", "_ValueArchive_0"},
+		{"NONEXISTENT", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		got := winccoabrowse.ResolveArchiveGroup(groups, tc.ref)
+		if got != tc.want {
+			t.Errorf("ResolveArchiveGroup(%q) = %q, want %q", tc.ref, got, tc.want)
+		}
+	}
+}
+

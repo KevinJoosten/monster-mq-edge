@@ -59,7 +59,7 @@ How to work:
 - Browse and sample the topics with the tools; inspect the payloads to derive element types
   (float for measurements, bool for states, string for text, int/uint only for integral counters or codes).
 - Reuse an existing WinCC OA type when its structure fits (check it with the WinCC OA tools).
-- Put units, descriptions, formats, value ranges and alarm limits into element metadata, never into extra elements.
+- Put units, descriptions, formats, value ranges, alarm limits and archive configs into element metadata, never into extra elements.
 - For JSON payloads bind single fields with jsonPath; without jsonPath the whole payload is the value.
 - Look for timestamps in the payloads (ISO 8601 strings, or numbers of seconds or milliseconds since 1970,
   often named ts, time, timestamp, TimeMS). Use them as the source time of the values (timePath and
@@ -644,6 +644,22 @@ func (m *Manager) oaTools(sc *scope, restrict bool) []genai.Tool {
 					out[i] = it
 				}
 				return toolJSON(out)
+			},
+		},
+		{
+			Name:        "listArchiveGroups",
+			Description: "Lists WinCC OA value archive groups (name, dpName, displayName, kind: NGA/HDB/RDB) available for _archive configuration.",
+			Parameters:  toolParams(map[string]string{"system": "string|remote system name; empty for the local system"}),
+			Handler: func(ctx context.Context, raw json.RawMessage) (string, error) {
+				a, err := parseArgs(raw)
+				if err != nil {
+					return "", err
+				}
+				groups, err := b.ArchiveGroups(ctx, a.System)
+				if err != nil {
+					return "", err
+				}
+				return toolJSON(groups)
 			},
 		},
 	}

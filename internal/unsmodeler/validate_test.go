@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -110,7 +111,7 @@ func topics(exp *Expansion) []string {
 
 func TestDocumentRoundTrip(t *testing.T) {
 	for _, f := range testdataFiles(t, "valid") {
-		raw := readTestdata(t, "valid", f[strings.LastIndex(f, "/")+1:])
+		raw := readTestdata(t, "valid", filepath.Base(f))
 		doc, err := ParseDocument(raw)
 		if err != nil {
 			t.Fatalf("%s: %v", f, err)

@@ -47,6 +47,10 @@ type UnsModelerConfig {
     oaPrefix: String
     "Direction B: write values after create."
     flowEnabled: Boolean!
+    "Direction B: archive values on created datapoints."
+    oaArchiveEnabled: Boolean!
+    "Direction B: default archive group for created datapoints (empty or null disables default archiving)."
+    oaArchiveGroup: String
 }
 
 type UnsModelerIssue {
@@ -185,6 +189,8 @@ input UnsModelerConfigInput {
     payloadDefaults: String
     oaPrefix: String
     flowEnabled: Boolean
+    oaArchiveEnabled: Boolean
+    oaArchiveGroup: String
 }
 
 input UnsModelerDeviceInput {

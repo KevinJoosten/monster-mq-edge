@@ -52,6 +52,7 @@ type effectiveMeta struct {
 	unit, description, format *string
 	pvRange                   *PvRange
 	alert                     *Alert
+	archive                   *Archive
 }
 
 func (e effectiveMeta) writes() int {
@@ -67,38 +68,87 @@ func (e effectiveMeta) writes() int {
 	if e.alert != nil {
 		n++
 	}
+	if e.archive != nil && e.archive.Enabled && e.archive.Group != "" {
+		n++
+	}
 	return n
 }
 
-func datapointMeta(t *TypeProposal, d *Datapoint) map[string]effectiveMeta {
-	out := map[string]effectiveMeta{}
-	for _, e := range t.Elements {
-		out[e.Path] = effectiveMeta{unit: e.Unit, description: e.Description, format: e.Format, pvRange: e.PvRange, alert: e.Alert}
+func effectiveArchive(s *Settings, te *TypeElement, de *DatapointElement) *Archive {
+	var enabled bool
+	var group string
+	if s != nil {
+		enabled = s.OaArchiveEnabled
+		group = s.OaArchiveGroup
 	}
-	for _, e := range d.Elements {
-		m := out[e.Path]
-		if e.Unit != nil {
-			m.unit = e.Unit
+	if te != nil && te.Archive != nil {
+		enabled = te.Archive.Enabled
+		if te.Archive.Group != "" {
+			group = te.Archive.Group
 		}
-		if e.Description != nil {
-			m.description = e.Description
+	}
+	if de != nil && de.Archive != nil {
+		enabled = de.Archive.Enabled
+		if de.Archive.Group != "" {
+			group = de.Archive.Group
 		}
-		if e.Format != nil {
-			m.format = e.Format
+	}
+	if !enabled && group == "" {
+		return nil
+	}
+	return &Archive{Enabled: enabled, Group: group}
+}
+
+func datapointMeta(t *TypeProposal, d *Datapoint, s *Settings) map[string]effectiveMeta {
+	out := map[string]effectiveMeta{}
+	teByPath := map[string]*TypeElement{}
+	if t != nil {
+		for _, e := range t.Elements {
+			teByPath[e.Path] = e
+			arch := effectiveArchive(s, e, nil)
+			out[e.Path] = effectiveMeta{
+				unit:        e.Unit,
+				description: e.Description,
+				format:      e.Format,
+				pvRange:     e.PvRange,
+				alert:       e.Alert,
+				archive:     arch,
+			}
 		}
-		if e.PvRange != nil {
-			m.pvRange = e.PvRange
+	}
+	if d != nil {
+		for _, e := range d.Elements {
+			m := out[e.Path]
+			if e.Unit != nil {
+				m.unit = e.Unit
+			}
+			if e.Description != nil {
+				m.description = e.Description
+			}
+			if e.Format != nil {
+				m.format = e.Format
+			}
+			if e.PvRange != nil {
+				m.pvRange = e.PvRange
+			}
+			if e.Alert != nil {
+				m.alert = e.Alert
+			}
+			te := teByPath[e.Path]
+			arch := effectiveArchive(s, te, e)
+			m.archive = arch
+			out[e.Path] = m
 		}
-		if e.Alert != nil {
-			m.alert = e.Alert
-		}
-		out[e.Path] = m
 	}
 	return out
 }
 
 // Plan returns the create summary of a Direction B document.
-func Plan(doc *Document) CreatePlan {
+func Plan(doc *Document, settings ...*Settings) CreatePlan {
+	var s *Settings
+	if len(settings) > 0 {
+		s = settings[0]
+	}
 	var p CreatePlan
 	types := map[string]*TypeProposal{}
 	for _, t := range doc.Types {
@@ -116,7 +166,7 @@ func Plan(doc *Document) CreatePlan {
 			continue
 		}
 		p.Datapoints++
-		for _, m := range datapointMeta(t, d) {
+		for _, m := range datapointMeta(t, d, s) {
 			p.ConfigWrites += m.writes()
 		}
 	}
@@ -209,6 +259,7 @@ func (m *Manager) CreateInWinCCOa(ctx context.Context, name string) (*CreateResu
 		names = append(names, d.Name)
 	}
 	existing, _ := m.browse.DatapointTypes(ctx, "", names)
+	archiveGroups, _ := m.browse.ArchiveGroups(ctx, "")
 	for i, d := range doc.Datapoints {
 		t := types[d.Type]
 		if d.Excluded || t == nil || t.Excluded {
@@ -231,7 +282,7 @@ func (m *Manager) CreateInWinCCOa(ctx context.Context, name string) (*CreateResu
 			logObj(ObjectResult{Kind: "datapoint", Name: d.Name, Status: "failed", Message: err.Error()})
 			continue
 		}
-		writes, errs := m.writeMetadata(ctx, api, local, t, d)
+		writes, errs := m.writeMetadata(ctx, api, local, s, archiveGroups, t, d)
 		r := ObjectResult{Kind: "datapoint", Name: d.Name, Status: "created", ConfigWrites: writes}
 		if len(errs) > 0 {
 			r.Status, r.Message = "failed", "created, but metadata failed: "+strings.Join(errs, "; ")
@@ -264,26 +315,47 @@ func waitExists(ctx context.Context, b *winccoabrowse.Service, dp string) error 
 	}
 }
 
-func (m *Manager) writeMetadata(ctx context.Context, api oahost.API, local string, t *TypeProposal, d *Datapoint) (int, []string) {
+func (m *Manager) writeMetadata(ctx context.Context, api oahost.API, local string, s *Settings, archiveGroups []winccoabrowse.ArchiveGroup, t *TypeProposal, d *Datapoint) (int, []string) {
 	var errs []string
 	writes := 0
-	meta := datapointMeta(t, d)
+	meta := datapointMeta(t, d, s)
+	teByPath := map[string]*TypeElement{}
+	if t != nil {
+		for _, e := range t.Elements {
+			teByPath[e.Path] = e
+		}
+	}
+	deByPath := map[string]*DatapointElement{}
+	if d != nil {
+		for _, e := range d.Elements {
+			deByPath[e.Path] = e
+		}
+	}
+	kindOf := map[string]oahost.Kind{}
+	if t != nil {
+		for _, e := range t.Elements {
+			kindOf[e.Path] = elementKind(e.ElementType)
+		}
+		if t.Reuse {
+			if ts, err := m.browse.TypeStructure(ctx, "", t.Name); err == nil {
+				for _, e := range ts.Elements {
+					if e.ValueElement {
+						kindOf[e.Path] = oahost.Kind(e.Kind)
+						if _, ok := meta[e.Path]; !ok {
+							if arch := effectiveArchive(s, teByPath[e.Path], deByPath[e.Path]); arch != nil {
+								meta[e.Path] = effectiveMeta{archive: arch}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
 	paths := make([]string, 0, len(meta))
 	for p := range meta {
 		paths = append(paths, p)
 	}
 	sort.Strings(paths)
-	kindOf := map[string]oahost.Kind{}
-	for _, e := range t.Elements {
-		kindOf[e.Path] = elementKind(e.ElementType)
-	}
-	if t.Reuse {
-		if ts, err := m.browse.TypeStructure(ctx, "", t.Name); err == nil {
-			for _, e := range ts.Elements {
-				kindOf[e.Path] = oahost.Kind(e.Kind)
-			}
-		}
-	}
 	for _, p := range paths {
 		em := meta[p]
 		dpe := local + ":" + d.Name + "."
@@ -317,6 +389,42 @@ func (m *Manager) writeMetadata(ctx context.Context, api oahost.API, local strin
 			names, vals := alertWrites(dpe, local, kind, em.alert)
 			if err := api.DpSet(ctx, names, vals, 10*time.Second); err != nil {
 				errs = append(errs, fmt.Sprintf("%s _alert_hdl: %v", p, err))
+			} else {
+				writes++
+			}
+		}
+		if em.archive != nil && em.archive.Enabled && em.archive.Group != "" {
+			const (
+				archiveInfoType = 45 // DPCONFIG_DB_ARCHIVEINFO
+				procValArch     = 15 // DPATTR_ARCH_PROC_VALARCH
+			)
+			groupDP := winccoabrowse.ResolveArchiveGroup(archiveGroups, em.archive.Group)
+			if groupDP == "" {
+				groupDP = em.archive.Group
+				groupDP = strings.TrimSuffix(groupDP, ".")
+				if idx := strings.Index(groupDP, ":"); idx >= 0 {
+					groupDP = groupDP[idx+1:]
+				}
+			}
+			if err := api.DpSet(ctx,
+				[]string{dpe + ":_archive.._type", dpe + ":_archive.1._type"},
+				[]oahost.Value{
+					{Kind: oahost.KindInt, Int: archiveInfoType},
+					{Kind: oahost.KindInt, Int: procValArch},
+				}, 10*time.Second); err != nil {
+				errs = append(errs, fmt.Sprintf("%s _archive: %v", p, err))
+			} else if err := api.DpSet(ctx,
+				[]string{
+					dpe + ":_archive.1._proc",
+					dpe + ":_archive.1._class",
+					dpe + ":_archive.._archive",
+				},
+				[]oahost.Value{
+					{Kind: oahost.KindInt, Int: procValArch},
+					{Kind: oahost.KindString, Str: local + ":" + groupDP + "."},
+					{Kind: oahost.KindBool, Bool: true},
+				}, 10*time.Second); err != nil {
+				errs = append(errs, fmt.Sprintf("%s _archive: %v", p, err))
 			} else {
 				writes++
 			}

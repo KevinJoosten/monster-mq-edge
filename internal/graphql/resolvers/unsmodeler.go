@@ -75,8 +75,10 @@ func (r *Resolver) unsDevice(d stores.DeviceConfig) *generated.UnsModelerDevice 
 		Redundancy:    generated.UnsModelerRedundancy(s.Redundancy),
 		UnsRoot:       optString(s.UnsRoot),
 		AllowWrite:    s.AllowWrite,
-		OaPrefix:      optString(s.OaPrefix),
-		FlowEnabled:   s.Flow(),
+		OaPrefix:         optString(s.OaPrefix),
+		FlowEnabled:      s.Flow(),
+		OaArchiveEnabled: s.OaArchiveEnabled,
+		OaArchiveGroup:   optString(s.OaArchiveGroup),
 	}
 	if len(s.TopicDefaults) > 0 {
 		cfg.TopicDefaults = optString(string(s.TopicDefaults))
@@ -245,6 +247,12 @@ func unsSettings(in *generated.UnsModelerConfigInput, current *unsmodeler.Settin
 	if in.FlowEnabled != nil {
 		v := *in.FlowEnabled
 		s.FlowEnabled = &v
+	}
+	if in.OaArchiveEnabled != nil {
+		s.OaArchiveEnabled = *in.OaArchiveEnabled
+	}
+	if in.OaArchiveGroup != nil {
+		s.OaArchiveGroup = *in.OaArchiveGroup
 	}
 	// Re-parse to apply the defaults.
 	out, _ := unsmodeler.ParseSettings(s.Encode())
@@ -510,7 +518,8 @@ func (r *unsModelerDeviceResolver) CreatePlan(ctx context.Context, obj *generate
 	if err != nil {
 		return nil, nil
 	}
-	p := unsmodeler.Plan(doc)
+	s, _ := unsmodeler.ParseSettings(d.Config)
+	p := unsmodeler.Plan(doc, s)
 	return &generated.UnsModelerCreatePlan{Types: p.Types, Datapoints: p.Datapoints, ConfigWrites: p.ConfigWrites, Excluded: p.Excluded}, nil
 }
 

@@ -186,6 +186,7 @@ models:
       datapoints:    { resolver: true }
       elements:      { resolver: true }
       elementInfo:   { resolver: true }
+      archiveGroups: { resolver: true }
   UnsModelerMutations:
     fields:
       create:    { resolver: true }

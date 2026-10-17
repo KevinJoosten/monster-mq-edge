@@ -1161,23 +1161,29 @@ type UnsModelerConfig struct {
 	OaPrefix *string `json:"oaPrefix,omitempty"`
 	// Direction B: write values after create.
 	FlowEnabled bool `json:"flowEnabled"`
+	// Direction B: archive values on created datapoints.
+	OaArchiveEnabled bool `json:"oaArchiveEnabled"`
+	// Direction B: default archive group for created datapoints (empty or null disables default archiving).
+	OaArchiveGroup *string `json:"oaArchiveGroup,omitempty"`
 }
 
 type UnsModelerConfigInput struct {
 	// Fixed at creation; an update with a different direction is rejected.
-	Direction       UnsModelerDirection     `json:"direction"`
-	ApprovalMode    *UnsModelerApprovalMode `json:"approvalMode,omitempty"`
-	SystemPrompt    *string                 `json:"systemPrompt,omitempty"`
-	AiMaxSteps      *int                    `json:"aiMaxSteps,omitempty"`
-	AiTimeoutSec    *int                    `json:"aiTimeoutSec,omitempty"`
-	AiTokenBudget   *int                    `json:"aiTokenBudget,omitempty"`
-	Redundancy      *UnsModelerRedundancy   `json:"redundancy,omitempty"`
-	UnsRoot         *string                 `json:"unsRoot,omitempty"`
-	AllowWrite      *bool                   `json:"allowWrite,omitempty"`
-	TopicDefaults   *string                 `json:"topicDefaults,omitempty"`
-	PayloadDefaults *string                 `json:"payloadDefaults,omitempty"`
-	OaPrefix        *string                 `json:"oaPrefix,omitempty"`
-	FlowEnabled     *bool                   `json:"flowEnabled,omitempty"`
+	Direction        UnsModelerDirection     `json:"direction"`
+	ApprovalMode     *UnsModelerApprovalMode `json:"approvalMode,omitempty"`
+	SystemPrompt     *string                 `json:"systemPrompt,omitempty"`
+	AiMaxSteps       *int                    `json:"aiMaxSteps,omitempty"`
+	AiTimeoutSec     *int                    `json:"aiTimeoutSec,omitempty"`
+	AiTokenBudget    *int                    `json:"aiTokenBudget,omitempty"`
+	Redundancy       *UnsModelerRedundancy   `json:"redundancy,omitempty"`
+	UnsRoot          *string                 `json:"unsRoot,omitempty"`
+	AllowWrite       *bool                   `json:"allowWrite,omitempty"`
+	TopicDefaults    *string                 `json:"topicDefaults,omitempty"`
+	PayloadDefaults  *string                 `json:"payloadDefaults,omitempty"`
+	OaPrefix         *string                 `json:"oaPrefix,omitempty"`
+	FlowEnabled      *bool                   `json:"flowEnabled,omitempty"`
+	OaArchiveEnabled *bool                   `json:"oaArchiveEnabled,omitempty"`
+	OaArchiveGroup   *string                 `json:"oaArchiveGroup,omitempty"`
 }
 
 type UnsModelerCreatePlan struct {
@@ -1417,6 +1423,18 @@ type WinCCOaAddressInput struct {
 	Retained    *bool   `json:"retained,omitempty"`
 }
 
+// A WinCC OA value archive group (NGA _NGA_Group, HDB _ValueArchive, or RDB _RDBArchiveGroups).
+type WinCCOaArchiveGroup struct {
+	// Short group name used in mapping documents and settings, e.g. EVENT, DEFAULT, ValueArchive_0.
+	Name string `json:"name"`
+	// Underlying WinCC OA datapoint name, e.g. _NGA_G_EVENT or _ValueArchive_0.
+	DpName string `json:"dpName"`
+	// Human-readable display name from WinCC OA.
+	DisplayName string `json:"displayName"`
+	// Archive backend kind: NGA, HDB, or RDB.
+	Kind string `json:"kind"`
+}
+
 type WinCCOaClient struct {
 	Name            string                   `json:"name"`
 	Namespace       string                   `json:"namespace"`
@@ -1547,6 +1565,8 @@ type WinCCOaQuery struct {
 	Elements []*WinCCOaElement `json:"elements"`
 	// Metadata and current value of at most 200 DPEs; a missing DPE is reported per item.
 	ElementInfo []*WinCCOaElementInfo `json:"elementInfo"`
+	// Value archive groups available in the WinCC OA system (NGA, HDB/ValueArchive, RDB).
+	ArchiveGroups []*WinCCOaArchiveGroup `json:"archiveGroups"`
 }
 
 type WinCCOaSystem struct {

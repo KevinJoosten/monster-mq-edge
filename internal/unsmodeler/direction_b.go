@@ -190,15 +190,18 @@ func (m *Manager) promptB(s *Settings, req AiRunRequest, draft *Document) (strin
 	b.WriteString(base)
 	schema, _ := PromptSchema(DirectionMqttToWinccoa)
 	fmt.Fprintf(&b, "\n\n## Mapping document (JSON Schema)\n%s\n", schema)
-	b.WriteString("\n## Metadata (fixed set)\nunit, description, format, pvRange (written to _pv_range) and alert (written to _alert_hdl). " +
-		"Type-level metadata is the default of every datapoint; datapoints[].elements[] overrides single items (pvRange and alert as a whole).\n")
+	b.WriteString("\n## Metadata (fixed set)\nunit, description, format, pvRange (written to _pv_range), alert (written to _alert_hdl) and archive (written to _archive with a WinCC OA value archive group). " +
+		"Type-level metadata is the default of every datapoint; datapoints[].elements[] overrides single items (pvRange, alert and archive as a whole).\n")
 	fmt.Fprintf(&b, "\n## Limits\nDocument at most %d bytes, %d types, %d elements per type, %d datapoints, %d topic bindings.\n",
 		MaxAIDocumentBytes, MaxTypes, MaxTypeElements, MaxDatapoints, MaxTopicBindingsB)
 	b.WriteString("\n## Rules\n" +
 		"- New types and all datapoints start with the prefix " + quoteJSON(s.OaPrefix) + ". Reused (existing) types keep their name.\n" +
 		"- Bind only topics of the analysed selection. Keep the type and datapoint names of the current draft.\n" +
-		"- Do not write source, aiRun or excluded; the server sets them.\n" +
-		"- Alert classes are names of _AlertClass datapoints, e.g. alert or warning.\n" +
+		"- Do not write source, aiRun or excluded; the server sets them.\n")
+	if s.OaArchiveEnabled && s.OaArchiveGroup != "" {
+		fmt.Fprintf(&b, "- Device default archiving is enabled with WinCC OA archive group %q. All created datapoint elements will be archived by default; set element archive metadata only when a different group or enabled: false is needed.\n", s.OaArchiveGroup)
+	}
+	b.WriteString("- Alert classes are names of _AlertClass datapoints, e.g. alert or warning.\n" +
 		"- Source time: when a JSON payload has a field that holds the time of a value, set timePath to that field and timeFormat " +
 		"to iso8601 (a string like 2026-10-14T09:12:30.250Z), epochMs (milliseconds since 1970, about 1.7e12 today) or epochS (seconds, about 1.7e9). " +
 		"Use the timestamp that belongs to the value: a timestamp in the same object as the value (e.g. $.temp.ts for $.temp.value) wins, " +

@@ -194,6 +194,13 @@ type TypeElement struct {
 	Format      *string  `json:"format,omitempty"`
 	PvRange     *PvRange `json:"pvRange,omitempty"`
 	Alert       *Alert   `json:"alert,omitempty"`
+	Archive     *Archive `json:"archive,omitempty"`
+}
+
+// Archive configures the WinCC OA _archive config of a value element.
+type Archive struct {
+	Enabled bool   `json:"enabled"`
+	Group   string `json:"group,omitempty"`
 }
 
 type PvRange struct {
@@ -233,6 +240,7 @@ type DatapointElement struct {
 	Format      *string  `json:"format,omitempty"`
 	PvRange     *PvRange `json:"pvRange,omitempty"`
 	Alert       *Alert   `json:"alert,omitempty"`
+	Archive     *Archive `json:"archive,omitempty"`
 }
 
 // TopicBinding writes the values of a topic to one element. With TimePath

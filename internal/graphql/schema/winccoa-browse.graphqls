@@ -92,6 +92,20 @@ type WinCCOaQuery {
     elements(dp: String!): [WinCCOaElement!]!
     "Metadata and current value of at most 200 DPEs; a missing DPE is reported per item."
     elementInfo(dpes: [String!]!): [WinCCOaElementInfo!]!
+    "Value archive groups available in the WinCC OA system (NGA, HDB/ValueArchive, RDB)."
+    archiveGroups(system: String): [WinCCOaArchiveGroup!]!
+}
+
+"A WinCC OA value archive group (NGA _NGA_Group, HDB _ValueArchive, or RDB _RDBArchiveGroups)."
+type WinCCOaArchiveGroup {
+    "Short group name used in mapping documents and settings, e.g. EVENT, DEFAULT, ValueArchive_0."
+    name: String!
+    "Underlying WinCC OA datapoint name, e.g. _NGA_G_EVENT or _ValueArchive_0."
+    dpName: String!
+    "Human-readable display name from WinCC OA."
+    displayName: String!
+    "Archive backend kind: NGA, HDB, or RDB."
+    kind: String!
 }
 
 extend type Query {

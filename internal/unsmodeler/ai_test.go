@@ -166,7 +166,7 @@ func TestAiRunTools(t *testing.T) {
 	if got.Status != "succeeded" || got.Applied {
 		t.Fatalf("run %+v", got)
 	}
-	want := []string{"listTypes", "getTypeStructure", "listDatapoints", "getElementInfo", "validate"}
+	want := []string{"listTypes", "getTypeStructure", "listDatapoints", "getElementInfo", "listArchiveGroups", "validate"}
 	if fmt.Sprint(f.tools) != fmt.Sprint(want) {
 		t.Fatalf("tools %v", f.tools)
 	}

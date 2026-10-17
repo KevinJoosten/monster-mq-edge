@@ -73,6 +73,9 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 		s = &Settings{Direction: DirectionMqttToWinccoa}
 		s.applyDefaults()
 	}
+	if s.OaArchiveEnabled && s.OaArchiveGroup == "" {
+		add(SeverityError, "/oaArchiveGroup", "archive group is required when device archiving is enabled")
+	}
 	// Document only.
 	if len(doc.Types) > MaxTypes {
 		add(SeverityError, "/types", "%d types, more than the limit of %d", len(doc.Types), MaxTypes)
@@ -107,6 +110,9 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 			}
 			checkRange(e.PvRange, ep+"/pvRange", add)
 			checkAlert(e.Alert, e.ElementType, ep+"/alert", add)
+			if e.Archive != nil && e.Archive.Enabled && e.Archive.Group == "" && s.OaArchiveGroup == "" {
+				add(SeverityError, ep+"/archive", "archive.group is required when archiving is enabled and no default archive group is set on the device")
+			}
 		}
 		for path := range ti.elements {
 			for other := range ti.elements {
@@ -216,6 +222,53 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 				}
 			}
 		}
+		type groupRef struct {
+			group string
+			ptr   string
+		}
+		var refs []groupRef
+		if s.OaArchiveEnabled && s.OaArchiveGroup != "" {
+			refs = append(refs, groupRef{group: s.OaArchiveGroup, ptr: "/oaArchiveGroup"})
+		}
+		for _, ti := range types {
+			if ti.t.Excluded {
+				continue
+			}
+			for j, e := range ti.t.Elements {
+				if e.Archive != nil && e.Archive.Enabled && e.Archive.Group != "" {
+					refs = append(refs, groupRef{group: e.Archive.Group, ptr: fmt.Sprintf("%s/elements/%d/archive/group", ti.ptr, j)})
+				}
+			}
+		}
+		for i, d := range doc.Datapoints {
+			if d.Excluded {
+				continue
+			}
+			for j, e := range d.Elements {
+				if e.Archive != nil && e.Archive.Enabled && e.Archive.Group != "" {
+					refs = append(refs, groupRef{group: e.Archive.Group, ptr: fmt.Sprintf("/datapoints/%d/elements/%d/archive/group", i, j)})
+				}
+			}
+		}
+		if len(refs) > 0 {
+			available, err := oa.ArchiveGroups(ctx, "")
+			if err == nil {
+				var availNames []string
+				for _, g := range available {
+					availNames = append(availNames, g.Name)
+				}
+				availStr := strings.Join(availNames, ", ")
+				for _, r := range refs {
+					if winccoabrowse.ResolveArchiveGroup(available, r.group) == "" {
+						if availStr != "" {
+							add(SeverityError, r.ptr, "archive group %s does not exist in WinCC OA (available: %s)", quoteJSON(r.group), availStr)
+						} else {
+							add(SeverityError, r.ptr, "archive group %s does not exist in WinCC OA (no value archive groups found)", quoteJSON(r.group))
+						}
+					}
+				}
+			}
+		}
 	}
 	// Datapoints.
 	dpNames := map[string]bool{}
@@ -270,6 +323,20 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 			}
 			if et != "" {
 				checkDatapointMeta(e, et, ep, add)
+			}
+			if e.Archive != nil && e.Archive.Enabled {
+				var teGroup string
+				if ti.t != nil {
+					for _, te := range ti.t.Elements {
+						if te.Path == e.Path && te.Archive != nil {
+							teGroup = te.Archive.Group
+							break
+						}
+					}
+				}
+				if e.Archive.Group == "" && teGroup == "" && s.OaArchiveGroup == "" {
+					add(SeverityError, ep+"/archive", "archive.group is required when archiving is enabled and no default archive group is set on the device")
+				}
 			}
 		}
 		bound := map[string]bool{}

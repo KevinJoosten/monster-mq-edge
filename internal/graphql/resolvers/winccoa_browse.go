@@ -163,6 +163,26 @@ func (r *winCCOaQueryResolver) ElementInfo(ctx context.Context, _ *generated.Win
 	return out, nil
 }
 
+func (r *winCCOaQueryResolver) ArchiveGroups(ctx context.Context, _ *generated.WinCCOaQuery, system *string) ([]*generated.WinCCOaArchiveGroup, error) {
+	if err := r.requireBrowse(ctx, derefStr(system)); err != nil {
+		return nil, err
+	}
+	groups, err := r.Browse.ArchiveGroups(ctx, derefStr(system))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*generated.WinCCOaArchiveGroup, len(groups))
+	for i, g := range groups {
+		out[i] = &generated.WinCCOaArchiveGroup{
+			Name:        g.Name,
+			DpName:      g.DpName,
+			DisplayName: g.DisplayName,
+			Kind:        g.Kind,
+		}
+	}
+	return out, nil
+}
+
 func optString(s string) *string {
 	if s == "" {
 		return nil

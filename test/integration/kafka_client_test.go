@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -86,7 +88,11 @@ func startKafkaNode(t *testing.T, port int, dbPath string) *broker.Server {
 	cfg.Metrics.Enabled = false
 	cfg.SQLite.Path = dbPath
 	cfg.Features.Kafka = true
-	srv, err := broker.New(cfg, slog.New(slog.DiscardHandler), nil)
+	logger := slog.New(slog.DiscardHandler)
+	if testing.Verbose() {
+		logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	}
+	srv, err := broker.New(cfg, logger, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -319,4 +325,96 @@ func TestKafkaClientGraphQLDisabled(t *testing.T) {
 	if !strings.Contains(errs, "Kafka feature is not enabled on this node") {
 		t.Fatalf("create with feature off: %s", errs)
 	}
+}
+
+// The cluster is unreachable when the device starts (its bootstrap address is
+// a local proxy that is not listening yet). Messages published meanwhile wait
+// in the outbound buffer and reach Kafka, exactly once, when it comes up.
+func TestKafkaClientClusterComesUpLater(t *testing.T) {
+	env := kafkaEnv(t, "KAFKA_BOOTSTRAP", "KAFKA_WRITE_TOPIC")
+	upstream := strings.Split(env["KAFKA_BOOTSTRAP"], ",")[0]
+	const proxyAddr = "127.0.0.1:29491"
+	run := fmt.Sprintf("%dlate", time.Now().UnixNano())
+	dbPath := filepath.Join(t.TempDir(), "kafka.db")
+	seedKafkaClient(t, dbPath, "k", "late", env["KAFKA_WRITE_TOPIC"], map[string]any{
+		"bootstrapServers":       proxyAddr,
+		"groupId":                "edge-it-" + run,
+		"payloadFormat":          "TEXT",
+		"destinationTopicPrefix": "in",
+		"reconnectDelayMs":       500,
+		"outboundEnabled":        true,
+		"outboundTopicFilters":   []string{"out/" + run + "/#"},
+		"extraConsumerConfig":    map[string]any{"auto.offset.reset": "earliest"},
+	})
+	srv := startKafkaNode(t, 29490, dbPath)
+	back := observe(t, srv, "in/out/"+run+"/#")
+
+	// The manager starts inside Serve; a publish before the connector has
+	// subscribed would not reach it.
+	var c *kafkaclient.Connector
+	for deadline := time.Now().Add(10 * time.Second); c == nil; time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("connector not running")
+		}
+		if m := srv.KafkaClients(); m != nil {
+			c = m.Get("late")
+		}
+	}
+
+	const n = 5
+	for i := 0; i < n; i++ {
+		publishAt(t, srv, "sensor", stores.BrokerMessage{TopicName: fmt.Sprintf("out/%s/m%d", run, i), Payload: []byte(fmt.Sprint(i))})
+	}
+	time.Sleep(3 * time.Second)
+	if _, out, _, _ := c.Totals(); out != 0 {
+		t.Fatalf("messagesOut = %d while the cluster is unreachable", out)
+	}
+
+	stop := startTCPProxy(t, proxyAddr, upstream)
+	defer stop()
+	for i := 0; i < n; i++ {
+		topic := fmt.Sprintf("in/out/%s/m%d", run, i)
+		got := back.waitFor(t, topic, 1, 0)
+		if len(got) != 1 || string(got[0].Payload) != fmt.Sprint(i) {
+			t.Fatalf("%s: %d messages", topic, len(got))
+		}
+	}
+	time.Sleep(2 * time.Second)
+	for i := 0; i < n; i++ {
+		if got := back.on(fmt.Sprintf("in/out/%s/m%d", run, i)); len(got) != 1 {
+			t.Fatalf("m%d arrived %d times, want once", i, len(got))
+		}
+	}
+	// Earliest offsets also read older records of the topic, so in >= n.
+	if in, out, dropped, _ := c.Totals(); out != n || in < n || dropped != 0 {
+		t.Errorf("totals in=%d out=%d dropped=%d, want in>=%d out=%d dropped=0", in, out, dropped, n, n)
+	}
+}
+
+// startTCPProxy forwards connections on addr to upstream until stop is called.
+func startTCPProxy(t *testing.T, addr, upstream string) (stop func()) {
+	t.Helper()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				up, err := net.DialTimeout("tcp", upstream, 5*time.Second)
+				if err != nil {
+					return
+				}
+				defer up.Close()
+				go func() { _, _ = io.Copy(up, conn) }()
+				_, _ = io.Copy(conn, up)
+			}()
+		}
+	}()
+	return func() { _ = ln.Close() }
 }

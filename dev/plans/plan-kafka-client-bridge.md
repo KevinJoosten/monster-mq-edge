@@ -504,8 +504,9 @@ Not done, by owner decision (2026-10-17):
   against a database was skipped by owner decision (2026-10-17).
 - SASL/TLS and broker-restart-while-running integration tests: the test cluster is plaintext only
   and cannot be restarted. Possible with `github.com/twmb/franz-go/pkg/kfake` (in-memory Kafka with
-  SASL/TLS) as a test-only dependency; declined by owner decision (2026-10-17). TLS/SASL option building is covered by
-  unit tests.
+  SASL/TLS) as a test-only dependency; declined by owner decision (2026-10-17). TLS/SASL option
+  building is covered by unit tests.
+- Push and pull request: not yet, by owner decision (2026-10-17).
 
 ## Risks / notes
 

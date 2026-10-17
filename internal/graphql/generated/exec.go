@@ -33,6 +33,8 @@ type ResolverRoot interface {
 	GenAiProviderMutations() GenAiProviderMutationsResolver
 	GenAiQuery() GenAiQueryResolver
 	HmiMutations() HmiMutationsResolver
+	KafkaClient() KafkaClientResolver
+	KafkaClientMutations() KafkaClientMutationsResolver
 	MqttClient() MqttClientResolver
 	MqttClientMutations() MqttClientMutationsResolver
 	Mutation() MutationResolver
@@ -105,6 +107,19 @@ type HmiMutationsResolver interface {
 	Reassign(ctx context.Context, obj *HmiMutations, name string, nodeID string) (*HmiResult, error)
 	UploadZip(ctx context.Context, obj *HmiMutations, name string, zipBase64 string, setAsMain *bool) (*HmiResult, error)
 }
+type KafkaClientResolver interface {
+	Metrics(ctx context.Context, obj *KafkaClient) ([]*KafkaClientMetrics, error)
+	MetricsHistory(ctx context.Context, obj *KafkaClient, from *string, to *string, lastMinutes *int) ([]*KafkaClientMetrics, error)
+}
+type KafkaClientMutationsResolver interface {
+	Create(ctx context.Context, obj *KafkaClientMutations, input KafkaClientInput) (*KafkaClientResult, error)
+	Update(ctx context.Context, obj *KafkaClientMutations, name string, input KafkaClientInput) (*KafkaClientResult, error)
+	Delete(ctx context.Context, obj *KafkaClientMutations, name string) (bool, error)
+	Start(ctx context.Context, obj *KafkaClientMutations, name string) (*KafkaClientResult, error)
+	Stop(ctx context.Context, obj *KafkaClientMutations, name string) (*KafkaClientResult, error)
+	Toggle(ctx context.Context, obj *KafkaClientMutations, name string, enabled bool) (*KafkaClientResult, error)
+	Reassign(ctx context.Context, obj *KafkaClientMutations, name string, nodeID string) (*KafkaClientResult, error)
+}
 type MqttClientResolver interface {
 	Metrics(ctx context.Context, obj *MqttClient) ([]*MqttClientMetrics, error)
 	MetricsHistory(ctx context.Context, obj *MqttClient, from *string, to *string, lastMinutes *int) ([]*MqttClientMetrics, error)
@@ -133,6 +148,7 @@ type MutationResolver interface {
 	MqttClient(ctx context.Context) (*MqttClientMutations, error)
 	Hmi(ctx context.Context) (*HmiMutations, error)
 	GenAiProvider(ctx context.Context) (*GenAiProviderMutations, error)
+	KafkaClient(ctx context.Context) (*KafkaClientMutations, error)
 	SaveRedfishMapping(ctx context.Context, name string, config RedfishMappingConfigInput, enabled *bool) (*RedfishResult, error)
 	DeleteRedfishMapping(ctx context.Context, name string) (bool, error)
 	ToggleRedfishMapping(ctx context.Context, name string, enabled bool) (*RedfishResult, error)
@@ -174,6 +190,7 @@ type QueryResolver interface {
 	GenAiProviders(ctx context.Context) ([]*GenAiProvider, error)
 	GenAiProvider(ctx context.Context, name string) (*GenAiProvider, error)
 	Genai(ctx context.Context) (*GenAiQuery, error)
+	KafkaClients(ctx context.Context, name *string, node *string) ([]*KafkaClient, error)
 	PeerLink(ctx context.Context) (*PeerLinkInfo, error)
 	RedfishMappings(ctx context.Context) ([]*RedfishMapping, error)
 	RedfishMapping(ctx context.Context, name string) (*RedfishMapping, error)
@@ -337,6 +354,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputGenAiProviderInput,
 		ec.unmarshalInputHmiConfigInput,
 		ec.unmarshalInputHmiInput,
+		ec.unmarshalInputKafkaClientConfigInput,
+		ec.unmarshalInputKafkaClientInput,
 		ec.unmarshalInputMqttClientAddressInput,
 		ec.unmarshalInputMqttClientConnectionConfigInput,
 		ec.unmarshalInputMqttClientInput,
@@ -683,6 +702,198 @@ extend type Query {
     Returns null if GenAI is disabled or not configured.
     """
     genai: GenAiQuery
+}
+`, BuiltIn: false},
+	{Name: "../schema/kafkaclient.graphqls", Input: `# Kafka client bridge (KAFKA-Client devices). Copied verbatim from MonsterMQ Core
+# schema-queries.graphqls and schema-mutations.graphqls; keep in sync.
+
+#############################################
+# Kafka Client Bridge Configuration (NEW)  #
+#############################################
+
+"""
+Kafka client bridge connects to an external Kafka cluster and republishes consumed
+records as MQTT messages inside MonsterMQ. A single Kafka topic is consumed and each
+record is polled periodically then published to MQTT.
+
+Topic mapping strategy:
+- The Kafka topic consumed is the device namespace
+- For BINARY/TEXT formats: MQTT topic = record key (record dropped if key null)
+- For DEFAULT/JSON formats: value encodes a BrokerMessage whose internal topicName is used
+"""
+
+enum KafkaPayloadFormat {
+    # Internal encoded BrokerMessage format (default)
+    DEFAULT
+    # BrokerMessage serialized as JSON text
+    JSON
+    # Raw Kafka record value bytes -> published as binary payload (topic derived from key)
+    BINARY
+    # UTF-8 decoded Kafka record value string -> published as text payload (topic derived from key)
+    TEXT
+}
+
+type KafkaClientConfig {
+    # Comma separated host:port list
+    bootstrapServers: String!
+    # Kafka consumer group id
+    groupId: String!
+    # Payload transformation/serialization strategy
+    payloadFormat: KafkaPayloadFormat!
+
+    # Additional arbitrary Kafka consumer properties
+    extraConsumerConfig: JSON
+    # Reconnect delay to Kafka in milliseconds
+    reconnectDelayMs: Long!
+    # Optional prefix applied to all published MQTT topics.
+    # Rules:
+    # - Blank or whitespace disables prefixing
+    # - Trailing slash automatically appended when missing
+    # - Must not contain MQTT wildcards '+' or '#'
+    # - Legacy keyTopicPrefix input still accepted for backward compatibility
+    destinationTopicPrefix: String
+    # Regex pattern applied to the Kafka record key to transform it into an MQTT topic name
+    topicKeyRegex: String
+    # Replacement string used with topicKeyRegex (e.g. "/" to convert dots to slashes)
+    topicKeyReplacement: String
+    # NOTE: Kafka topic is now derived from the device namespace
+
+    # Inbound bridging enabled (consume from Kafka)
+    inboundEnabled: Boolean!
+    # Outbound bridging enabled
+    outboundEnabled: Boolean!
+    # Local MQTT topics to subscribe to
+    outboundTopicFilters: [String!]!
+    # External Kafka topic to write to
+    outboundKafkaTopic: String
+    # Additional arbitrary Kafka producer properties
+    extraProducerConfig: JSON
+    # Regex pattern applied to the MQTT topic name to transform it into a Kafka record key
+    outboundTopicKeyRegex: String
+    # Replacement string used with outboundTopicKeyRegex
+    outboundTopicKeyReplacement: String
+}
+
+type KafkaClientMetrics {
+    messagesIn: Float!
+    messagesOut: Float!
+    timestamp: String!
+}
+
+type KafkaClient {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    config: KafkaClientConfig!
+    enabled: Boolean!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    metrics: [KafkaClientMetrics!]!
+    metricsHistory(
+        from: String
+        to: String
+        lastMinutes: Int
+    ): [KafkaClientMetrics!]!
+}
+
+# Extend Queries for Kafka clients
+extend type Query {
+    # Get Kafka client bridge configurations across the entire cluster
+    # Returns clients from all cluster nodes, showing their assignment and connection status
+    # Kafka clients consume from external Kafka topics and republish as MQTT messages
+    # Use optional filters to narrow results to specific client or node
+    kafkaClients(
+        # Filter by specific client name (optional)
+        name: String,
+        # Filter by cluster node ID (optional)
+        node: String
+    ): [KafkaClient!]!
+}
+
+# Kafka Client Mutations - Grouped operations for Kafka client management
+type KafkaClientMutations {
+    # Create a new Kafka client bridge to consume from an external Kafka cluster
+    # Creates a client connector that will be deployed on the specified cluster node
+    # The client will automatically connect to Kafka, consume records, and republish as MQTT messages
+    # Note: The Kafka topic to consume is derived from the device namespace
+    create(input: KafkaClientInput!): KafkaClientResult!
+
+    # Update an existing Kafka client configuration
+    # Changes take effect immediately - the client connector will be redeployed with new settings
+    # Useful for modifying bootstrap servers, consumer properties, or payload format
+    update(name: String!, input: KafkaClientInput!): KafkaClientResult!
+
+    # Delete a Kafka client configuration permanently
+    # Stops the client connector and removes all configuration data
+    # Returns true if deletion was successful, false if client was not found
+    delete(name: String!): Boolean!
+
+    # Start a Kafka client connection
+    # Enables a previously stopped client and begins consuming from Kafka topic
+    # Messages will be polled and republished as MQTT messages
+    start(name: String!): KafkaClientResult!
+
+    # Stop a Kafka client connection
+    # Disables the client and stops consuming from Kafka while preserving configuration
+    # Useful for temporarily pausing data ingestion or troubleshooting
+    stop(name: String!): KafkaClientResult!
+
+    # Toggle Kafka client enabled state
+    # Enable or disable a Kafka client without deleting its configuration
+    # Disabled clients stop consuming but retain their configuration and consumer group position
+    toggle(name: String!, enabled: Boolean!): KafkaClientResult!
+
+    # Reassign a Kafka client to a different cluster node
+    # Moves the client connector from one node to another for load balancing
+    # The client configuration remains unchanged, only the deployment location changes
+    # Consumer group position is preserved across reassignments
+    reassign(name: String!, nodeId: String!): KafkaClientResult!
+}
+
+# Extend Mutations for Kafka clients
+extend type Mutation {
+    # Access Kafka client management operations
+    # Returns a KafkaClientMutations type that provides grouped mutation operations
+    kafkaClient: KafkaClientMutations!
+}
+
+
+type KafkaClientResult {
+    success: Boolean!
+    client: KafkaClient
+    errors: [String!]!
+}
+
+input KafkaClientConfigInput {
+    bootstrapServers: String = "localhost:9092"
+    groupId: String = "monstermq-subscriber"
+    payloadFormat: KafkaPayloadFormat = DEFAULT
+    extraConsumerConfig: JSON
+    reconnectDelayMs: Long = 5000
+    # Optional prefix applied to all published MQTT topics (see KafkaClientConfig.destinationTopicPrefix)
+    destinationTopicPrefix: String
+    # Regex pattern applied to the Kafka record key to transform it into an MQTT topic name
+    topicKeyRegex: String
+    # Replacement string used with topicKeyRegex (e.g. "/" to convert dots to slashes)
+    topicKeyReplacement: String
+    # NOTE: Kafka topic is now derived from the device namespace
+
+    inboundEnabled: Boolean = true
+    outboundEnabled: Boolean = false
+    outboundTopicFilters: [String!] = []
+    outboundKafkaTopic: String
+    extraProducerConfig: JSON
+    outboundTopicKeyRegex: String
+    outboundTopicKeyReplacement: String
+}
+
+input KafkaClientInput {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    enabled: Boolean = true
+    config: KafkaClientConfigInput!
 }
 `, BuiltIn: false},
 	{Name: "../schema/peerlink.graphqls", Input: `# PeerLink configuration and live link state (doc/peerlink.md)
@@ -3213,6 +3424,112 @@ func (ec *executionContext) childFields_ImportDeviceConfigResult(ctx context.Con
 	return nil, fmt.Errorf("no field named %q was found under type ImportDeviceConfigResult", field.Name)
 }
 
+func (ec *executionContext) childFields_KafkaClient(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "name":
+		return ec.fieldContext_KafkaClient_name(ctx, field)
+	case "namespace":
+		return ec.fieldContext_KafkaClient_namespace(ctx, field)
+	case "nodeId":
+		return ec.fieldContext_KafkaClient_nodeId(ctx, field)
+	case "config":
+		return ec.fieldContext_KafkaClient_config(ctx, field)
+	case "enabled":
+		return ec.fieldContext_KafkaClient_enabled(ctx, field)
+	case "createdAt":
+		return ec.fieldContext_KafkaClient_createdAt(ctx, field)
+	case "updatedAt":
+		return ec.fieldContext_KafkaClient_updatedAt(ctx, field)
+	case "isOnCurrentNode":
+		return ec.fieldContext_KafkaClient_isOnCurrentNode(ctx, field)
+	case "metrics":
+		return ec.fieldContext_KafkaClient_metrics(ctx, field)
+	case "metricsHistory":
+		return ec.fieldContext_KafkaClient_metricsHistory(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KafkaClient", field.Name)
+}
+
+func (ec *executionContext) childFields_KafkaClientConfig(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "bootstrapServers":
+		return ec.fieldContext_KafkaClientConfig_bootstrapServers(ctx, field)
+	case "groupId":
+		return ec.fieldContext_KafkaClientConfig_groupId(ctx, field)
+	case "payloadFormat":
+		return ec.fieldContext_KafkaClientConfig_payloadFormat(ctx, field)
+	case "extraConsumerConfig":
+		return ec.fieldContext_KafkaClientConfig_extraConsumerConfig(ctx, field)
+	case "reconnectDelayMs":
+		return ec.fieldContext_KafkaClientConfig_reconnectDelayMs(ctx, field)
+	case "destinationTopicPrefix":
+		return ec.fieldContext_KafkaClientConfig_destinationTopicPrefix(ctx, field)
+	case "topicKeyRegex":
+		return ec.fieldContext_KafkaClientConfig_topicKeyRegex(ctx, field)
+	case "topicKeyReplacement":
+		return ec.fieldContext_KafkaClientConfig_topicKeyReplacement(ctx, field)
+	case "inboundEnabled":
+		return ec.fieldContext_KafkaClientConfig_inboundEnabled(ctx, field)
+	case "outboundEnabled":
+		return ec.fieldContext_KafkaClientConfig_outboundEnabled(ctx, field)
+	case "outboundTopicFilters":
+		return ec.fieldContext_KafkaClientConfig_outboundTopicFilters(ctx, field)
+	case "outboundKafkaTopic":
+		return ec.fieldContext_KafkaClientConfig_outboundKafkaTopic(ctx, field)
+	case "extraProducerConfig":
+		return ec.fieldContext_KafkaClientConfig_extraProducerConfig(ctx, field)
+	case "outboundTopicKeyRegex":
+		return ec.fieldContext_KafkaClientConfig_outboundTopicKeyRegex(ctx, field)
+	case "outboundTopicKeyReplacement":
+		return ec.fieldContext_KafkaClientConfig_outboundTopicKeyReplacement(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KafkaClientConfig", field.Name)
+}
+
+func (ec *executionContext) childFields_KafkaClientMetrics(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "messagesIn":
+		return ec.fieldContext_KafkaClientMetrics_messagesIn(ctx, field)
+	case "messagesOut":
+		return ec.fieldContext_KafkaClientMetrics_messagesOut(ctx, field)
+	case "timestamp":
+		return ec.fieldContext_KafkaClientMetrics_timestamp(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KafkaClientMetrics", field.Name)
+}
+
+func (ec *executionContext) childFields_KafkaClientMutations(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "create":
+		return ec.fieldContext_KafkaClientMutations_create(ctx, field)
+	case "update":
+		return ec.fieldContext_KafkaClientMutations_update(ctx, field)
+	case "delete":
+		return ec.fieldContext_KafkaClientMutations_delete(ctx, field)
+	case "start":
+		return ec.fieldContext_KafkaClientMutations_start(ctx, field)
+	case "stop":
+		return ec.fieldContext_KafkaClientMutations_stop(ctx, field)
+	case "toggle":
+		return ec.fieldContext_KafkaClientMutations_toggle(ctx, field)
+	case "reassign":
+		return ec.fieldContext_KafkaClientMutations_reassign(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KafkaClientMutations", field.Name)
+}
+
+func (ec *executionContext) childFields_KafkaClientResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+	switch field.Name {
+	case "success":
+		return ec.fieldContext_KafkaClientResult_success(ctx, field)
+	case "client":
+		return ec.fieldContext_KafkaClientResult_client(ctx, field)
+	case "errors":
+		return ec.fieldContext_KafkaClientResult_errors(ctx, field)
+	}
+	return nil, fmt.Errorf("no field named %q was found under type KafkaClientResult", field.Name)
+}
+
 func (ec *executionContext) childFields_LoginResult(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 	switch field.Name {
 	case "success":
@@ -5523,6 +5840,158 @@ func (ec *executionContext) field_HmiMutations_uploadZip_args(ctx context.Contex
 	return args, nil
 }
 
+func (ec *executionContext) field_KafkaClientMutations_create_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (KafkaClientInput, error) {
+			return ec.unmarshalNKafkaClientInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_delete_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_reassign_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "nodeId",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["nodeId"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_start_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_stop_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_toggle_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "enabled",
+		func(ctx context.Context, v any) (bool, error) {
+			return ec.unmarshalNBoolean2bool(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["enabled"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClientMutations_update_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (string, error) {
+			return ec.unmarshalNString2string(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "input",
+		func(ctx context.Context, v any) (KafkaClientInput, error) {
+			return ec.unmarshalNKafkaClientInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientInput(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_KafkaClient_metricsHistory_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "from",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["from"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "to",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["to"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "lastMinutes",
+		func(ctx context.Context, v any) (*int, error) {
+			return ec.unmarshalOInt2ᚖint(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["lastMinutes"] = arg2
+	return args, nil
+}
+
 func (ec *executionContext) field_MqttClientMutations_addAddress_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -6340,6 +6809,28 @@ func (ec *executionContext) field_Query_hmis_args(ctx context.Context, rawArgs m
 		return nil, err
 	}
 	args["nodeId"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_kafkaClients_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "name",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["name"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "node",
+		func(ctx context.Context, v any) (*string, error) {
+			return ec.unmarshalOString2ᚖstring(ctx, v)
+		})
+	if err != nil {
+		return nil, err
+	}
+	args["node"] = arg1
 	return args, nil
 }
 
@@ -14116,6 +14607,1075 @@ func (ec *executionContext) fieldContext_ImportDeviceConfigResult_errors(_ conte
 	return graphql.NewScalarFieldContext("ImportDeviceConfigResult", field, false, false, errors.New("field of type String does not have child fields"))
 }
 
+func (ec *executionContext) _KafkaClient_name(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_name(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_namespace(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_namespace(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Namespace, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_namespace(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_nodeId(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_nodeId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_config(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_config(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Config, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientConfig) graphql.Marshaler {
+			return ec.marshalNKafkaClientConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientConfig(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_config(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientConfig(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClient_enabled(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_enabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Enabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_enabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_createdAt(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_createdAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_updatedAt(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_updatedAt(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_isOnCurrentNode(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_isOnCurrentNode(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.IsOnCurrentNode, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_isOnCurrentNode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClient", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClient_metrics(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_metrics(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.KafkaClient().Metrics(ctx, obj)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*KafkaClientMetrics) graphql.Marshaler {
+			return ec.marshalNKafkaClientMetrics2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMetricsᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_metrics(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClient",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientMetrics(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClient_metricsHistory(ctx context.Context, field graphql.CollectedField, obj *KafkaClient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClient_metricsHistory(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClient().MetricsHistory(ctx, obj, fc.Args["from"].(*string), fc.Args["to"].(*string), fc.Args["lastMinutes"].(*int))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*KafkaClientMetrics) graphql.Marshaler {
+			return ec.marshalNKafkaClientMetrics2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMetricsᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClient_metricsHistory(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClient",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientMetrics(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClient_metricsHistory_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientConfig_bootstrapServers(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_bootstrapServers(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.BootstrapServers, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_bootstrapServers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_groupId(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_groupId(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.GroupID, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_groupId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_payloadFormat(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_payloadFormat(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.PayloadFormat, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v KafkaPayloadFormat) graphql.Marshaler {
+			return ec.marshalNKafkaPayloadFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_payloadFormat(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type KafkaPayloadFormat does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_extraConsumerConfig(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_extraConsumerConfig(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExtraConsumerConfig, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v map[string]any) graphql.Marshaler {
+			return ec.marshalOJSON2map(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_extraConsumerConfig(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type JSON does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_reconnectDelayMs(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_reconnectDelayMs(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ReconnectDelayMs, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v int64) graphql.Marshaler {
+			return ec.marshalNLong2int64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_reconnectDelayMs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type Long does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_destinationTopicPrefix(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_destinationTopicPrefix(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.DestinationTopicPrefix, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_destinationTopicPrefix(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_topicKeyRegex(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_topicKeyRegex(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TopicKeyRegex, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_topicKeyRegex(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_topicKeyReplacement(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_topicKeyReplacement(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.TopicKeyReplacement, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_topicKeyReplacement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_inboundEnabled(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_inboundEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.InboundEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_inboundEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_outboundEnabled(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_outboundEnabled(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutboundEnabled, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_outboundEnabled(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_outboundTopicFilters(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_outboundTopicFilters(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutboundTopicFilters, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_outboundTopicFilters(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_outboundKafkaTopic(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_outboundKafkaTopic(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutboundKafkaTopic, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_outboundKafkaTopic(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_extraProducerConfig(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_extraProducerConfig(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.ExtraProducerConfig, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v map[string]any) graphql.Marshaler {
+			return ec.marshalOJSON2map(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_extraProducerConfig(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type JSON does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_outboundTopicKeyRegex(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_outboundTopicKeyRegex(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutboundTopicKeyRegex, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_outboundTopicKeyRegex(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientConfig_outboundTopicKeyReplacement(ctx context.Context, field graphql.CollectedField, obj *KafkaClientConfig) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientConfig_outboundTopicKeyReplacement(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.OutboundTopicKeyReplacement, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *string) graphql.Marshaler {
+			return ec.marshalOString2ᚖstring(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientConfig_outboundTopicKeyReplacement(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientConfig", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientMetrics_messagesIn(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMetrics) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMetrics_messagesIn(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MessagesIn, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
+			return ec.marshalNFloat2float64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMetrics_messagesIn(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientMetrics", field, false, false, errors.New("field of type Float does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientMetrics_messagesOut(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMetrics) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMetrics_messagesOut(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.MessagesOut, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v float64) graphql.Marshaler {
+			return ec.marshalNFloat2float64(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMetrics_messagesOut(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientMetrics", field, false, false, errors.New("field of type Float does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientMetrics_timestamp(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMetrics) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMetrics_timestamp(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Timestamp, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v string) graphql.Marshaler {
+			return ec.marshalNString2string(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMetrics_timestamp(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientMetrics", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientMutations_create(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_create(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Create(ctx, obj, fc.Args["input"].(KafkaClientInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_create(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_create_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_update(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_update(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Update(ctx, obj, fc.Args["name"].(string), fc.Args["input"].(KafkaClientInput))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_update(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_update_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_delete(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_delete(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Delete(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_delete(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_delete_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_start(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_start(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Start(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_start(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_start_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_stop(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_stop(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Stop(ctx, obj, fc.Args["name"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_stop(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_stop_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_toggle(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_toggle(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Toggle(ctx, obj, fc.Args["name"].(string), fc.Args["enabled"].(bool))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_toggle(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_toggle_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientMutations_reassign(ctx context.Context, field graphql.CollectedField, obj *KafkaClientMutations) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientMutations_reassign(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.KafkaClientMutations().Reassign(ctx, obj, fc.Args["name"].(string), fc.Args["nodeId"].(string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+			return ec.marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientMutations_reassign(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientMutations",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientResult(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_KafkaClientMutations_reassign_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientResult_success(ctx context.Context, field graphql.CollectedField, obj *KafkaClientResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientResult_success(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Success, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v bool) graphql.Marshaler {
+			return ec.marshalNBoolean2bool(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientResult_success(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientResult", field, false, false, errors.New("field of type Boolean does not have child fields"))
+}
+
+func (ec *executionContext) _KafkaClientResult_client(ctx context.Context, field graphql.CollectedField, obj *KafkaClientResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientResult_client(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Client, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClient) graphql.Marshaler {
+			return ec.marshalOKafkaClient2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClient(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientResult_client(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "KafkaClientResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClient(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _KafkaClientResult_errors(ctx context.Context, field graphql.CollectedField, obj *KafkaClientResult) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_KafkaClientResult_errors(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.Errors, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []string) graphql.Marshaler {
+			return ec.marshalNString2ᚕstringᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_KafkaClientResult_errors(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("KafkaClientResult", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
 func (ec *executionContext) _LoginResult_success(ctx context.Context, field graphql.CollectedField, obj *LoginResult) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -16524,6 +18084,38 @@ func (ec *executionContext) fieldContext_Mutation_genAiProvider(_ context.Contex
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_GenAiProviderMutations(ctx, field)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_kafkaClient(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Mutation_kafkaClient(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return ec.Resolvers.Mutation().KafkaClient(ctx)
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *KafkaClientMutations) graphql.Marshaler {
+			return ec.marshalNKafkaClientMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMutations(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Mutation_kafkaClient(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClientMutations(ctx, field)
 		},
 	}
 	return fc, nil
@@ -18958,6 +20550,50 @@ func (ec *executionContext) fieldContext_Query_genai(_ context.Context, field gr
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return ec.childFields_GenAiQuery(ctx, field)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_kafkaClients(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_Query_kafkaClients(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().KafkaClients(ctx, fc.Args["name"].(*string), fc.Args["node"].(*string))
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v []*KafkaClient) graphql.Marshaler {
+			return ec.marshalNKafkaClient2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientᚄ(ctx, selections, v)
+		},
+		true,
+		true,
+	)
+}
+func (ec *executionContext) fieldContext_Query_kafkaClients(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.childFields_KafkaClient(ctx, field)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_kafkaClients_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -34030,6 +35666,218 @@ func (ec *executionContext) unmarshalInputHmiInput(ctx context.Context, obj any)
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputKafkaClientConfigInput(ctx context.Context, obj any) (KafkaClientConfigInput, error) {
+	var it KafkaClientConfigInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["bootstrapServers"]; !present {
+		asMap["bootstrapServers"] = "localhost:9092"
+	}
+	if _, present := asMap["groupId"]; !present {
+		asMap["groupId"] = "monstermq-subscriber"
+	}
+	if _, present := asMap["payloadFormat"]; !present {
+		asMap["payloadFormat"] = "DEFAULT"
+	}
+	if _, present := asMap["reconnectDelayMs"]; !present {
+		asMap["reconnectDelayMs"] = 5000
+	}
+	if _, present := asMap["inboundEnabled"]; !present {
+		asMap["inboundEnabled"] = true
+	}
+	if _, present := asMap["outboundEnabled"]; !present {
+		asMap["outboundEnabled"] = false
+	}
+	if _, present := asMap["outboundTopicFilters"]; !present {
+		asMap["outboundTopicFilters"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"bootstrapServers", "groupId", "payloadFormat", "extraConsumerConfig", "reconnectDelayMs", "destinationTopicPrefix", "topicKeyRegex", "topicKeyReplacement", "inboundEnabled", "outboundEnabled", "outboundTopicFilters", "outboundKafkaTopic", "extraProducerConfig", "outboundTopicKeyRegex", "outboundTopicKeyReplacement"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "bootstrapServers":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("bootstrapServers"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.BootstrapServers = data
+		case "groupId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("groupId"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.GroupID = data
+		case "payloadFormat":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadFormat"))
+			data, err := ec.unmarshalOKafkaPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PayloadFormat = data
+		case "extraConsumerConfig":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("extraConsumerConfig"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExtraConsumerConfig = data
+		case "reconnectDelayMs":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reconnectDelayMs"))
+			data, err := ec.unmarshalOLong2ᚖint64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReconnectDelayMs = data
+		case "destinationTopicPrefix":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("destinationTopicPrefix"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DestinationTopicPrefix = data
+		case "topicKeyRegex":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicKeyRegex"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicKeyRegex = data
+		case "topicKeyReplacement":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("topicKeyReplacement"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TopicKeyReplacement = data
+		case "inboundEnabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("inboundEnabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.InboundEnabled = data
+		case "outboundEnabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outboundEnabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OutboundEnabled = data
+		case "outboundTopicFilters":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outboundTopicFilters"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OutboundTopicFilters = data
+		case "outboundKafkaTopic":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outboundKafkaTopic"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OutboundKafkaTopic = data
+		case "extraProducerConfig":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("extraProducerConfig"))
+			data, err := ec.unmarshalOJSON2map(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExtraProducerConfig = data
+		case "outboundTopicKeyRegex":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outboundTopicKeyRegex"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OutboundTopicKeyRegex = data
+		case "outboundTopicKeyReplacement":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("outboundTopicKeyReplacement"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OutboundTopicKeyReplacement = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputKafkaClientInput(ctx context.Context, obj any) (KafkaClientInput, error) {
+	var it KafkaClientInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["enabled"]; !present {
+		asMap["enabled"] = true
+	}
+
+	fieldsInOrder := [...]string{"name", "namespace", "nodeId", "enabled", "config"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "name":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("name"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Name = data
+		case "namespace":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("namespace"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Namespace = data
+		case "nodeId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("nodeId"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.NodeID = data
+		case "enabled":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("enabled"))
+			data, err := ec.unmarshalOBoolean2ᚖbool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Enabled = data
+		case "config":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("config"))
+			data, err := ec.unmarshalNKafkaClientConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientConfigInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Config = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputMqttClientAddressInput(ctx context.Context, obj any) (MqttClientAddressInput, error) {
 	var it MqttClientAddressInput
 	if obj == nil {
@@ -39559,6 +41407,658 @@ func (ec *executionContext) _ImportDeviceConfigResult(ctx context.Context, sel a
 	return out
 }
 
+var kafkaClientImplementors = []string{"KafkaClient"}
+
+func (ec *executionContext) _KafkaClient(ctx context.Context, sel ast.SelectionSet, obj *KafkaClient) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, kafkaClientImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KafkaClient")
+		case "name":
+			out.Values[i] = ec._KafkaClient_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "namespace":
+			out.Values[i] = ec._KafkaClient_namespace(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "nodeId":
+			out.Values[i] = ec._KafkaClient_nodeId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "config":
+			out.Values[i] = ec._KafkaClient_config(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "enabled":
+			out.Values[i] = ec._KafkaClient_enabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "createdAt":
+			out.Values[i] = ec._KafkaClient_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "updatedAt":
+			out.Values[i] = ec._KafkaClient_updatedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "isOnCurrentNode":
+			out.Values[i] = ec._KafkaClient_isOnCurrentNode(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "metrics":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClient_metrics(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "metricsHistory":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClient_metricsHistory(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var kafkaClientConfigImplementors = []string{"KafkaClientConfig"}
+
+func (ec *executionContext) _KafkaClientConfig(ctx context.Context, sel ast.SelectionSet, obj *KafkaClientConfig) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, kafkaClientConfigImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KafkaClientConfig")
+		case "bootstrapServers":
+			out.Values[i] = ec._KafkaClientConfig_bootstrapServers(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "groupId":
+			out.Values[i] = ec._KafkaClientConfig_groupId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "payloadFormat":
+			out.Values[i] = ec._KafkaClientConfig_payloadFormat(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "extraConsumerConfig":
+			out.Values[i] = ec._KafkaClientConfig_extraConsumerConfig(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "reconnectDelayMs":
+			out.Values[i] = ec._KafkaClientConfig_reconnectDelayMs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "destinationTopicPrefix":
+			out.Values[i] = ec._KafkaClientConfig_destinationTopicPrefix(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "topicKeyRegex":
+			out.Values[i] = ec._KafkaClientConfig_topicKeyRegex(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "topicKeyReplacement":
+			out.Values[i] = ec._KafkaClientConfig_topicKeyReplacement(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "inboundEnabled":
+			out.Values[i] = ec._KafkaClientConfig_inboundEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "outboundEnabled":
+			out.Values[i] = ec._KafkaClientConfig_outboundEnabled(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "outboundTopicFilters":
+			out.Values[i] = ec._KafkaClientConfig_outboundTopicFilters(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "outboundKafkaTopic":
+			out.Values[i] = ec._KafkaClientConfig_outboundKafkaTopic(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "extraProducerConfig":
+			out.Values[i] = ec._KafkaClientConfig_extraProducerConfig(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "outboundTopicKeyRegex":
+			out.Values[i] = ec._KafkaClientConfig_outboundTopicKeyRegex(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "outboundTopicKeyReplacement":
+			out.Values[i] = ec._KafkaClientConfig_outboundTopicKeyReplacement(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var kafkaClientMetricsImplementors = []string{"KafkaClientMetrics"}
+
+func (ec *executionContext) _KafkaClientMetrics(ctx context.Context, sel ast.SelectionSet, obj *KafkaClientMetrics) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, kafkaClientMetricsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KafkaClientMetrics")
+		case "messagesIn":
+			out.Values[i] = ec._KafkaClientMetrics_messagesIn(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "messagesOut":
+			out.Values[i] = ec._KafkaClientMetrics_messagesOut(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "timestamp":
+			out.Values[i] = ec._KafkaClientMetrics_timestamp(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var kafkaClientMutationsImplementors = []string{"KafkaClientMutations"}
+
+func (ec *executionContext) _KafkaClientMutations(ctx context.Context, sel ast.SelectionSet, obj *KafkaClientMutations) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, kafkaClientMutationsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KafkaClientMutations")
+		case "create":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_create(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "update":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_update(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "delete":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_delete(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "start":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_start(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "stop":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_stop(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "toggle":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_toggle(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		case "reassign":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._KafkaClientMutations_reassign(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			if field.IsDeferred() {
+				deferredFieldSet.AddField(field)
+				fieldIndex := len(deferredFieldSet.Values) - 1
+				deferredFieldSet.Concurrently(fieldIndex, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, deferredFieldSet)
+				})
+
+				for _, deferrable := range field.Deferrables {
+					view, ok := deferLabelToView[deferrable.Label]
+					if !ok {
+						view = deferredFieldSet.NewView()
+						deferLabelToView[deferrable.Label] = view
+					}
+					view.AddIndices(fieldIndex)
+				}
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
+var kafkaClientResultImplementors = []string{"KafkaClientResult"}
+
+func (ec *executionContext) _KafkaClientResult(ctx context.Context, sel ast.SelectionSet, obj *KafkaClientResult) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, kafkaClientResultImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferredFieldSet := graphql.NewFieldSet(nil)
+	deferLabelToView := make(map[string]*graphql.FieldSetView)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("KafkaClientResult")
+		case "success":
+			out.Values[i] = ec._KafkaClientResult_success(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "client":
+			out.Values[i] = ec._KafkaClientResult_client(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				out.Invalids++
+			}
+		case "errors":
+			out.Values[i] = ec._KafkaClientResult_errors(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(min(len(deferLabelToView), math.MaxInt32)))
+
+	ec.ProcessDeferredGroup(graphql.DeferredGroup{
+		Defers:   deferLabelToView,
+		Path:     graphql.GetPath(ctx),
+		FieldSet: deferredFieldSet,
+		Context:  ctx,
+	})
+
+	return out
+}
+
 var loginResultImplementors = []string{"LoginResult"}
 
 func (ec *executionContext) _LoginResult(ctx context.Context, sel ast.SelectionSet, obj *LoginResult) graphql.Marshaler {
@@ -40691,6 +43191,13 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			if out.Values[i] == graphql.RequiredNull {
 				out.Invalids++
 			}
+		case "kafkaClient":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_kafkaClient(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		case "saveRedfishMapping":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_saveRedfishMapping(ctx, field)
@@ -41804,6 +44311,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 				}()
 				res = ec._Query_genai(ctx, field)
 				if res == graphql.RequiredNull {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "kafkaClients":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_kafkaClients(ctx, field)
+				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
 				return res
@@ -50460,6 +52989,108 @@ func (ec *executionContext) marshalNJSON2ᚕᚕinterfaceᚄ(ctx context.Context,
 	return ret
 }
 
+func (ec *executionContext) marshalNKafkaClient2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientᚄ(ctx context.Context, sel ast.SelectionSet, v []*KafkaClient) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNKafkaClient2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClient(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNKafkaClient2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClient(ctx context.Context, sel ast.SelectionSet, v *KafkaClient) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KafkaClient(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNKafkaClientConfig2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientConfig(ctx context.Context, sel ast.SelectionSet, v *KafkaClientConfig) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KafkaClientConfig(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNKafkaClientConfigInput2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientConfigInput(ctx context.Context, v any) (*KafkaClientConfigInput, error) {
+	res, err := ec.unmarshalInputKafkaClientConfigInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNKafkaClientInput2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientInput(ctx context.Context, v any) (KafkaClientInput, error) {
+	res, err := ec.unmarshalInputKafkaClientInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNKafkaClientMetrics2ᚕᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMetricsᚄ(ctx context.Context, sel ast.SelectionSet, v []*KafkaClientMetrics) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNKafkaClientMetrics2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMetrics(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNKafkaClientMetrics2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMetrics(ctx context.Context, sel ast.SelectionSet, v *KafkaClientMetrics) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KafkaClientMetrics(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNKafkaClientMutations2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientMutations(ctx context.Context, sel ast.SelectionSet, v *KafkaClientMutations) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KafkaClientMutations(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNKafkaClientResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClientResult(ctx context.Context, sel ast.SelectionSet, v *KafkaClientResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._KafkaClientResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNKafkaPayloadFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx context.Context, v any) (KafkaPayloadFormat, error) {
+	var res KafkaPayloadFormat
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNKafkaPayloadFormat2monstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx context.Context, sel ast.SelectionSet, v KafkaPayloadFormat) graphql.Marshaler {
+	return v
+}
+
 func (ec *executionContext) unmarshalNLong2int64(ctx context.Context, v any) (int64, error) {
 	res, err := graphql.UnmarshalInt64(v)
 	return res, graphql.ErrorOnPath(ctx, err)
@@ -52635,6 +55266,29 @@ func (ec *executionContext) marshalOJSON2map(ctx context.Context, sel ast.Select
 	_ = ctx
 	res := graphql.MarshalMap(v)
 	return res
+}
+
+func (ec *executionContext) marshalOKafkaClient2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaClient(ctx context.Context, sel ast.SelectionSet, v *KafkaClient) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._KafkaClient(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOKafkaPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx context.Context, v any) (*KafkaPayloadFormat, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(KafkaPayloadFormat)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOKafkaPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐKafkaPayloadFormat(ctx context.Context, sel ast.SelectionSet, v *KafkaPayloadFormat) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOLoginResult2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐLoginResult(ctx context.Context, sel ast.SelectionSet, v *LoginResult) graphql.Marshaler {

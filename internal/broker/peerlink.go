@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"monstermq.io/edge/internal/bridge/kafkaclient"
 	"monstermq.io/edge/internal/bridge/mqttclient"
 	"monstermq.io/edge/internal/bridge/rtspcamera"
 	"monstermq.io/edge/internal/bridge/winccoa"
@@ -204,6 +205,23 @@ func warnPeerLinkDevices(ctx context.Context, cfg *config.Config, storage *store
 				}
 			}
 			if !inbound {
+				continue
+			}
+		case kafkaclient.DeviceTypeKafkaClient:
+			kc, err := kafkaclient.ParseConfig(d.Config)
+			if err != nil {
+				continue
+			}
+			for _, server := range strings.Split(kc.BootstrapServers, ",") {
+				if host := bridgeHost(strings.TrimSpace(server)); host != "" {
+					if peer, ok := peerHosts[host]; ok {
+						logger.Warn("PeerLink: Kafka client connects to a PeerLink peer; messages can loop between the nodes",
+							"device", d.Name, "peer", peer, "bootstrapServers", kc.BootstrapServers, "inbound", kc.InboundEnabled)
+						break
+					}
+				}
+			}
+			if !kc.InboundEnabled {
 				continue
 			}
 		case winccua.DeviceTypeWinCCUaClient, winccoa.DeviceTypeWinCCOaClient, rtspcamera.DeviceTypeRtspCamera, scripting.DeviceTypeScript:

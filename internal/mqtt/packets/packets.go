@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"monstermq.io/edge/internal/mqtt/mempool"
 )
@@ -126,6 +127,7 @@ type Packet struct {
 	TopicName       string        // the topic a payload is being published to
 	Origin          string        // client id of the client who is issuing the packet (mostly internal use)
 	Forward         *Forward      // set on a publish injected by the peer link; never encoded, not copied by Copy
+	Source          *Source       // set on a publish injected by a bridge that keeps the original message identity; never encoded, not copied by Copy
 	FixedHeader     FixedHeader   // -
 	Created         int64         // unix timestamp indicating time packet was created/received on the server
 	Expiry          int64         // unix timestamp indicating when the packet will expire and should be deleted
@@ -154,6 +156,17 @@ type Forward struct {
 	Will       bool   // the record is a will message
 	Snapshot   bool   // the record comes from a retained snapshot, not the live log
 	Inline     bool   // published by an inline client on the source (a bridge, the broker itself)
+}
+
+// Source is the identity of a message a bridge republishes (the Kafka client
+// bridge, from Core's message envelope): the storage hook gives the local
+// message this UUID, time, message id and flags instead of new ones.
+type Source struct {
+	MessageUUID string
+	Time        time.Time
+	MessageID   uint16
+	Dup         bool
+	Queued      bool
 }
 
 // Mods specifies certain values required for certain mqtt v5 compliance within packet encoding/decoding.

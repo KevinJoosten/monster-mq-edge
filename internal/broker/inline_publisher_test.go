@@ -131,3 +131,19 @@ func TestNetworkClientsCannotTakeBridgeClientIDs(t *testing.T) {
 		}
 	}
 }
+
+// The Kafka bridge skips outbound messages from "kafkaclient-<name>", so the
+// prefix is reserved while the Kafka feature is on, and only then.
+func TestNetworkClientsCannotTakeKafkaClientIDs(t *testing.T) {
+	cases := map[string]bool{"kafkaclient-orders": true, "kafkaclient-": true, "kafka-1": false, "bridge:x": true}
+	for _, kafkaOn := range []bool{true, false} {
+		h := &bridgeIDHook{kafka: kafkaOn}
+		for id, refused := range cases {
+			want := refused && (kafkaOn || id == "bridge:x")
+			cl := &mqtt.Client{ID: id}
+			if err := h.OnConnect(cl, packets.Packet{}); (err != nil) != want {
+				t.Errorf("kafka=%v %q: err = %v, want refused=%v", kafkaOn, id, err, want)
+			}
+		}
+	}
+}

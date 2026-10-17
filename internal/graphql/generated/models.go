@@ -429,6 +429,85 @@ type ImportDeviceConfigResult struct {
 	Errors   []string `json:"errors"`
 }
 
+type KafkaClient struct {
+	Name            string                `json:"name"`
+	Namespace       string                `json:"namespace"`
+	NodeID          string                `json:"nodeId"`
+	Config          *KafkaClientConfig    `json:"config"`
+	Enabled         bool                  `json:"enabled"`
+	CreatedAt       string                `json:"createdAt"`
+	UpdatedAt       string                `json:"updatedAt"`
+	IsOnCurrentNode bool                  `json:"isOnCurrentNode"`
+	Metrics         []*KafkaClientMetrics `json:"metrics"`
+	MetricsHistory  []*KafkaClientMetrics `json:"metricsHistory"`
+}
+
+type KafkaClientConfig struct {
+	BootstrapServers            string             `json:"bootstrapServers"`
+	GroupID                     string             `json:"groupId"`
+	PayloadFormat               KafkaPayloadFormat `json:"payloadFormat"`
+	ExtraConsumerConfig         map[string]any     `json:"extraConsumerConfig,omitempty"`
+	ReconnectDelayMs            int64              `json:"reconnectDelayMs"`
+	DestinationTopicPrefix      *string            `json:"destinationTopicPrefix,omitempty"`
+	TopicKeyRegex               *string            `json:"topicKeyRegex,omitempty"`
+	TopicKeyReplacement         *string            `json:"topicKeyReplacement,omitempty"`
+	InboundEnabled              bool               `json:"inboundEnabled"`
+	OutboundEnabled             bool               `json:"outboundEnabled"`
+	OutboundTopicFilters        []string           `json:"outboundTopicFilters"`
+	OutboundKafkaTopic          *string            `json:"outboundKafkaTopic,omitempty"`
+	ExtraProducerConfig         map[string]any     `json:"extraProducerConfig,omitempty"`
+	OutboundTopicKeyRegex       *string            `json:"outboundTopicKeyRegex,omitempty"`
+	OutboundTopicKeyReplacement *string            `json:"outboundTopicKeyReplacement,omitempty"`
+}
+
+type KafkaClientConfigInput struct {
+	BootstrapServers            *string             `json:"bootstrapServers,omitempty"`
+	GroupID                     *string             `json:"groupId,omitempty"`
+	PayloadFormat               *KafkaPayloadFormat `json:"payloadFormat,omitempty"`
+	ExtraConsumerConfig         map[string]any      `json:"extraConsumerConfig,omitempty"`
+	ReconnectDelayMs            *int64              `json:"reconnectDelayMs,omitempty"`
+	DestinationTopicPrefix      *string             `json:"destinationTopicPrefix,omitempty"`
+	TopicKeyRegex               *string             `json:"topicKeyRegex,omitempty"`
+	TopicKeyReplacement         *string             `json:"topicKeyReplacement,omitempty"`
+	InboundEnabled              *bool               `json:"inboundEnabled,omitempty"`
+	OutboundEnabled             *bool               `json:"outboundEnabled,omitempty"`
+	OutboundTopicFilters        []string            `json:"outboundTopicFilters,omitempty"`
+	OutboundKafkaTopic          *string             `json:"outboundKafkaTopic,omitempty"`
+	ExtraProducerConfig         map[string]any      `json:"extraProducerConfig,omitempty"`
+	OutboundTopicKeyRegex       *string             `json:"outboundTopicKeyRegex,omitempty"`
+	OutboundTopicKeyReplacement *string             `json:"outboundTopicKeyReplacement,omitempty"`
+}
+
+type KafkaClientInput struct {
+	Name      string                  `json:"name"`
+	Namespace string                  `json:"namespace"`
+	NodeID    string                  `json:"nodeId"`
+	Enabled   *bool                   `json:"enabled,omitempty"`
+	Config    *KafkaClientConfigInput `json:"config"`
+}
+
+type KafkaClientMetrics struct {
+	MessagesIn  float64 `json:"messagesIn"`
+	MessagesOut float64 `json:"messagesOut"`
+	Timestamp   string  `json:"timestamp"`
+}
+
+type KafkaClientMutations struct {
+	Create   *KafkaClientResult `json:"create"`
+	Update   *KafkaClientResult `json:"update"`
+	Delete   bool               `json:"delete"`
+	Start    *KafkaClientResult `json:"start"`
+	Stop     *KafkaClientResult `json:"stop"`
+	Toggle   *KafkaClientResult `json:"toggle"`
+	Reassign *KafkaClientResult `json:"reassign"`
+}
+
+type KafkaClientResult struct {
+	Success bool         `json:"success"`
+	Client  *KafkaClient `json:"client,omitempty"`
+	Errors  []string     `json:"errors"`
+}
+
 type LoginResult struct {
 	Success  bool    `json:"success"`
 	Message  *string `json:"message,omitempty"`
@@ -1867,6 +1946,73 @@ func (e *DatabaseConnectionType) UnmarshalJSON(b []byte) error {
 }
 
 func (e DatabaseConnectionType) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Kafka client bridge connects to an external Kafka cluster and republishes consumed
+// records as MQTT messages inside MonsterMQ. A single Kafka topic is consumed and each
+// record is polled periodically then published to MQTT.
+//
+// Topic mapping strategy:
+// - The Kafka topic consumed is the device namespace
+// - For BINARY/TEXT formats: MQTT topic = record key (record dropped if key null)
+// - For DEFAULT/JSON formats: value encodes a BrokerMessage whose internal topicName is used
+type KafkaPayloadFormat string
+
+const (
+	KafkaPayloadFormatDefault KafkaPayloadFormat = "DEFAULT"
+	KafkaPayloadFormatJSON    KafkaPayloadFormat = "JSON"
+	KafkaPayloadFormatBinary  KafkaPayloadFormat = "BINARY"
+	KafkaPayloadFormatText    KafkaPayloadFormat = "TEXT"
+)
+
+var AllKafkaPayloadFormat = []KafkaPayloadFormat{
+	KafkaPayloadFormatDefault,
+	KafkaPayloadFormatJSON,
+	KafkaPayloadFormatBinary,
+	KafkaPayloadFormatText,
+}
+
+func (e KafkaPayloadFormat) IsValid() bool {
+	switch e {
+	case KafkaPayloadFormatDefault, KafkaPayloadFormatJSON, KafkaPayloadFormatBinary, KafkaPayloadFormatText:
+		return true
+	}
+	return false
+}
+
+func (e KafkaPayloadFormat) String() string {
+	return string(e)
+}
+
+func (e *KafkaPayloadFormat) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = KafkaPayloadFormat(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid KafkaPayloadFormat", str)
+	}
+	return nil
+}
+
+func (e KafkaPayloadFormat) MarshalGQL(w io.Writer) {
+	_, _ = fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *KafkaPayloadFormat) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e KafkaPayloadFormat) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil

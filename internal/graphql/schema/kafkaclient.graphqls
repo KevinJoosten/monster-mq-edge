@@ -1,0 +1,191 @@
+# Kafka client bridge (KAFKA-Client devices). Copied verbatim from MonsterMQ Core
+# schema-queries.graphqls and schema-mutations.graphqls; keep in sync.
+
+#############################################
+# Kafka Client Bridge Configuration (NEW)  #
+#############################################
+
+"""
+Kafka client bridge connects to an external Kafka cluster and republishes consumed
+records as MQTT messages inside MonsterMQ. A single Kafka topic is consumed and each
+record is polled periodically then published to MQTT.
+
+Topic mapping strategy:
+- The Kafka topic consumed is the device namespace
+- For BINARY/TEXT formats: MQTT topic = record key (record dropped if key null)
+- For DEFAULT/JSON formats: value encodes a BrokerMessage whose internal topicName is used
+"""
+
+enum KafkaPayloadFormat {
+    # Internal encoded BrokerMessage format (default)
+    DEFAULT
+    # BrokerMessage serialized as JSON text
+    JSON
+    # Raw Kafka record value bytes -> published as binary payload (topic derived from key)
+    BINARY
+    # UTF-8 decoded Kafka record value string -> published as text payload (topic derived from key)
+    TEXT
+}
+
+type KafkaClientConfig {
+    # Comma separated host:port list
+    bootstrapServers: String!
+    # Kafka consumer group id
+    groupId: String!
+    # Payload transformation/serialization strategy
+    payloadFormat: KafkaPayloadFormat!
+
+    # Additional arbitrary Kafka consumer properties
+    extraConsumerConfig: JSON
+    # Reconnect delay to Kafka in milliseconds
+    reconnectDelayMs: Long!
+    # Optional prefix applied to all published MQTT topics.
+    # Rules:
+    # - Blank or whitespace disables prefixing
+    # - Trailing slash automatically appended when missing
+    # - Must not contain MQTT wildcards '+' or '#'
+    # - Legacy keyTopicPrefix input still accepted for backward compatibility
+    destinationTopicPrefix: String
+    # Regex pattern applied to the Kafka record key to transform it into an MQTT topic name
+    topicKeyRegex: String
+    # Replacement string used with topicKeyRegex (e.g. "/" to convert dots to slashes)
+    topicKeyReplacement: String
+    # NOTE: Kafka topic is now derived from the device namespace
+
+    # Inbound bridging enabled (consume from Kafka)
+    inboundEnabled: Boolean!
+    # Outbound bridging enabled
+    outboundEnabled: Boolean!
+    # Local MQTT topics to subscribe to
+    outboundTopicFilters: [String!]!
+    # External Kafka topic to write to
+    outboundKafkaTopic: String
+    # Additional arbitrary Kafka producer properties
+    extraProducerConfig: JSON
+    # Regex pattern applied to the MQTT topic name to transform it into a Kafka record key
+    outboundTopicKeyRegex: String
+    # Replacement string used with outboundTopicKeyRegex
+    outboundTopicKeyReplacement: String
+}
+
+type KafkaClientMetrics {
+    messagesIn: Float!
+    messagesOut: Float!
+    timestamp: String!
+}
+
+type KafkaClient {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    config: KafkaClientConfig!
+    enabled: Boolean!
+    createdAt: String!
+    updatedAt: String!
+    isOnCurrentNode: Boolean!
+    metrics: [KafkaClientMetrics!]!
+    metricsHistory(
+        from: String
+        to: String
+        lastMinutes: Int
+    ): [KafkaClientMetrics!]!
+}
+
+# Extend Queries for Kafka clients
+extend type Query {
+    # Get Kafka client bridge configurations across the entire cluster
+    # Returns clients from all cluster nodes, showing their assignment and connection status
+    # Kafka clients consume from external Kafka topics and republish as MQTT messages
+    # Use optional filters to narrow results to specific client or node
+    kafkaClients(
+        # Filter by specific client name (optional)
+        name: String,
+        # Filter by cluster node ID (optional)
+        node: String
+    ): [KafkaClient!]!
+}
+
+# Kafka Client Mutations - Grouped operations for Kafka client management
+type KafkaClientMutations {
+    # Create a new Kafka client bridge to consume from an external Kafka cluster
+    # Creates a client connector that will be deployed on the specified cluster node
+    # The client will automatically connect to Kafka, consume records, and republish as MQTT messages
+    # Note: The Kafka topic to consume is derived from the device namespace
+    create(input: KafkaClientInput!): KafkaClientResult!
+
+    # Update an existing Kafka client configuration
+    # Changes take effect immediately - the client connector will be redeployed with new settings
+    # Useful for modifying bootstrap servers, consumer properties, or payload format
+    update(name: String!, input: KafkaClientInput!): KafkaClientResult!
+
+    # Delete a Kafka client configuration permanently
+    # Stops the client connector and removes all configuration data
+    # Returns true if deletion was successful, false if client was not found
+    delete(name: String!): Boolean!
+
+    # Start a Kafka client connection
+    # Enables a previously stopped client and begins consuming from Kafka topic
+    # Messages will be polled and republished as MQTT messages
+    start(name: String!): KafkaClientResult!
+
+    # Stop a Kafka client connection
+    # Disables the client and stops consuming from Kafka while preserving configuration
+    # Useful for temporarily pausing data ingestion or troubleshooting
+    stop(name: String!): KafkaClientResult!
+
+    # Toggle Kafka client enabled state
+    # Enable or disable a Kafka client without deleting its configuration
+    # Disabled clients stop consuming but retain their configuration and consumer group position
+    toggle(name: String!, enabled: Boolean!): KafkaClientResult!
+
+    # Reassign a Kafka client to a different cluster node
+    # Moves the client connector from one node to another for load balancing
+    # The client configuration remains unchanged, only the deployment location changes
+    # Consumer group position is preserved across reassignments
+    reassign(name: String!, nodeId: String!): KafkaClientResult!
+}
+
+# Extend Mutations for Kafka clients
+extend type Mutation {
+    # Access Kafka client management operations
+    # Returns a KafkaClientMutations type that provides grouped mutation operations
+    kafkaClient: KafkaClientMutations!
+}
+
+
+type KafkaClientResult {
+    success: Boolean!
+    client: KafkaClient
+    errors: [String!]!
+}
+
+input KafkaClientConfigInput {
+    bootstrapServers: String = "localhost:9092"
+    groupId: String = "monstermq-subscriber"
+    payloadFormat: KafkaPayloadFormat = DEFAULT
+    extraConsumerConfig: JSON
+    reconnectDelayMs: Long = 5000
+    # Optional prefix applied to all published MQTT topics (see KafkaClientConfig.destinationTopicPrefix)
+    destinationTopicPrefix: String
+    # Regex pattern applied to the Kafka record key to transform it into an MQTT topic name
+    topicKeyRegex: String
+    # Replacement string used with topicKeyRegex (e.g. "/" to convert dots to slashes)
+    topicKeyReplacement: String
+    # NOTE: Kafka topic is now derived from the device namespace
+
+    inboundEnabled: Boolean = true
+    outboundEnabled: Boolean = false
+    outboundTopicFilters: [String!] = []
+    outboundKafkaTopic: String
+    extraProducerConfig: JSON
+    outboundTopicKeyRegex: String
+    outboundTopicKeyReplacement: String
+}
+
+input KafkaClientInput {
+    name: String!
+    namespace: String!
+    nodeId: String!
+    enabled: Boolean = true
+    config: KafkaClientConfigInput!
+}

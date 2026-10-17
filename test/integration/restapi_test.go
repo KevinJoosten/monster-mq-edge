@@ -330,6 +330,9 @@ func TestRestHistoryAndLimits(t *testing.T) {
 		if status != 200 {
 			t.Fatalf("publish: %d %v", status, result)
 		}
+		// Archive rows are keyed by (topic, time) in milliseconds, as in Core: a
+		// second publish within the same millisecond would not be stored.
+		time.Sleep(3 * time.Millisecond)
 	}
 	deadline := time.Now().Add(3 * time.Second)
 	var result map[string]any

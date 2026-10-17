@@ -10,7 +10,7 @@ D1-D6 and building blocks S1-S7 are referenced by ID and not repeated here.
 options).
 **Companion plans:** [plan-nats-server.md](plan-nats-server.md), [plan-redis-server.md](plan-redis-server.md),
 [plan-prometheus-server.md](plan-prometheus-server.md) (they use the contract below),
-[plan-uns-modeler-archive.md](../../winccoa/dev/plans/plan-uns-modeler-archive.md) (writes the `_archive` configs
+[plan-uns-modeler-archive.md](plan-uns-modeler-archive.md) (writes the `_archive` configs
 this plan reads).
 
 ## Sign-off points

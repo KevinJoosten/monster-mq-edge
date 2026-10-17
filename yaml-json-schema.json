@@ -289,6 +289,22 @@
         }
       }
     },
+    "RedisServer": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Redis Server Protocol Adapter",
+      "description": "Redis-compatible protocol server allowing Redis clients (redis-cli, libraries) to read live MQTT topic values",
+      "properties": {
+        "Enabled": { "type": "boolean", "title": "Enable Redis Adapter", "default": false, "description": "Enable Redis protocol adapter" },
+        "Host": { "type": "string", "title": "Bind Host", "default": "0.0.0.0", "description": "Network interface to bind to" },
+        "Port": { "type": "integer", "title": "Port", "default": 6379, "minimum": 0, "maximum": 65535, "description": "Redis port (default: 6379)" },
+        "RequireAuth": { "type": "boolean", "title": "Require Auth", "default": true, "description": "Require authentication via AUTH command" },
+        "DefaultDb": { "type": "integer", "title": "Default DB", "default": 0, "minimum": 0, "description": "Default logical Redis DB index" },
+        "SetRetained": { "type": "boolean", "title": "Set Retained on Write", "default": false, "description": "Set MQTT RETAIN flag when writing via SET command" },
+        "PublishQos": { "type": "integer", "title": "Publish QoS", "default": 0, "minimum": 0, "maximum": 2, "description": "MQTT QoS level for SET publications" },
+        "KeysLimit": { "type": "integer", "title": "Keys Limit", "default": 10000, "minimum": 1, "description": "Maximum keys returned by KEYS command" }
+      }
+    },
     "Features": {
       "type": "object",
       "additionalProperties": false,
@@ -304,7 +320,8 @@
         "RtspCamera":         { "type": "boolean", "description": "Enable RTSP camera stream snapshot capture and round-robin publishing." },
         "PythonScripts":      { "type": "boolean", "description": "Enable standalone Python/Starlark scripting engine." },
         "GenAi":              { "type": "boolean", "description": "Enable Generative AI provider connections and AI assistant features." },
-        "Kafka":              { "type": "boolean", "description": "Enable the Kafka client bridge (KAFKA-Client devices: MQTT <-> Kafka)." }
+        "Kafka":              { "type": "boolean", "description": "Enable the Kafka client bridge (KAFKA-Client devices: MQTT <-> Kafka)." },
+        "RedisServer":        { "type": "boolean", "default": false, "description": "Redis-compatible protocol listener on port 6379" }
       }
     },
     "GenAI": {

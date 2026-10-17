@@ -161,6 +161,7 @@ type ArchiveGroupConfig struct {
 	LastValType            MessageStoreType
 	ArchiveType            MessageArchiveType
 	DatabaseConnectionName string
+	RedisDbNumber          *int
 	LastValRetention       string
 	ArchiveRetention       string
 	PurgeInterval          string
@@ -172,6 +173,19 @@ type ArchiveGroupConfig struct {
 	QueueDiskPath          string
 	LastValReadOnly        bool
 	ArchiveReadOnly        bool
+}
+
+// EffectiveRedisDbNumber returns RedisDbNumber when set, 0 for the Default
+// group when unset, or nil otherwise (matching the main broker).
+func (c ArchiveGroupConfig) EffectiveRedisDbNumber() *int {
+	if c.RedisDbNumber != nil {
+		return c.RedisDbNumber
+	}
+	if c.Name == "Default" {
+		zero := 0
+		return &zero
+	}
+	return nil
 }
 
 type ArchiveConfigStore interface {

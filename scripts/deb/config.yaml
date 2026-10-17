@@ -95,6 +95,7 @@ Features:
   PythonScripts: false
   GenAi: false
   Kafka: false
+  RedisServer: false
 
 Redfish:
   Enabled: false

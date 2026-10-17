@@ -153,6 +153,9 @@ func (r *Resolver) enabledFeatures() []string {
 	if r.Cfg.Features.Kafka {
 		out = append(out, "Kafka")
 	}
+	if r.Cfg.Features.RedisServer {
+		out = append(out, "RedisServer")
+	}
 	if r.UnsMgr != nil {
 		out = append(out, "UnsModeler")
 	}
@@ -1456,6 +1459,7 @@ func (r *Resolver) archiveGroupInfoTo(c stores.ArchiveGroupConfig) *generated.Ar
 		TopicFilter: c.TopicFilters, RetainedOnly: c.RetainedOnly,
 		LastValType: toMessageStoreType(c.LastValType), ArchiveType: toMessageArchiveType(c.ArchiveType),
 		DatabaseConnectionName: ptrIfNotEmpty(c.DatabaseConnectionName),
+		RedisDbNumber:          c.EffectiveRedisDbNumber(),
 		PayloadFormat:          generated.PayloadFormat(c.PayloadFormat),
 		LastValRetention:       ptrIfNotEmpty(c.LastValRetention),
 		ArchiveRetention:       ptrIfNotEmpty(c.ArchiveRetention),
@@ -2146,6 +2150,18 @@ func (r *archiveGroupMutationsResolver) Create(ctx context.Context, _ *generated
 		return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 	}
 	cfg.DatabaseConnectionName = dbConnName
+	cfg.RedisDbNumber = input.RedisDbNumber
+	if all, err := r.Storage.ArchiveConfig.GetAll(ctx); err == nil {
+		if eff := cfg.EffectiveRedisDbNumber(); eff != nil {
+			for _, other := range all {
+				if other.Name != cfg.Name {
+					if otherEff := other.EffectiveRedisDbNumber(); otherEff != nil && *otherEff == *eff {
+						return &generated.ArchiveGroupResult{Success: false, Message: ptr(fmt.Sprintf("RedisDbNumber %d is already used by archive group [%s]", *eff, other.Name))}, nil
+					}
+				}
+			}
+		}
+	}
 	if err := r.Storage.ArchiveConfig.Save(ctx, cfg); err != nil {
 		return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 	}
@@ -2194,6 +2210,20 @@ func (r *archiveGroupMutationsResolver) Update(ctx context.Context, _ *generated
 			return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 		}
 		existing.DatabaseConnectionName = dbConnName
+	}
+	if input.RedisDbNumber != nil {
+		existing.RedisDbNumber = input.RedisDbNumber
+	}
+	if all, err := r.Storage.ArchiveConfig.GetAll(ctx); err == nil {
+		if eff := existing.EffectiveRedisDbNumber(); eff != nil {
+			for _, other := range all {
+				if other.Name != existing.Name {
+					if otherEff := other.EffectiveRedisDbNumber(); otherEff != nil && *otherEff == *eff {
+						return &generated.ArchiveGroupResult{Success: false, Message: ptr(fmt.Sprintf("RedisDbNumber %d is already used by archive group [%s]", *eff, other.Name))}, nil
+					}
+				}
+			}
+		}
 	}
 	if input.PayloadFormat != nil {
 		existing.PayloadFormat = stores.PayloadFormat(*input.PayloadFormat)

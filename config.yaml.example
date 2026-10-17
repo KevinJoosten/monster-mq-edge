@@ -94,6 +94,16 @@ Prometheus:
   Port: 3001
   RawQueryLimit: 10000
 
+RedisServer:
+  Enabled: false
+  Host: "0.0.0.0"
+  Port: 6379
+  RequireAuth: true
+  DefaultDb: 0
+  SetRetained: false
+  PublishQos: 0
+  KeysLimit: 10000
+
 Features:
   DeviceImportExport: true
   MqttClient: true
@@ -106,6 +116,7 @@ Features:
   PythonScripts: true
   GenAi: true
   Kafka: false
+  RedisServer: false
 
 GenAI:
   Enabled: true

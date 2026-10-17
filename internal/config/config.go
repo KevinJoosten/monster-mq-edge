@@ -242,6 +242,7 @@ type FeaturesConfig struct {
 	PythonScripts      bool `yaml:"PythonScripts"`
 	GenAi              bool `yaml:"GenAi"`
 	Kafka              bool `yaml:"Kafka"`
+	RedisServer        bool `yaml:"RedisServer"`
 }
 
 // WinCCOaNativeConfig is the bootstrap configuration for running the broker
@@ -420,6 +421,58 @@ type PrometheusConfig struct {
 	RawQueryLimit int  `yaml:"RawQueryLimit"`
 }
 
+type RedisServerConfig struct {
+	Enabled     bool   `yaml:"Enabled"`
+	Host        string `yaml:"Host"`
+	Port        int    `yaml:"Port"`
+	RequireAuth *bool  `yaml:"RequireAuth,omitempty"`
+	DefaultDb   int    `yaml:"DefaultDb"`
+	SetRetained bool   `yaml:"SetRetained"`
+	PublishQos  int    `yaml:"PublishQos"`
+	KeysLimit   *int   `yaml:"KeysLimit,omitempty"`
+}
+
+func (c RedisServerConfig) EffectiveHost() string {
+	if c.Host == "" {
+		return "0.0.0.0"
+	}
+	return c.Host
+}
+
+func (c RedisServerConfig) EffectivePort() int {
+	if c.Port <= 0 {
+		return 6379
+	}
+	return c.Port
+}
+
+func (c RedisServerConfig) EffectiveRequireAuth() bool {
+	if c.RequireAuth == nil {
+		return true
+	}
+	return *c.RequireAuth
+}
+
+func (c RedisServerConfig) EffectivePublishQos() int {
+	if c.PublishQos < 0 {
+		return 0
+	}
+	if c.PublishQos > 2 {
+		return 2
+	}
+	return c.PublishQos
+}
+
+func (c RedisServerConfig) EffectiveKeysLimit() int {
+	if c.KeysLimit == nil {
+		return 10000
+	}
+	if *c.KeysLimit < 1 {
+		return 1
+	}
+	return *c.KeysLimit
+}
+
 type Config struct {
 	NodeID         string    `yaml:"NodeId"`
 	TCP            Listener  `yaml:"TCP"`
@@ -450,6 +503,7 @@ type Config struct {
 	RestApi        RestApiConfig        `yaml:"RestApi"`
 	MCP            MCPConfig            `yaml:"MCP"`
 	Prometheus     PrometheusConfig     `yaml:"Prometheus"`
+	RedisServer    RedisServerConfig    `yaml:"RedisServer"`
 	GenAI          GenAIConfig          `yaml:"GenAI"`
 	Features       FeaturesConfig       `yaml:"Features"`
 	HostMonitoring HostMonitoringConfig `yaml:"HostMonitoring"`
@@ -527,6 +581,12 @@ func Default() *Config {
 		RestApi:    RestApiConfig{Enabled: true},
 		MCP:        MCPConfig{Enabled: false},
 		Prometheus: PrometheusConfig{Enabled: false, Port: 3001, RawQueryLimit: 10000},
+		RedisServer: RedisServerConfig{
+			Host:       "0.0.0.0",
+			Port:       6379,
+			DefaultDb:  0,
+			PublishQos: 0,
+		},
 		GenAI: GenAIConfig{
 			Enabled: false,
 			Assistant: GenAiAssistantConfig{
@@ -547,7 +607,7 @@ func Default() *Config {
 				},
 			},
 		},
-		Features: FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false, Mcp: false, Hmi: false, Redfish: false, RtspCamera: false, PythonScripts: false, GenAi: false, Kafka: false},
+		Features: FeaturesConfig{MqttClient: false, WinCCUa: false, WinCCOa: false, DeviceImportExport: false, Mcp: false, Hmi: false, Redfish: false, RtspCamera: false, PythonScripts: false, GenAi: false, Kafka: false, RedisServer: false},
 		HostMonitoring: HostMonitoringConfig{
 			Enabled:         false,
 			BaseTopic:       "nodes/{NodeId}/host",

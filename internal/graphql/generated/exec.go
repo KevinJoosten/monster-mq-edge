@@ -1374,6 +1374,7 @@ type ArchiveGroupInfo {
     lastValType: MessageStoreType!
     archiveType: MessageArchiveType!
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat!
     lastValRetention: String
     archiveRetention: String
@@ -1399,6 +1400,7 @@ input CreateArchiveGroupInput {
     lastValType: MessageStoreType!
     archiveType: MessageArchiveType!
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat = DEFAULT
     lastValRetention: String
     archiveRetention: String
@@ -1419,6 +1421,7 @@ input UpdateArchiveGroupInput {
     lastValType: MessageStoreType
     archiveType: MessageArchiveType
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat
     lastValRetention: String
     archiveRetention: String
@@ -2842,6 +2845,8 @@ func (ec *executionContext) childFields_ArchiveGroupInfo(ctx context.Context, fi
 		return ec.fieldContext_ArchiveGroupInfo_archiveType(ctx, field)
 	case "databaseConnectionName":
 		return ec.fieldContext_ArchiveGroupInfo_databaseConnectionName(ctx, field)
+	case "redisDbNumber":
+		return ec.fieldContext_ArchiveGroupInfo_redisDbNumber(ctx, field)
 	case "payloadFormat":
 		return ec.fieldContext_ArchiveGroupInfo_payloadFormat(ctx, field)
 	case "lastValRetention":
@@ -9257,6 +9262,29 @@ func (ec *executionContext) _ArchiveGroupInfo_databaseConnectionName(ctx context
 }
 func (ec *executionContext) fieldContext_ArchiveGroupInfo_databaseConnectionName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	return graphql.NewScalarFieldContext("ArchiveGroupInfo", field, false, false, errors.New("field of type String does not have child fields"))
+}
+
+func (ec *executionContext) _ArchiveGroupInfo_redisDbNumber(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return ec.fieldContext_ArchiveGroupInfo_redisDbNumber(ctx, field)
+		},
+		func(ctx context.Context) (any, error) {
+			return obj.RedisDbNumber, nil
+		},
+		nil,
+		func(ctx context.Context, selections ast.SelectionSet, v *int) graphql.Marshaler {
+			return ec.marshalOInt2ᚖint(ctx, selections, v)
+		},
+		true,
+		false,
+	)
+}
+func (ec *executionContext) fieldContext_ArchiveGroupInfo_redisDbNumber(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	return graphql.NewScalarFieldContext("ArchiveGroupInfo", field, false, false, errors.New("field of type Int does not have child fields"))
 }
 
 func (ec *executionContext) _ArchiveGroupInfo_payloadFormat(ctx context.Context, field graphql.CollectedField, obj *ArchiveGroupInfo) (ret graphql.Marshaler) {
@@ -35124,7 +35152,7 @@ func (ec *executionContext) unmarshalInputCreateArchiveGroupInput(ctx context.Co
 		asMap["archiveReadOnly"] = false
 	}
 
-	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
+	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "redisDbNumber", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -35173,6 +35201,13 @@ func (ec *executionContext) unmarshalInputCreateArchiveGroupInput(ctx context.Co
 				return it, err
 			}
 			it.DatabaseConnectionName = data
+		case "redisDbNumber":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("redisDbNumber"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RedisDbNumber = data
 		case "payloadFormat":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadFormat"))
 			data, err := ec.unmarshalOPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐPayloadFormat(ctx, v)
@@ -37356,7 +37391,7 @@ func (ec *executionContext) unmarshalInputUpdateArchiveGroupInput(ctx context.Co
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
+	fieldsInOrder := [...]string{"name", "topicFilter", "retainedOnly", "lastValType", "archiveType", "databaseConnectionName", "redisDbNumber", "payloadFormat", "lastValRetention", "archiveRetention", "purgeInterval", "queueType", "queueSize", "bulkSize", "bulkTimeoutMs", "queueDiskPath", "lastValReadOnly", "archiveReadOnly"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -37405,6 +37440,13 @@ func (ec *executionContext) unmarshalInputUpdateArchiveGroupInput(ctx context.Co
 				return it, err
 			}
 			it.DatabaseConnectionName = data
+		case "redisDbNumber":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("redisDbNumber"))
+			data, err := ec.unmarshalOInt2ᚖint(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.RedisDbNumber = data
 		case "payloadFormat":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("payloadFormat"))
 			data, err := ec.unmarshalOPayloadFormat2ᚖmonstermqᚗioᚋedgeᚋinternalᚋgraphqlᚋgeneratedᚐPayloadFormat(ctx, v)
@@ -38510,6 +38552,11 @@ func (ec *executionContext) _ArchiveGroupInfo(ctx context.Context, sel ast.Selec
 			}
 		case "databaseConnectionName":
 			out.Values[i] = ec._ArchiveGroupInfo_databaseConnectionName(ctx, field, obj)
+			if out.Values[i] == graphql.RequiredNull {
+				atomic.AddUint32(&out.Invalids, 1)
+			}
+		case "redisDbNumber":
+			out.Values[i] = ec._ArchiveGroupInfo_redisDbNumber(ctx, field, obj)
 			if out.Values[i] == graphql.RequiredNull {
 				atomic.AddUint32(&out.Invalids, 1)
 			}

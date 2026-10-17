@@ -37,6 +37,7 @@ import (
 	"monstermq.io/edge/internal/prometheus"
 	"monstermq.io/edge/internal/pubsub"
 	"monstermq.io/edge/internal/redfish"
+	"monstermq.io/edge/internal/redisserver"
 	"monstermq.io/edge/internal/restapi"
 	"monstermq.io/edge/internal/scripting"
 	"monstermq.io/edge/internal/stores"
@@ -80,6 +81,7 @@ type Server struct {
 	native      *winccoanative.Service
 	peer          *peerlink.Manager
 	protoSessions *ProtocolSessions
+	redis         *redisserver.Server
 	refreshStop context.CancelFunc
 	// peerStatus wakes the native status refresher after a PeerLink state
 	// change; nil unless PeerLink and the native namespace are both on.
@@ -770,12 +772,46 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		})
 	}
 
+	var redisSrv *redisserver.Server
+	if cfg.Features.RedisServer && cfg.RedisServer.Enabled {
+		var nativeNames func() winccoanative.Names
+		var nativeValueWrite func(topic string) (string, bool)
+		if nativeOn && cfg.WinCCOaNative.Namespace {
+			if native != nil {
+				nativeNames = native.Names
+			} else {
+				nativeNames = func() winccoanative.Names { return names }
+			}
+			nativeValueWrite = func(topic string) (string, bool) {
+				return NativeValueWrite(nativeNames(), topic)
+			}
+		}
+		inlinePub := NewInlinePublisher(server)
+		protoPub := NewProtocolPublish(unsHook, nativeHook, inlinePub)
+		redisSrv = redisserver.New(redisserver.Deps{
+			Cfg:              cfg,
+			Archives:         archives,
+			Bus:              bus,
+			Sessions:         storage.Sessions,
+			Auth:             authCache,
+			Publish:          protoPub,
+			Release:          inlinePub.Release,
+			Registry:         protoSessions,
+			NativeNames:      nativeNames,
+			NativeValueWrite: nativeValueWrite,
+			Collector:        collector,
+			Logger:           logger,
+		})
+	} else {
+		logger.Info("redis server disabled by Features.RedisServer or RedisServer.Enabled=false")
+	}
+
 	return &Server{
 		cfg: cfg, logger: logger, mqtt: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
 		collector: collector, bridges: bridges, kafka: kafkaClients, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
 		mcpSrv: mcpSrv, prom: promSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
-		storageHook: storageHook, native: native, peer: pl, protoSessions: protoSessions, peerStatus: peerStatus, refreshStop: refreshStop,
+		storageHook: storageHook, native: native, peer: pl, protoSessions: protoSessions, redis: redisSrv, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
 }
 
@@ -988,6 +1024,11 @@ func (s *Server) Serve() error {
 			return fmt.Errorf("winccoa native start: %w", err)
 		}
 	}
+	if s.redis != nil {
+		if err := s.redis.Start(); err != nil {
+			return fmt.Errorf("redis server start: %w", err)
+		}
+	}
 	if s.peer != nil {
 		// After startNative: the local OA system name is known before any
 		// HELLO is sent or answered. Start does not block.
@@ -1164,6 +1205,9 @@ func (s *Server) stopPublishers() {
 		return
 	}
 	s.publishersStopped = true
+	if s.redis != nil {
+		_ = s.redis.Close()
+	}
 	if s.bridges != nil {
 		s.bridges.Stop()
 	}
@@ -1239,3 +1283,6 @@ func (s *Server) Native() *winccoanative.Service { return s.native }
 
 // PeerLink returns the PeerLink manager (nil when PeerLink is disabled).
 func (s *Server) PeerLink() *peerlink.Manager { return s.peer }
+
+// RedisServer returns the Redis protocol server (nil when disabled).
+func (s *Server) RedisServer() *redisserver.Server { return s.redis }

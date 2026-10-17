@@ -29,6 +29,7 @@ type ArchiveGroupInfo struct {
 	LastValType            MessageStoreType        `json:"lastValType"`
 	ArchiveType            MessageArchiveType      `json:"archiveType"`
 	DatabaseConnectionName *string                 `json:"databaseConnectionName,omitempty"`
+	RedisDbNumber          *int                    `json:"redisDbNumber,omitempty"`
 	PayloadFormat          PayloadFormat           `json:"payloadFormat"`
 	LastValRetention       *string                 `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string                 `json:"archiveRetention,omitempty"`
@@ -178,6 +179,7 @@ type CreateArchiveGroupInput struct {
 	LastValType            MessageStoreType   `json:"lastValType"`
 	ArchiveType            MessageArchiveType `json:"archiveType"`
 	DatabaseConnectionName *string            `json:"databaseConnectionName,omitempty"`
+	RedisDbNumber          *int               `json:"redisDbNumber,omitempty"`
 	PayloadFormat          *PayloadFormat     `json:"payloadFormat,omitempty"`
 	LastValRetention       *string            `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string            `json:"archiveRetention,omitempty"`
@@ -1329,6 +1331,7 @@ type UpdateArchiveGroupInput struct {
 	LastValType            *MessageStoreType   `json:"lastValType,omitempty"`
 	ArchiveType            *MessageArchiveType `json:"archiveType,omitempty"`
 	DatabaseConnectionName *string             `json:"databaseConnectionName,omitempty"`
+	RedisDbNumber          *int                `json:"redisDbNumber,omitempty"`
 	PayloadFormat          *PayloadFormat      `json:"payloadFormat,omitempty"`
 	LastValRetention       *string             `json:"lastValRetention,omitempty"`
 	ArchiveRetention       *string             `json:"archiveRetention,omitempty"`

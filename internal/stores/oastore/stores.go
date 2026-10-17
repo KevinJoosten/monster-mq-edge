@@ -209,6 +209,7 @@ func (a *ArchiveConfigStore) Get(ctx context.Context, name string) (*stores.Arch
 }
 
 func (a *ArchiveConfigStore) Save(ctx context.Context, c stores.ArchiveGroupConfig) error {
+	c.RedisDbNumber = c.EffectiveRedisDbNumber()
 	return a.r.put(ctx, kindArchive, c.Name, c, typeValue(kindArchive))
 }
 

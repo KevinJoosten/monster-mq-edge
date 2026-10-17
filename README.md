@@ -161,6 +161,8 @@ Features:
   changes into MQTT.
 - `Kafka` enables the Kafka client bridge (`KAFKA-Client` devices), see
   [doc/kafka-client.md](doc/kafka-client.md).
+- `RedisServer` enables the Redis protocol server (RESP2) for KV and Pub/Sub access, see
+  [doc/redis-server.md](doc/redis-server.md).
 - `RtspCamera` enables the RTSP / HTTP / WebSocket / USB (V4L2) video stream
   bridge for capturing frames and publishing JPEG snapshots into MQTT topics.
 

@@ -33,11 +33,12 @@ type Manager struct {
 	pgDB     *storepg.DB
 	mongoDB  *storemongo.DB
 
-	mu          sync.RWMutex
-	groups      map[string]*Group
-	groupCount  atomic.Int32      // mirrors len(groups) for the lock-free HasGroups probe
-	deployError map[string]string // last deploy error per group name (for the dashboard)
-	onChange    func()            // PeerLink interest routing: the group filters may have changed
+	mu           sync.RWMutex
+	groups       map[string]*Group
+	groupCount   atomic.Int32      // mirrors len(groups) for the lock-free HasGroups probe
+	deployError  map[string]string // last deploy error per group name (for the dashboard)
+	onChange     func()            // PeerLink interest routing: the group filters may have changed
+	loggedDbDups sync.Map          // db int -> struct{} to log duplicate warnings once
 }
 
 // HasGroups reports whether any archive group is running. Lock-free so the
@@ -588,6 +589,14 @@ func configsEqual(a, b stores.ArchiveGroupConfig) bool {
 	if a.PayloadFormat != b.PayloadFormat {
 		return false
 	}
+	effA := a.EffectiveRedisDbNumber()
+	effB := b.EffectiveRedisDbNumber()
+	if (effA == nil) != (effB == nil) {
+		return false
+	}
+	if effA != nil && effB != nil && *effA != *effB {
+		return false
+	}
 	if a.LastValRetention != b.LastValRetention || a.ArchiveRetention != b.ArchiveRetention {
 		return false
 	}
@@ -638,4 +647,37 @@ func (m *Manager) Get(name string) *Group {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.groups[name]
+}
+
+// ByRedisDB returns the running group whose effective RedisDbNumber is db, or nil.
+// If duplicates appear after start, the lowest group name wins and a warning is logged once per DB.
+func (m *Manager) ByRedisDB(db int) *Group {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var best *Group
+	dupCount := 0
+	for _, g := range m.groups {
+		eff := g.Config().EffectiveRedisDbNumber()
+		if eff != nil && *eff == db {
+			if best == nil || g.Name() < best.Name() {
+				best = g
+			}
+			dupCount++
+		}
+	}
+	if dupCount > 1 {
+		if _, loaded := m.loggedDbDups.LoadOrStore(db, struct{}{}); !loaded {
+			m.logger.Warn("duplicate RedisDbNumber mapping after start", "db", db)
+		}
+	}
+	return best
+}
+
+// ResolveGroupForTopic returns the running group that serves a read of topic,
+// or nil. requested is the caller's group name; "" and "Default" both mean "not chosen".
+func (m *Manager) ResolveGroupForTopic(requested, topic string, needArchive bool) *Group {
+	if requested != "" && requested != "Default" {
+		return m.Get(requested)
+	}
+	return m.Get("Default")
 }

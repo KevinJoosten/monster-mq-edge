@@ -182,6 +182,26 @@ func getInt(d bson.M, k string) int {
 	}
 	return 0
 }
+func getNullableInt(d bson.M, k string) *int {
+	v, ok := d[k]
+	if !ok || v == nil {
+		return nil
+	}
+	switch n := v.(type) {
+	case int32:
+		i := int(n)
+		return &i
+	case int64:
+		i := int(n)
+		return &i
+	case int:
+		return &n
+	case float64:
+		i := int(n)
+		return &i
+	}
+	return nil
+}
 func getFloat(d bson.M, k string) float64 {
 	switch v := d[k].(type) {
 	case float64:
@@ -1480,6 +1500,7 @@ func docToArchive(doc bson.M) *stores.ArchiveGroupConfig {
 		LastValType:            stores.MessageStoreType(getStr(doc, "last_val_type")),
 		ArchiveType:            stores.MessageArchiveType(getStr(doc, "archive_type")),
 		DatabaseConnectionName: getStr(doc, "database_connection_name"),
+		RedisDbNumber:          getNullableInt(doc, "redis_db_number"),
 		LastValRetention:       getStr(doc, "last_val_retention"),
 		ArchiveRetention:       getStr(doc, "archive_retention"),
 		PurgeInterval:          getStr(doc, "purge_interval"),
@@ -1513,6 +1534,7 @@ func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupCo
 			"retained_only": cfg.RetainedOnly,
 			"last_val_type": string(cfg.LastValType), "archive_type": string(cfg.ArchiveType),
 			"database_connection_name": cfg.DatabaseConnectionName,
+			"redis_db_number":          cfg.EffectiveRedisDbNumber(),
 			"last_val_retention":       cfg.LastValRetention, "archive_retention": cfg.ArchiveRetention,
 			"purge_interval": cfg.PurgeInterval, "payload_format": string(cfg.PayloadFormat),
 			"queue_type": cfg.QueueType, "queue_size": cfg.QueueSize,

@@ -1335,6 +1335,7 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
         last_val_type TEXT NOT NULL,
         archive_type TEXT NOT NULL,
         database_connection_name TEXT,
+        redis_db_number INTEGER,
         last_val_retention TEXT,
         archive_retention TEXT,
         purge_interval TEXT,
@@ -1352,6 +1353,9 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
 		return err
 	}
 	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS database_connection_name TEXT`); err != nil {
+		return err
+	}
+	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS redis_db_number INTEGER`); err != nil {
 		return err
 	}
 	if _, err := a.db.pool.Exec(ctx, `ALTER TABLE archiveconfigs ADD COLUMN IF NOT EXISTS queue_type TEXT DEFAULT 'NONE'`); err != nil {
@@ -1391,7 +1395,7 @@ func (a *ArchiveConfigStore) EnsureTable(ctx context.Context) error {
 }
 func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupConfig, error) {
 	rows, err := a.db.pool.Query(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs ORDER BY name`)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, redis_db_number, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -1410,7 +1414,7 @@ func (a *ArchiveConfigStore) GetAll(ctx context.Context) ([]stores.ArchiveGroupC
 }
 func (a *ArchiveConfigStore) Get(ctx context.Context, name string) (*stores.ArchiveGroupConfig, error) {
 	row := a.db.pool.QueryRow(ctx,
-		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs WHERE name=$1`, name)
+		`SELECT name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, redis_db_number, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only FROM archiveconfigs WHERE name=$1`, name)
 	return scanArchiveCfg(row)
 }
 func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
@@ -1419,6 +1423,7 @@ func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
 		enabled, retainedOnly          int
 		topicFilter, lvType, arType    string
 		dbConn, lvRet, arRet, purgeInt *string
+		redisDbNum                     *int
 		payloadFormat                  *string
 		qType                          *string
 		qSize                          *int
@@ -1428,7 +1433,7 @@ func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
 		lvReadOnly                     *int
 		arReadOnly                     *int
 	)
-	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &lvRet, &arRet, &purgeInt, &payloadFormat, &qType, &qSize, &bSize, &bTimeout, &qDiskPath, &lvReadOnly, &arReadOnly); err != nil {
+	if err := scanner.Scan(&cfg.Name, &enabled, &topicFilter, &retainedOnly, &lvType, &arType, &dbConn, &redisDbNum, &lvRet, &arRet, &purgeInt, &payloadFormat, &qType, &qSize, &bSize, &bTimeout, &qDiskPath, &lvReadOnly, &arReadOnly); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
@@ -1442,6 +1447,7 @@ func scanArchiveCfg(scanner pgx.Row) (*stores.ArchiveGroupConfig, error) {
 	if dbConn != nil {
 		cfg.DatabaseConnectionName = *dbConn
 	}
+	cfg.RedisDbNumber = redisDbNum
 	if lvRet != nil {
 		cfg.LastValRetention = *lvRet
 	}
@@ -1499,12 +1505,13 @@ func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupCo
 	if cfg.ArchiveReadOnly {
 		arReadOnly = 1
 	}
-	_, err := a.db.pool.Exec(ctx, `INSERT INTO archiveconfigs (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+	_, err := a.db.pool.Exec(ctx, `INSERT INTO archiveconfigs (name, enabled, topic_filter, retained_only, last_val_type, archive_type, database_connection_name, redis_db_number, last_val_retention, archive_retention, purge_interval, payload_format, queue_type, queue_size, bulk_size, bulk_timeout_ms, queue_disk_path, last_val_read_only, archive_read_only)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
         ON CONFLICT (name) DO UPDATE SET
             enabled=EXCLUDED.enabled, topic_filter=EXCLUDED.topic_filter, retained_only=EXCLUDED.retained_only,
             last_val_type=EXCLUDED.last_val_type, archive_type=EXCLUDED.archive_type,
             database_connection_name=EXCLUDED.database_connection_name,
+            redis_db_number=EXCLUDED.redis_db_number,
             last_val_retention=EXCLUDED.last_val_retention, archive_retention=EXCLUDED.archive_retention,
             purge_interval=EXCLUDED.purge_interval, payload_format=EXCLUDED.payload_format,
             queue_type=EXCLUDED.queue_type, queue_size=EXCLUDED.queue_size,
@@ -1515,7 +1522,7 @@ func (a *ArchiveConfigStore) Save(ctx context.Context, cfg stores.ArchiveGroupCo
             updated_at=NOW()`,
 		cfg.Name, enabled, strings.Join(cfg.TopicFilters, ","), retainedOnly,
 		string(cfg.LastValType), string(cfg.ArchiveType),
-		nullStr(cfg.DatabaseConnectionName), nullStr(cfg.LastValRetention), nullStr(cfg.ArchiveRetention), nullStr(cfg.PurgeInterval),
+		nullStr(cfg.DatabaseConnectionName), cfg.EffectiveRedisDbNumber(), nullStr(cfg.LastValRetention), nullStr(cfg.ArchiveRetention), nullStr(cfg.PurgeInterval),
 		string(cfg.PayloadFormat), nullStr(cfg.QueueType), cfg.QueueSize, cfg.BulkSize, cfg.BulkTimeoutMs, nullStr(cfg.QueueDiskPath),
 		lvReadOnly, arReadOnly)
 	return err

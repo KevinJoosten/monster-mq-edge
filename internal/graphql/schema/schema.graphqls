@@ -233,6 +233,7 @@ type ArchiveGroupInfo {
     lastValType: MessageStoreType!
     archiveType: MessageArchiveType!
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat!
     lastValRetention: String
     archiveRetention: String
@@ -258,6 +259,7 @@ input CreateArchiveGroupInput {
     lastValType: MessageStoreType!
     archiveType: MessageArchiveType!
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat = DEFAULT
     lastValRetention: String
     archiveRetention: String
@@ -278,6 +280,7 @@ input UpdateArchiveGroupInput {
     lastValType: MessageStoreType
     archiveType: MessageArchiveType
     databaseConnectionName: String
+    redisDbNumber: Int
     payloadFormat: PayloadFormat
     lastValRetention: String
     archiveRetention: String

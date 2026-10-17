@@ -20,9 +20,10 @@ The short version:
   MongoDB (`mongo-driver/v2`).
 - Lightweight subset of MonsterMQ Core's device subsystems. Currently:
   MQTT bridge (`bridge/mqttclient/`), Kafka client bridge
-  (`bridge/kafkaclient/`, signed off 2026-10-16) and WinCC Unified bridge
-  (`bridge/winccua/`, GraphQL or Open Pipe transports). Heavyweight ones
-  (NATS, Redis, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
+  (`bridge/kafkaclient/`, signed off 2026-10-16), WinCC Unified bridge
+  (`bridge/winccua/`, GraphQL or Open Pipe transports) and Redis protocol server
+  (`internal/redisserver/`, signed off 2026-10-17). Heavyweight ones
+  (NATS, Redis client bridge, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
   JDBC/InfluxDB/TimeBase loggers, OPC UA) remain off-limits unless the
   user signs off on adding them — see the parity rule below before
   introducing any new device type.
@@ -108,6 +109,7 @@ internal/
   graphql/                 # gqlgen schema, generated, resolvers, server
   prometheus/              # Prometheus /metrics scrape endpoint and PromQL HTTP API
   pubsub/                  # in-process bus for `topicUpdates` subscription
+  redisserver/             # Redis protocol server (RESP2 KV and Pub/Sub)
   metrics/, log/, version/
   oahost/                  # WinCC OA embedding contract (TLV, request client);
                            # oahost/simhost is an in-process OA stand-in for tests

@@ -2,6 +2,7 @@
 
 **Status:** approved 2026-10-17, owner decisions in
 [plan-protocol-servers-shared.md](plan-protocol-servers-shared.md); revised after checking against main and edge.
+**Issue:** [vogler75/monster-mq-edge#38](https://github.com/vogler75/monster-mq-edge/issues/38).
 **Scope:** port main's Redis protocol server (`main/broker/src/main/kotlin/extensions/RedisServer.kt`, 1690
 lines) to `internal/redisserver/`. Anything unmarked is a 1:1 port and cites the Kotlin line. Deliberate
 differences are marked **[edge-only]** or **[fix: both]** inline and listed again under "Edge-only extensions

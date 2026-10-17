@@ -2,6 +2,7 @@
 
 **Status:** approved 2026-10-17, owner decisions in
 [plan-protocol-servers-shared.md](plan-protocol-servers-shared.md); revised after checking against main and edge.
+**Issue:** [vogler75/monster-mq-edge#21](https://github.com/vogler75/monster-mq-edge/issues/21).
 Deviations from main are marked **[edge-only]** or **[fix: both]** inline and listed again under
 "Edge-only extensions and fixes". Anything unmarked is a 1:1 port and cites the Kotlin file and line.
 **Scope:** port main's native NATS server (`NATS: <port>`), including its JetStream Key-Value subset, to

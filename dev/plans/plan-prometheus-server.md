@@ -2,6 +2,7 @@
 
 **Status:** approved 2026-10-17, owner decisions in [plan-protocol-servers-shared.md](plan-protocol-servers-shared.md);
 revised after checking against main and edge.
+**Issue:** [vogler75/monster-mq-edge#39](https://github.com/vogler75/monster-mq-edge/issues/39). The QuestDB fix F5 is tracked separately in [vogler75/monster-mq-edge#35](https://github.com/vogler75/monster-mq-edge/issues/35).
 **Scope:** port main's Prometheus-compatible server (`/metrics` scrape endpoint plus the small PromQL HTTP API used
 by Grafana's Prometheus data source) to `internal/prometheus/`. Main bugs found on the way are fixed in both repos
 (D3). WinCC OA groups are served through the archive plan's stores (S6).

@@ -1,6 +1,7 @@
 # Plan: shared building blocks for the NATS, Redis and Prometheus servers and the WinCC OA archive
 
 **Status:** approved (2026-10-17). The owner signed off on the decisions below.
+**Issue:** [vogler75/monster-mq-edge#34](https://github.com/vogler75/monster-mq-edge/issues/34).
 **Scope:** the decisions D1-D6 and the edge building blocks S1-S7 that the four plans share. Each plan
 refers here instead of repeating them:
 

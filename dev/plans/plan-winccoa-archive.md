@@ -2,6 +2,7 @@
 
 **Status:** approved 2026-10-17, owner decisions in [plan-protocol-servers-shared.md](plan-protocol-servers-shared.md);
 revised after checking against main, edge and the WinCC OA 3.21 headers.
+**Issue:** [vogler75/monster-mq-edge#40](https://github.com/vogler75/monster-mq-edge/issues/40). Edge sides of the fixes for both repos: [vogler75/monster-mq-edge#37](https://github.com/vogler75/monster-mq-edge/issues/37) (X9) and [vogler75/monster-mq-edge#36](https://github.com/vogler75/monster-mq-edge/issues/36) (X6).
 **Scope:** when edge runs embedded in `WCCOAmmq` with the native namespace on, an ArchiveGroup can read current
 values (`dpGet`, one-shot `dpQuery`) and archived history (`dpGetPeriod`) straight from WinCC OA. Shared decisions
 D1-D6 and building blocks S1-S7 are referenced by ID and not repeated here.

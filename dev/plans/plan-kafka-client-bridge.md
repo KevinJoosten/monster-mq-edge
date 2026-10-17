@@ -72,7 +72,7 @@ Defaults are from `KafkaConfig.kt:12-26`:
 | `bootstrapServers` | `localhost:9092` |
 | `groupId` | `monstermq-subscriber` |
 | `payloadFormat` | `DEFAULT` |
-| `extraConsumerConfig`, `extraProducerConfig` | Native Java Kafka properties (see below). |
+| `extraConsumerConfig`, `extraProducerConfig` | Standard Kafka client properties (see below). |
 | `reconnectDelayMs` | 5000, must be >= 500 |
 | `destinationTopicPrefix` | Falls back to legacy `keyTopicPrefix`. Trimmed, blank becomes nil, trailing `/` appended, `+` or `#` rejected. |
 | `topicKeyRegex` / `topicKeyReplacement` | Applied only when **both** are set (`KafkaClientConnector.kt:408-412`). |
@@ -201,20 +201,20 @@ Anti-spoofing:
   Also update `inline_publisher_test.go:126`.
 
 **[edge-only] Buffering and reconnect.** Core sends fire-and-forget and skips messages while no producer
-exists (:331). It never uses `reconnectDelayMs`; the Java client reconnects internally.
+exists (:331). It never uses `reconnectDelayMs`; Core's Kafka client reconnects internally.
 - Edge puts a bounded in-memory channel between the bus and the producer. On overflow it drops the
   oldest message and counts it in `messagesDropped`.
 - Producer send errors increment `errors`, as Core's `exceptionHandler` does (:281-284).
 - franz-go reconnects to brokers by itself. `reconnectDelayMs` is used only as the backoff for
   recreating the `kgo.Client` after a fatal error (bad config, authentication failure).
 
-### Java property translation
+### Kafka client property translation
 
-Core passes the native Java Kafka properties in `extraConsumerConfig` / `extraProducerConfig` straight
+Core passes the standard Kafka client properties in `extraConsumerConfig` / `extraProducerConfig` straight
 through with `putAll` (`doc/kafka.md:17`) and accepts any key. Edge maps a documented subset to
 franz-go:
 
-| Java property | franz-go |
+| Kafka client property | franz-go |
 |---|---|
 | `security.protocol` (`PLAINTEXT`/`SSL`/`SASL_PLAINTEXT`/`SASL_SSL`) | `Dialer` with a `tls.Config`, or none |
 | `sasl.mechanism` + `sasl.jaas.config` (`PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`) | `kgo.SASL(plain/scram/oauth)`, with username/password/token parsed from the JAAS string |
@@ -271,7 +271,7 @@ Not ported:
 - `config.go`, `validate.go`: `DeviceTypeKafkaClient = "KAFKA-Client"`, `Config`, JSON unmarshaling
   (unwraps an optional `"kafka"` key; PascalCase aliases only for Core's set), defaults, prefix
   normalisation, regex, filter and payload-format validation.
-- `javaprops.go`: translates Java properties into kgo options, including PEM and PKCS12 TLS and JAAS
+- `kafkaprops.go`: translates Kafka client properties into kgo options, including PEM and PKCS12 TLS and JAAS
   parsing, and returns the list of unsupported keys.
 - `codec.go`: Go port of `BrokerMessageCodec` (see below), plus JSON envelope encoding and decoding.
 - `transport.go`: a thin interface over kgo (producer and consumer) so tests can use a fake.
@@ -394,8 +394,8 @@ Decoder:
    client recreation, metrics.
 3. **Inbound:** franz-go consumer, all four formats (`DEFAULT` with JSON fallback, `JSON`, `BINARY`,
    `TEXT`), `topicKeyRegex`, `destinationTopicPrefix`, inline publish with MQTT v5 properties.
-4. **Security and Java properties:** TLS (PEM, and PKCS12 via `go-pkcs12`), SASL PLAIN/SCRAM/OAUTHBEARER,
-   Java property translation, and handling of unsupported keys (rejected in GraphQL, warned at runtime).
+4. **Security and Kafka client properties:** TLS (PEM, and PKCS12 via `go-pkcs12`), SASL PLAIN/SCRAM/OAUTHBEARER,
+   Kafka client property translation, and handling of unsupported keys (rejected in GraphQL, warned at runtime).
 5. **Docs and release:**
    - `doc/kafka-client.md`, mirroring Core's `kafka.md`, with an "Edge-only extensions" section.
    - README.
@@ -418,7 +418,7 @@ Decoder:
   - with and without the `0x504C0001` trailer;
   - with peer flags;
   - with null and non-null v5 fields.
-- Java property translation (JAAS, PKCS12 and PEM), plus classifying unsupported keys.
+- Kafka client property translation (JAAS, PKCS12 and PEM), plus classifying unsupported keys.
 - Connector against the fake transport:
   - all four formats, in both directions;
   - `DEFAULT` -> JSON fallback;
@@ -452,8 +452,8 @@ Deliberate differences from Core. Each one is documented in `doc/kafka-client.md
 | E2 | MQTT v5 properties from the codec trailer are kept on inbound | Dropped in `publishDecoded` | Lossless Core <-> edge bridging |
 | E3 | `messagesIn` counts only published records | Incremented after most failure paths | Correct metrics |
 | E4 | Bounded outbound buffer with drop-oldest; `reconnectDelayMs` used as the backoff for recreating the client | Fire-and-forget; skip while no producer; `reconnectDelayMs` unused | Bounded memory; franz-go has a different reconnect model |
-| E5 | GraphQL create/update checks regexes, topic filters, `payloadFormat` and unsupported Java keys | No checks; any extra key accepted | Fail early. Runtime and import only warn, so Core configs still import. |
-| E6 | Java properties translated to a documented franz-go subset | Native pass-through | No JVM client |
+| E5 | GraphQL create/update checks regexes, topic filters, `payloadFormat` and unsupported property keys | No checks; any extra key accepted | Fail early. Runtime and import only warn, so Core configs still import. |
+| E6 | Kafka client properties translated to a documented franz-go subset | Native pass-through | No JVM client |
 | E7 | `"kafka"` nesting unwrapped in the GraphQL resolvers too | Connector only | Resolvers show the real config |
 | E8 | `bridgeIDHook` rejects network clients with the `kafkaclient-` prefix (only when the feature is on) | No equivalent | Stops a network client from spoofing the loop-prevention ID |
 | E9 | `$SYS/sessions/kafka/<name>/metrics` not published | Published | Edge bridges don't publish `$SYS` device metrics; deferred |
@@ -462,7 +462,7 @@ Deliberate differences from Core. Each one is documented in `doc/kafka-client.md
 
 - Binary size grows because franz-go is now in the production binary. Measure and report it with
   `make build` / `make build-arm64`.
-- Java property support is a documented subset: no GSSAPI/Kerberos and no JKS stores; PEM and PKCS12
+- Kafka client property support is a documented subset: no GSSAPI/Kerberos and no JKS stores; PEM and PKCS12
   are supported.
 - The `DEFAULT` format must stay bit-compatible with Core's `BrokerMessageCodec.kt`. The exceptions
   are the duplicate user-property keys and the out-of-range expiry/PFI values noted under the codec layout.

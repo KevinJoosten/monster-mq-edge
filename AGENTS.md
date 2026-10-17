@@ -19,9 +19,10 @@ The short version:
 - Storage backends: SQLite (`modernc.org/sqlite`, no CGO), PostgreSQL (`pgx/v5`),
   MongoDB (`mongo-driver/v2`).
 - Lightweight subset of MonsterMQ Core's device subsystems. Currently:
-  MQTT bridge (`bridge/mqttclient/`) and WinCC Unified bridge
+  MQTT bridge (`bridge/mqttclient/`), Kafka client bridge
+  (`bridge/kafkaclient/`, signed off 2026-10-16) and WinCC Unified bridge
   (`bridge/winccua/`, GraphQL or Open Pipe transports). Heavyweight ones
-  (Kafka, NATS, Redis, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
+  (NATS, Redis, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
   JDBC/InfluxDB/TimeBase loggers, OPC UA) remain off-limits unless the
   user signs off on adding them — see the parity rule below before
   introducing any new device type.
@@ -56,7 +57,8 @@ Concretely:
 - Fields for absent subsystems (`opcUaDevices`, `kafkaClients`, …) stay
   *droppable* — entire schema files can be omitted, but individual fields
   inside a kept type must not be renamed away.
-- `enabledFeatures` reports the active subset (currently `["MqttClient"]`).
+- `enabledFeatures` reports the active subset, using the `Features` flag names
+  (`MqttClient`, `Kafka`, `WinCCUa`, ...; see `Resolver.enabledFeatures`).
   The dashboard uses this to hide pages.
 
 When in doubt, open the Kotlin schema file and copy verbatim. SDL files
@@ -100,6 +102,7 @@ internal/
                            # doesn't scan the subscription table per publish.
   archive/                 # ArchiveGroup orchestrator + retention loop
   bridge/mqttclient/       # paho-based outbound MQTT bridge
+  bridge/kafkaclient/      # MQTT <-> Kafka bridge (franz-go), KAFKA-Client devices
   bridge/winccua/          # WinCC Unified bridge (GraphQL ws + Open Pipe)
   auth/                    # bcrypt + ACL cache
   graphql/                 # gqlgen schema, generated, resolvers, server
@@ -193,5 +196,7 @@ When porting a feature: read the Kotlin original first, mirror behavior,
 - Change a column/table name in any backend store.
 - Introduce CGO.
 - Add a UI to this repo (an external dashboard is the consumer).
-- Add Hazelcast/Kafka-bus dependencies.
+- Add Hazelcast/Kafka-bus dependencies (the Kafka client bridge's franz-go
+  client, approved 2026-10-16, is the exception; Kafka must never become the
+  internal message bus).
 - Push to `main` directly, force-push shared branches, or skip git hooks.

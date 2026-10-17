@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"monstermq.io/edge/internal/stores"
+	"monstermq.io/edge/internal/stores/storetest"
 )
 
 func tempDB(t *testing.T) *DB {
@@ -513,3 +514,14 @@ func TestSessionStoreMigrationAddsSubscriptionColumns(t *testing.T) {
 		t.Fatalf("subs=%+v err=%v", subs, err)
 	}
 }
+
+// Kafka client metrics use Core's metric kind "kafka" and need no schema change.
+func TestMetricsStoreKafkaClientKind(t *testing.T) {
+	ms := NewMetricsStore(tempDB(t))
+	ctx := context.Background()
+	if err := ms.EnsureTable(ctx); err != nil {
+		t.Fatal(err)
+	}
+	storetest.CheckKafkaMetrics(t, ms)
+}
+

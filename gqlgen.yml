@@ -86,6 +86,19 @@ models:
     fields:
       metrics:        { resolver: true }
       metricsHistory: { resolver: true }
+  KafkaClientMutations:
+    fields:
+      create:   { resolver: true }
+      update:   { resolver: true }
+      delete:   { resolver: true }
+      start:    { resolver: true }
+      stop:     { resolver: true }
+      toggle:   { resolver: true }
+      reassign: { resolver: true }
+  KafkaClient:
+    fields:
+      metrics:        { resolver: true }
+      metricsHistory: { resolver: true }
   WinCCUaDeviceMutations:
     fields:
       create:        { resolver: true }

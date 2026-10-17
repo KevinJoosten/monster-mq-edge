@@ -18,6 +18,7 @@ import (
 
 	"monstermq.io/edge/internal/archive"
 	mauth "monstermq.io/edge/internal/auth"
+	"monstermq.io/edge/internal/bridge/kafkaclient"
 	"monstermq.io/edge/internal/bridge/mqttclient"
 	"monstermq.io/edge/internal/bridge/rtspcamera"
 	"monstermq.io/edge/internal/bridge/winccoa"
@@ -62,6 +63,7 @@ type Server struct {
 	authCache   *mauth.Cache
 	collector   *metrics.Collector
 	bridges     *mqttclient.Manager
+	kafka       *kafkaclient.Manager
 	winCCUa     *winccua.Manager
 	winCCOa     *winccoa.Manager
 	rtspCameras *rtspcamera.Manager
@@ -475,7 +477,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		warnPeerLinkDevices(ctx, cfg, storage, peerSetup, logger)
 	}
 
-	if err := server.AddHook(&bridgeIDHook{srv: server}, nil); err != nil {
+	if err := server.AddHook(&bridgeIDHook{srv: server, kafka: cfg.Features.Kafka}, nil); err != nil {
 		return nil, fmt.Errorf("add bridge client id hook: %w", err)
 	}
 	if err := server.AddHook(storageHook, nil); err != nil {
@@ -591,6 +593,16 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		}
 	}
 
+	// 7a. Kafka client bridge manager (KAFKA-Client devices).
+	var kafkaClients *kafkaclient.Manager
+	if cfg.Features.Kafka {
+		busAdapter := &mqttclient.BusAdapter{Bus: bus, BridgeOutbound: cfg.PeerLink.Enabled && cfg.PeerLink.Receive.BridgeOutbound}
+		kafkaClients = kafkaclient.NewManager(storage.DeviceConfig, NewInlinePublisher(server).PublishMessage, busAdapter, cfg.NodeID, logger)
+		if collector != nil {
+			kafkaClients.SetCounters(collector.IncKafkaIn, collector.IncKafkaOut)
+		}
+	}
+
 	// 7b. WinCC Unified bridge manager (deploys one connector per device,
 	// either GraphQL/WebSocket or local Open Pipe IPC depending on config).
 	var winCCUa *winccua.Manager
@@ -687,6 +699,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if cfg.GraphQL.Enabled && (cfg.GraphQL.HTTPEnabled() || cfg.GraphQL.TLSEnabled()) {
 		resolver := resolvers.New(cfg, storage, bus, archives, bridges, winCCUa, winCCOa, authCache, collector, logBus, logger, server, publishFn, hmiMgr, redfishMgr, rtspCameras, scripts)
 		resolver.PeerLinkMgr = pl
+		resolver.KafkaClients = kafkaClients
 		if nativeOn {
 			resolver.Browse = browse
 			resolver.UnsMgr = unsMgr
@@ -732,7 +745,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	return &Server{
 		cfg: cfg, logger: logger, mqtt: server,
 		storage: storage, bus: bus, subs: subs, archives: archives, authCache: authCache,
-		collector: collector, bridges: bridges, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
+		collector: collector, bridges: bridges, kafka: kafkaClients, winCCUa: winCCUa, winCCOa: winCCOa, rtspCameras: rtspCameras, scripts: scripts, gqlSrv: gqlSrv, unsModeler: unsMgr,
 		mcpSrv: mcpSrv, redfishMgr: redfishMgr, hostMonitor: hostMonitor, hmiSync: hmiSync,
 		storageHook: storageHook, native: native, peer: pl, peerStatus: peerStatus, refreshStop: refreshStop,
 	}, nil
@@ -973,6 +986,9 @@ func (s *Server) Serve() error {
 		if s.bridges != nil {
 			s.bridges.StartMetrics(s.metricsCtx, s.storage.Metrics, s.collector.Interval())
 		}
+		if s.kafka != nil {
+			s.kafka.StartMetrics(s.metricsCtx, s.storage.Metrics, s.collector.Interval())
+		}
 		if s.winCCOa != nil {
 			s.winCCOa.StartMetrics(s.metricsCtx, s.storage.Metrics, s.collector.Interval())
 		}
@@ -989,6 +1005,11 @@ func (s *Server) Serve() error {
 	if s.bridges != nil {
 		if err := s.bridges.Start(context.Background()); err != nil {
 			s.logger.Warn("bridges start error", "err", err)
+		}
+	}
+	if s.kafka != nil {
+		if err := s.kafka.Start(context.Background()); err != nil {
+			s.logger.Warn("kafka clients start error", "err", err)
 		}
 	}
 	if s.winCCUa != nil {
@@ -1109,6 +1130,9 @@ func (s *Server) stopPublishers() {
 	if s.bridges != nil {
 		s.bridges.Stop()
 	}
+	if s.kafka != nil {
+		s.kafka.Stop()
+	}
 	if s.winCCUa != nil {
 		s.winCCUa.Stop()
 	}
@@ -1155,6 +1179,7 @@ func (s *Server) Bus() *pubsub.Bus                        { return s.bus }
 func (s *Server) Subscriptions() *topic.SubscriptionIndex { return s.subs }
 func (s *Server) Archives() *archive.Manager              { return s.archives }
 func (s *Server) Bridges() *mqttclient.Manager            { return s.bridges }
+func (s *Server) KafkaClients() *kafkaclient.Manager      { return s.kafka }
 func (s *Server) AuthCache() *mauth.Cache                 { return s.authCache }
 func (s *Server) MQTT() *mqtt.Server                      { return s.mqtt }
 

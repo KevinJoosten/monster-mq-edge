@@ -89,6 +89,7 @@ Features:
   RtspCamera: false
   PythonScripts: false
   GenAi: false
+  Kafka: false
 
 Redfish:
   Enabled: false

@@ -366,6 +366,15 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		Inline:      cl.Net.Inline,
 		Time:        time.Now().UTC(),
 	}
+	if s := pk.Source; s != nil {
+		if s.MessageUUID != "" {
+			msg.MessageUUID = s.MessageUUID
+		}
+		if !s.Time.IsZero() {
+			msg.Time = s.Time.UTC()
+		}
+		msg.MessageID, msg.IsDup, msg.IsQueued = s.MessageID, s.Dup, s.Queued
+	}
 	h.dispatch(msg, &pk.Properties, hasBus, hasArchive)
 }
 

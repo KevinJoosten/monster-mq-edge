@@ -13,6 +13,7 @@ on devices like the Raspberry Pi 4/5.
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
 - **REST API** for publishing, bodyless current/retained/history reads, bulk and Influx writes, and SSE subscriptions.
 - **MQTT bridge** — forward local topics to a remote broker and vice versa, over MQTT 5 or MQTT 3.1.1 (per `protocolVersion`).
+- **Kafka client bridge** — consume a Kafka topic into MQTT and produce MQTT topics to Kafka, record-compatible with MonsterMQ Core. See [doc/kafka-client.md](doc/kafka-client.md).
 - **PeerLink** — pull-based, in-memory forwarding of publishes between MonsterMQ Edge brokers (pairs and full meshes), with QoS, retain, MQTT 5 properties, publisher and publish time preserved. See [PeerLink](#peerlink-forwarding-between-brokers).
 - **Camera snapshots** — RTSP MJPEG and H.264 I/P/B streams to MQTT JPEG topics; [native Go decoder API and current limits](pkg/h264/README.md).
 - **Users + ACL** with bcrypt password hashing.
@@ -157,6 +158,8 @@ Features:
 - `WinCCOa` enables WinCC Open Architecture clients. Each client subscribes to
   WinCC OA GraphQL `dpQueryConnectSingle` updates and republishes datapoint
   changes into MQTT.
+- `Kafka` enables the Kafka client bridge (`KAFKA-Client` devices), see
+  [doc/kafka-client.md](doc/kafka-client.md).
 - `RtspCamera` enables the RTSP / HTTP / WebSocket / USB (V4L2) video stream
   bridge for capturing frames and publishing JPEG snapshots into MQTT topics.
 
@@ -873,6 +876,7 @@ internal/
   stores/mongodb/        → MongoDB implementations
   archive/               → archive group orchestrator + retention
   bridge/mqttclient/     → MQTT-to-MQTT bridge (paho.golang for MQTT 5, paho.mqtt.golang for MQTT 3.1.1)
+  bridge/kafkaclient/    → MQTT <-> Kafka bridge (franz-go)
   bridge/rtspcamera/     → RTSP/HTTP/WS camera stream & snapshot bridge (MJPEG & H.264)
   bridge/winccua/        → WinCC Unified bridge (GraphQL/Open Pipe)
   bridge/winccoa/        → WinCC Open Architecture bridge (GraphQL)

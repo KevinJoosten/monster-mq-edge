@@ -612,3 +612,27 @@ func TestStorageHookSelectRetainedKeepsOrigin(t *testing.T) {
 		t.Fatalf("replayed %+v, want one packet with origin pub-x", pks)
 	}
 }
+
+// A message republished from a Kafka envelope keeps its UUID, time, message
+// id and flags on the bus and in the archives, as in Core.
+func TestStorageHookKeepsSourceIdentity(t *testing.T) {
+	e := newPeerEnv(t, false)
+	ts := time.Date(2026, 10, 17, 8, 0, 0, 5_000_000, time.UTC)
+	msg := stores.BrokerMessage{
+		MessageUUID: "env-uuid", MessageID: 7, TopicName: "kafka/a", Payload: []byte("v"),
+		QoS: 1, IsDup: true, IsQueued: true, Time: ts,
+	}
+	if err := NewInlinePublisher(e.srv).PublishMessage("kafkaclient-k", msg); err != nil {
+		t.Fatal(err)
+	}
+	bus := e.busMsgs()
+	arch := e.arch.take()
+	if len(bus) != 1 || len(arch) != 1 {
+		t.Fatalf("bus got %d, archive got %d, want 1 each", len(bus), len(arch))
+	}
+	for _, m := range []stores.BrokerMessage{bus[0], arch[0]} {
+		if m.MessageUUID != "env-uuid" || !m.Time.Equal(ts) || m.MessageID != 7 || !m.IsDup || !m.IsQueued || m.ClientID != "kafkaclient-k" {
+			t.Errorf("message = %+v", m)
+		}
+	}
+}

@@ -274,7 +274,8 @@
         "Redfish":            { "type": "boolean", "description": "Enable DMTF Redfish REST API feature toggle." },
         "RtspCamera":         { "type": "boolean", "description": "Enable RTSP camera stream snapshot capture and round-robin publishing." },
         "PythonScripts":      { "type": "boolean", "description": "Enable standalone Python/Starlark scripting engine." },
-        "GenAi":              { "type": "boolean", "description": "Enable Generative AI provider connections and AI assistant features." }
+        "GenAi":              { "type": "boolean", "description": "Enable Generative AI provider connections and AI assistant features." },
+        "Kafka":              { "type": "boolean", "description": "Enable the Kafka client bridge (KAFKA-Client devices: MQTT <-> Kafka)." }
       }
     },
     "GenAI": {

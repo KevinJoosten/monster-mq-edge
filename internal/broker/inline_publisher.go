@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"monstermq.io/edge/internal/bridge/kafkaclient"
 	"monstermq.io/edge/internal/bridge/mqttclient"
 	mqtt "monstermq.io/edge/internal/mqtt"
 	"monstermq.io/edge/internal/mqtt/packets"
@@ -37,6 +38,21 @@ func (p *InlinePublisher) Publish(clientID string, msg stores.BrokerMessage) err
 	})
 }
 
+// PublishMessage injects msg as clientID and keeps its identity (UUID, time,
+// message id, DUP and queued flags) for archives and bus subscribers, as Core
+// republishes a message from a Kafka envelope.
+func (p *InlinePublisher) PublishMessage(clientID string, msg stores.BrokerMessage) error {
+	src := &packets.Source{MessageUUID: msg.MessageUUID, Time: msg.Time, MessageID: msg.MessageID, Dup: msg.IsDup, Queued: msg.IsQueued}
+	return p.srv.InjectPacket(p.client(clientID), packets.Packet{
+		FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: msg.QoS, Retain: msg.IsRetain},
+		TopicName:   msg.TopicName,
+		Payload:     msg.Payload,
+		PacketID:    uint16(msg.QoS),
+		Properties:  propsToPacket(msg),
+		Source:      src,
+	})
+}
+
 func (p *InlinePublisher) client(id string) *mqtt.Client {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -49,11 +65,15 @@ func (p *InlinePublisher) client(id string) *mqtt.Client {
 	return cl
 }
 
-// bridgeIDHook refuses network clients whose ID starts with the bridge prefix:
-// No Local would hide from them what the bridge of that name brings in.
+// bridgeIDHook refuses network clients whose ID takes an inline publisher's
+// prefix. For "bridge:" No Local would hide from them what the MQTT bridge of
+// that name brings in. For "kafkaclient-" (only while the Kafka feature is on)
+// the Kafka bridge's outbound loop prevention would silently drop their
+// publishes.
 type bridgeIDHook struct {
 	mqtt.HookBase
-	srv *mqtt.Server
+	srv   *mqtt.Server
+	kafka bool
 }
 
 func (h *bridgeIDHook) ID() string { return "bridge-client-ids" }
@@ -61,7 +81,9 @@ func (h *bridgeIDHook) ID() string { return "bridge-client-ids" }
 func (h *bridgeIDHook) Provides(b byte) bool { return bytes.Contains([]byte{mqtt.OnConnect}, []byte{b}) }
 
 func (h *bridgeIDHook) OnConnect(cl *mqtt.Client, _ packets.Packet) error {
-	if !strings.HasPrefix(cl.ID, mqttclient.ClientIDPrefix) {
+	reserved := strings.HasPrefix(cl.ID, mqttclient.ClientIDPrefix) ||
+		(h.kafka && strings.HasPrefix(cl.ID, kafkaclient.ClientIDPrefix))
+	if !reserved {
 		return nil
 	}
 	if h.srv != nil {

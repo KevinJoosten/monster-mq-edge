@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"monstermq.io/edge/internal/stores"
+	"monstermq.io/edge/internal/stores/storetest"
 )
 
 func TestMetricsStoreLatestHistoryPurgeAndBounds(t *testing.T) {
@@ -55,4 +56,8 @@ func TestMetricsStoreLatestHistoryPurgeAndBounds(t *testing.T) {
 	if len(history) != 1 || !history[0].Timestamp.Equal(t3) {
 		t.Fatalf("purged history = %#v", history)
 	}
+}
+
+func TestMetricsStoreKafkaClientKind(t *testing.T) {
+	storetest.CheckKafkaMetrics(t, NewMetricsStore(100))
 }

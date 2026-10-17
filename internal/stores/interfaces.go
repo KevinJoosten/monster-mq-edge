@@ -219,6 +219,8 @@ const (
 	MetricMqttClient MetricKind = "mqttclient"
 	MetricWinCCOa    MetricKind = "winccoa"
 	MetricArchive    MetricKind = "archivegroup"
+	// MetricKafkaClient is Core's MetricKind.KAFKACLIENT.toDbString().
+	MetricKafkaClient MetricKind = "kafka"
 )
 
 type MetricsStore interface {

@@ -18,6 +18,7 @@ import (
 
 	"monstermq.io/edge/internal/archive"
 	"monstermq.io/edge/internal/auth"
+	"monstermq.io/edge/internal/bridge/kafkaclient"
 	"monstermq.io/edge/internal/bridge/mqttclient"
 	"monstermq.io/edge/internal/bridge/rtspcamera"
 	"monstermq.io/edge/internal/bridge/winccoa"
@@ -63,6 +64,8 @@ type Resolver struct {
 	GenAi       genai.Provider
 	// PeerLinkMgr is nil while PeerLink is disabled.
 	PeerLinkMgr *peerlink.Manager
+	// KafkaClients is nil while Features.Kafka is off.
+	KafkaClients *kafkaclient.Manager
 	// Browse is the WinCC OA browse service; nil unless the broker runs
 	// embedded in WinCC OA.
 	Browse *winccoabrowse.Service
@@ -142,6 +145,9 @@ func (r *Resolver) enabledFeatures() []string {
 	}
 	if r.Cfg.Features.GenAi || r.Cfg.GenAI.Enabled {
 		out = append(out, "GenAi")
+	}
+	if r.Cfg.Features.Kafka {
+		out = append(out, "Kafka")
 	}
 	if r.UnsMgr != nil {
 		out = append(out, "UnsModeler")
@@ -1860,6 +1866,7 @@ func snapshotToBrokerMetrics(s metrics.BrokerSnapshot) *generated.BrokerMetrics 
 	return &generated.BrokerMetrics{
 		MessagesIn: s.MessagesIn, MessagesOut: s.MessagesOut,
 		MqttClientIn: s.MqttClientIn, MqttClientOut: s.MqttClientOut,
+		KafkaClientIn: s.KafkaClientIn, KafkaClientOut: s.KafkaClientOut,
 		MessageBusIn: s.MessageBusIn, MessageBusOut: s.MessageBusOut,
 		NodeSessionCount:    s.NodeSessionCount,
 		ClusterSessionCount: s.NodeSessionCount,
@@ -2632,6 +2639,7 @@ func (r *Resolver) reloadBridges(ctx context.Context, reason string) {
 
 func (r *Resolver) reloadDeviceManagers(ctx context.Context, reason string) {
 	r.reloadBridges(ctx, reason)
+	r.reloadKafka(ctx, reason)
 	r.reloadWinCCUa(ctx, reason)
 	r.reloadWinCCOa(ctx, reason)
 	r.reloadUns(ctx)

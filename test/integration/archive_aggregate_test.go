@@ -16,6 +16,7 @@ import (
 	"monstermq.io/edge/internal/stores"
 	storecratedb "monstermq.io/edge/internal/stores/cratedb"
 	storepg "monstermq.io/edge/internal/stores/postgres"
+	storequestdb "monstermq.io/edge/internal/stores/questdb"
 )
 
 // Aggregation with field "" counts a payload only if it is a plain JSON number
@@ -100,6 +101,27 @@ func TestAggregatedRawField_CrateDB(t *testing.T) {
 	checkRawFieldAggregation(t, 22083, 24083, stores.ArchiveCrateDB, conn, func(tables []string) {
 		ctx := context.Background()
 		db, err := storecratedb.Open(ctx, dsn, "", "")
+		if err != nil {
+			t.Logf("cleanup: %v", err)
+			return
+		}
+		defer db.Close()
+		for _, table := range tables {
+			_, _ = db.Pool().Exec(ctx, "DROP TABLE IF EXISTS "+table)
+		}
+	})
+}
+
+func TestAggregatedRawField_QuestDB(t *testing.T) {
+	rawURL := os.Getenv("EDGE_TEST_QUESTDB_URL")
+	if rawURL == "" {
+		t.Skip("EDGE_TEST_QUESTDB_URL not set")
+	}
+	conn := &stores.DatabaseConnectionConfig{Name: "AggQuest", Type: stores.DatabaseConnectionQuestDB, URL: rawURL}
+	checkRawFieldAggregation(t, 22084, 24084, stores.ArchiveQuestDB, conn, func(tables []string) {
+		ctx := context.Background()
+		dsn := storequestdb.NormalizePGDSN(rawURL, "", "")
+		db, err := storepg.Open(ctx, dsn)
 		if err != nil {
 			t.Logf("cleanup: %v", err)
 			return

@@ -290,11 +290,6 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 	for _, topic := range topics {
 		for _, field := range effectiveFields {
-			fieldAlias := ""
-			if field != "" {
-				fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
-			}
-
 			var valExpr string
 			if field == "" {
 				valExpr = fmt.Sprintf("COALESCE(%s, %s)", jsonNumberExpr("payload_json"), jsonNumberExpr("CAST(payload_blob AS TEXT)"))
@@ -304,8 +299,7 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 			for _, fn := range functions {
 				fnUpper := strings.ToUpper(fn)
-				fnLower := strings.ToLower(fn)
-				colName := fmt.Sprintf("%s%s_%s", topic, fieldAlias, fnLower)
+				colName := stores.AggregatedColumnName(topic, field, fn)
 				columnNames = append(columnNames, colName)
 				columns = append(columns, colName)
 

@@ -457,18 +457,12 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 	for _, topic := range topics {
 		for _, field := range effectiveFields {
-			fieldAlias := ""
-			if field != "" {
-				fieldAlias = fmt.Sprintf(".%s", field)
-			}
-
 			for _, fn := range functions {
-				fnUpper := strings.ToUpper(fn)
-				colName := fmt.Sprintf("%s%s (%s)", topic, fieldAlias, fnUpper)
+				colName := stores.AggregatedColumnName(topic, field, fn)
 				columns = append(columns, colName)
 				columnNames = append(columnNames, colName)
 
-				aggFn := fnUpper
+				aggFn := strings.ToUpper(fn)
 				if aggFn != "AVG" && aggFn != "MIN" && aggFn != "MAX" && aggFn != "COUNT" {
 					aggFn = "AVG"
 				}

@@ -329,13 +329,9 @@ func (a *MessageArchive) aggregateSQL(topics []string, startTime, endTime time.T
 	)
 	for _, topic := range topics {
 		for _, field := range effectiveFields {
-			fieldAlias := ""
-			if field != "" {
-				fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
-			}
 			val := valueExpr(field)
 			for _, fn := range functions {
-				columns = append(columns, fmt.Sprintf("%s%s_%s", topic, fieldAlias, strings.ToLower(fn)))
+				columns = append(columns, stores.AggregatedColumnName(topic, field, fn))
 				args = append(args, topic)
 				selects = append(selects, fmt.Sprintf("%s(CASE WHEN topic = $%d THEN %s END)", aggFunc(fn), len(args), val))
 			}

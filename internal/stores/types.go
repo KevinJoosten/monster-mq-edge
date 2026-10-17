@@ -1,6 +1,9 @@
 package stores
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // BrokerMessage is the canonical in-broker representation of a published MQTT message.
 // Field names mirror MonsterMQ's BrokerMessage (Kotlin) so storage rows are byte-compatible.
@@ -107,4 +110,13 @@ type DatabaseConnectionConfig struct {
 	ReadOnly  bool
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+// AggregatedColumnName formats an aggregated column name as <topic>[.<field with . -> _>]_<fn lower>.
+func AggregatedColumnName(topic, field, fn string) string {
+	fieldAlias := ""
+	if field != "" {
+		fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
+	}
+	return topic + fieldAlias + "_" + strings.ToLower(fn)
 }

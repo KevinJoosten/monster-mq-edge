@@ -677,14 +677,8 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 	for _, topic := range topics {
 		for _, field := range effectiveFields {
-			fieldAlias := ""
-			if field != "" {
-				fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
-			}
-
 			for _, fn := range functions {
-				fnLower := strings.ToLower(fn)
-				colName := fmt.Sprintf("%s%s_%s", topic, fieldAlias, fnLower)
+				colName := stores.AggregatedColumnName(topic, field, fn)
 				columnNames = append(columnNames, colName)
 				columns = append(columns, colName)
 			}
@@ -795,14 +789,9 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 		}
 
 		for fieldIdx, field := range effectiveFields {
-			fieldAlias := ""
-			if field != "" {
-				fieldAlias = "." + strings.ReplaceAll(field, ".", "_")
-			}
 			for _, fn := range functions {
-				fnLower := strings.ToLower(fn)
-				colName := fmt.Sprintf("%s%s_%s", topicStr, fieldAlias, fnLower)
-				accumKey := fmt.Sprintf("agg_%d_%s", fieldIdx, fnLower)
+				colName := stores.AggregatedColumnName(topicStr, field, fn)
+				accumKey := fmt.Sprintf("agg_%d_%s", fieldIdx, strings.ToLower(fn))
 
 				if _, ok := doc[accumKey]; ok && doc[accumKey] != nil {
 					bucketMap[bucketStr][topicStr][colName] = getFloat(doc, accumKey)

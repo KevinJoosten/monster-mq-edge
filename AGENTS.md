@@ -155,14 +155,30 @@ dev/done/                  # completed or archived plans
 make build              # CGO_ENABLED=0 native binary at bin/monstermq-edge
 make build-arm64        # cross-compile for Raspberry Pi 4/5
 make build-armv7        # cross-compile for older Pi
-make test               # go test ./... (black-box integration tests)
-make test-race          # with -race
+make test               # unit tests, then the integration tests (below)
+make test-integration   # integration tests only; ARGS="-test.run TestX -test.v"
+make test-race          # go test ./... with -race
 make lint               # go vet ./...
 make gen                # regenerate gqlgen output
 
 ./run.sh                # build + run with config.yaml
 ./run.sh -b -- -config test/smoke.yaml
 ```
+
+**Integration tests on Windows.** On Windows, never run `go test ./test/integration` or `go test ./...`. Use:
+
+- `test-integration.bat` in cmd or PowerShell;
+- `bash scripts/test-integration.sh` in Git Bash, which has no `make`.
+
+Both build `bin\integration.test.exe` and run it from `test/integration`.
+
+Why: the tests listen on all interfaces, and the Windows firewall asks once per program path. `go test` builds into a
+new temp folder on every run, so the owner has to confirm a firewall dialog each time. The fixed path is allowed once
+and stays allowed. A git worktree has its own path and asks once more.
+
+- **Test flags.** Pass them in test-binary form, for example `test-integration.bat -test.run TestPublishSubscribeQoS0
+  -test.v`.
+- **Other packages.** Unit tests in the other packages (`go test ./internal/...`) can still use plain `go test`.
 
 The schema in `yaml-json-schema.json` validates `config.yaml` and
 `config.yaml.example` — keep both as live examples.

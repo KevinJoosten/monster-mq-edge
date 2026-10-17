@@ -394,6 +394,59 @@ func TestPeerLinkInterestArchive(t *testing.T) {
 	})
 }
 
+// TestPeerLinkInterestArchiveReadOnly checks that archive groups with both stores read-only
+// contribute no filter to PeerLink interest, and making one flag writable restores the filter on Reload.
+func TestPeerLinkInterestArchiveReadOnly(t *testing.T) {
+	archive := func(c *config.Config) { c.PeerLink.Receive.Archive = boolPtr(true) }
+	a := startPL(t, "ir12roa", 27520, 27521, []config.PeerConfig{plPeer("ir12rob", 0)}, plInterest)
+	b := startInterestPL(t, "ir12rob", 27522, 0, []config.PeerConfig{plPullOnly("ir12roa", 27521)}, nil, plInterest, archive)
+	b.waitStreaming("ir12roa")
+
+	ctx := context.Background()
+	store := b.srv.Storage().ArchiveConfig
+	groups, err := store.GetAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range groups {
+		if g.Name == "Default" {
+			g.Enabled = false
+			if err := store.Save(ctx, g); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	roGroup := stores.ArchiveGroupConfig{
+		Name:            "RO_Group",
+		Enabled:         true,
+		TopicFilters:    []string{"ro/#"},
+		LastValType:     stores.MessageStoreMemory,
+		ArchiveType:     stores.ArchiveNone,
+		PayloadFormat:   stores.PayloadDefault,
+		LastValReadOnly: true,
+		ArchiveReadOnly: true,
+	}
+	if err := store.Save(ctx, roGroup); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.srv.Archives().Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFilters(t, a, "ir12rob", 0)
+
+	roGroup.LastValReadOnly = false
+	if err := store.Save(ctx, roGroup); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.srv.Archives().Reload(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	waitFilters(t, a, "ir12rob", 1)
+}
+
 // IR-14 and IR-15: message bus subscriptions are announced with Receive.Bus; local-only bus
 // subscriptions (outbound bridges without Receive.BridgeOutbound) never are.
 func TestPeerLinkInterestBus(t *testing.T) {

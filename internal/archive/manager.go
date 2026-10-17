@@ -158,6 +158,9 @@ func (m *Manager) InterestFilters() []string {
 		if c.RetainedOnly {
 			continue
 		}
+		if c.LastValReadOnly && c.ArchiveReadOnly {
+			continue
+		}
 		out = append(out, c.TopicFilters...)
 	}
 	return out

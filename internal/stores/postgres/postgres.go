@@ -465,6 +465,15 @@ func (a *MessageArchive) PurgeOlderThan(ctx context.Context, t time.Time) (store
 	return stores.PurgeResult{DeletedRows: res.RowsAffected()}, nil
 }
 
+// rawNumberExpr is the raw payload as a number when it is a plain JSON number,
+// else NULL. Casting a jsonb object or non-numeric text to NUMERIC raises an
+// error, so both casts are guarded. encode(.., 'escape') never fails on
+// invalid UTF-8, unlike convert_from.
+const rawNumberExpr = `COALESCE(` +
+	`CASE WHEN jsonb_typeof(payload_json) = 'number' THEN (payload_json)::NUMERIC END, ` +
+	`CASE WHEN encode(payload_blob, 'escape') ~ '^[ \t\n\r]*-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?[ \t\n\r]*$' ` +
+	`THEN (encode(payload_blob, 'escape'))::NUMERIC END)`
+
 func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []string, startTime, endTime time.Time, intervalMinutes int, functions []string, fields []string) (*stores.AggregatedResult, error) {
 	if len(topics) == 0 {
 		return &stores.AggregatedResult{
@@ -517,7 +526,7 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 			var valExpr string
 			if field == "" {
-				valExpr = "COALESCE((payload_json)::NUMERIC, (convert_from(payload_blob, 'UTF8'))::NUMERIC)"
+				valExpr = rawNumberExpr
 			} else {
 				jsonDocExpr := "COALESCE(payload_json, (convert_from(payload_blob, 'UTF8'))::jsonb)"
 				pathParts := strings.Split(field, ".")

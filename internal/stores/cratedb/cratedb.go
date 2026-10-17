@@ -290,9 +290,15 @@ func bucketExpr(intervalMinutes int) string {
 // valueExpr is the numeric value of a row: the raw payload, or a field path
 // (a.b.c) inside the JSON object. decode(.., 'base64') yields hex text
 // (\x3230), so encode(.., 'escape') turns it back into the payload text.
+// The raw payload counts only if it is a plain JSON number. payload_obj only
+// ever holds a JSON object, so such a number is always in payload_b64.
+// TRY_CAST alone would also accept NaN, Infinity or 007. CrateDB's ~ is a
+// full-match Lucene regex: no ^/$ anchors and no \ classes, hence the
+// escape string E'..' for the whitespace characters.
 func valueExpr(field string) string {
 	if field == "" {
-		return "COALESCE(TRY_CAST(payload_obj AS DOUBLE), TRY_CAST(encode(decode(payload_b64, 'base64'), 'escape') AS DOUBLE))"
+		return `CASE WHEN encode(decode(payload_b64, 'base64'), 'escape') ~ E'[ \t\n\r]*-?(0|[1-9][0-9]*)([.][0-9]+)?([eE][+-]?[0-9]+)?[ \t\n\r]*' ` +
+			`THEN TRY_CAST(encode(decode(payload_b64, 'base64'), 'escape') AS DOUBLE) END`
 	}
 	var sb strings.Builder
 	sb.WriteString("TRY_CAST(payload_obj")

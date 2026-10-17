@@ -235,6 +235,13 @@ func isProbablyJSON(b []byte) bool {
 	return false
 }
 
+// jsonNumberExpr is the raw payload as a number when it is a plain JSON
+// number, else NULL. A bare CAST turns an object or text into 0.0, and
+// json_type raises an error on malformed JSON, hence the nested CASE.
+func jsonNumberExpr(text string) string {
+	return fmt.Sprintf("CASE WHEN json_valid(%[1]s) THEN CASE WHEN json_type(%[1]s) IN ('integer', 'real') THEN CAST(%[1]s AS REAL) END END", text)
+}
+
 func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []string, startTime, endTime time.Time, intervalMinutes int, functions []string, fields []string) (*stores.AggregatedResult, error) {
 	if len(topics) == 0 {
 		return &stores.AggregatedResult{
@@ -290,7 +297,7 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 
 			var valExpr string
 			if field == "" {
-				valExpr = "COALESCE(CAST(payload_json AS REAL), CAST(CAST(payload_blob AS TEXT) AS REAL))"
+				valExpr = fmt.Sprintf("COALESCE(%s, %s)", jsonNumberExpr("payload_json"), jsonNumberExpr("CAST(payload_blob AS TEXT)"))
 			} else {
 				valExpr = fmt.Sprintf("COALESCE(CAST(json_extract(payload_json, '$.%s') AS REAL), CAST(json_extract(CAST(payload_blob AS TEXT), '$.%s') AS REAL))", field, field)
 			}

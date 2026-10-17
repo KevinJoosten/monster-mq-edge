@@ -26,6 +26,28 @@ import (
 type DB struct {
 	client *mongo.Client
 	db     *mongo.Database
+
+	binToStringMu    sync.Mutex
+	binToStringKnown bool
+	binToString      bool
+}
+
+// convertsBinaryToString reports whether $convert can turn binData into a
+// string (the format option, MongoDB 8.0+). Older servers reject the option.
+func (d *DB) convertsBinaryToString(ctx context.Context) (bool, error) {
+	d.binToStringMu.Lock()
+	defer d.binToStringMu.Unlock()
+	if !d.binToStringKnown {
+		var info struct {
+			VersionArray []int `bson:"versionArray"`
+		}
+		if err := d.client.Database("admin").RunCommand(ctx, bson.D{{Key: "buildInfo", Value: 1}}).Decode(&info); err != nil {
+			return false, fmt.Errorf("mongo buildInfo: %w", err)
+		}
+		d.binToString = len(info.VersionArray) > 0 && info.VersionArray[0] >= 8
+		d.binToStringKnown = true
+	}
+	return d.binToString, nil
 }
 
 func Open(ctx context.Context, uri, dbName string) (*DB, error) {
@@ -566,6 +588,31 @@ func (a *MessageArchive) PurgeOlderThan(ctx context.Context, t time.Time) (store
 	return stores.PurgeResult{DeletedRows: res.DeletedCount}, nil
 }
 
+// jsonNumberPattern matches a plain JSON number with optional JSON whitespace.
+const jsonNumberPattern = `^[ \t\n\r]*-?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?[ \t\n\r]*$`
+
+// rawNumberExpr is the raw payload as a double when it is a plain JSON number,
+// else null. payload only ever holds a JSON object, so such a number is always
+// in payload_blob. Reading binData as text needs MongoDB 8.0; older servers
+// get null.
+func rawNumberExpr(binToString bool) any {
+	if !binToString {
+		return nil
+	}
+	return bson.M{"$let": bson.M{
+		"vars": bson.M{"s": bson.M{"$convert": bson.M{
+			"input": "$payload_blob", "to": "string", "format": "utf8", "onError": nil, "onNull": nil,
+		}}},
+		"in": bson.M{"$cond": bson.A{
+			bson.M{"$regexMatch": bson.M{"input": "$$s", "regex": jsonNumberPattern}},
+			bson.M{"$convert": bson.M{
+				"input": bson.M{"$trim": bson.M{"input": "$$s", "chars": " \t\n\r"}}, "to": "double", "onError": nil, "onNull": nil,
+			}},
+			nil,
+		}},
+	}}
+}
+
 func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []string, startTime, endTime time.Time, intervalMinutes int, functions []string, fields []string) (*stores.AggregatedResult, error) {
 	if len(topics) == 0 {
 		return &stores.AggregatedResult{
@@ -645,20 +692,22 @@ func (a *MessageArchive) GetAggregatedHistory(ctx context.Context, topics []stri
 	}
 
 	for fieldIdx, field := range effectiveFields {
-		var inputExpr any
+		var convertExpr any
 		if field == "" {
-			inputExpr = "$payload"
+			binToString, err := a.db.convertsBinaryToString(ctx)
+			if err != nil {
+				return nil, err
+			}
+			convertExpr = rawNumberExpr(binToString)
 		} else {
-			inputExpr = "$payload." + field
-		}
-
-		convertExpr := bson.M{
-			"$convert": bson.M{
-				"input":   inputExpr,
-				"to":      "double",
-				"onError": nil,
-				"onNull":  nil,
-			},
+			convertExpr = bson.M{
+				"$convert": bson.M{
+					"input":   "$payload." + field,
+					"to":      "double",
+					"onError": nil,
+					"onNull":  nil,
+				},
+			}
 		}
 
 		for _, fn := range functions {

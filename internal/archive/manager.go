@@ -17,10 +17,47 @@ import (
 	storecratedb "monstermq.io/edge/internal/stores/cratedb"
 	storememory "monstermq.io/edge/internal/stores/memory"
 	storemongo "monstermq.io/edge/internal/stores/mongodb"
+	"monstermq.io/edge/internal/stores/oastore"
 	storepg "monstermq.io/edge/internal/stores/postgres"
 	storequestdb "monstermq.io/edge/internal/stores/questdb"
 	storesqlite "monstermq.io/edge/internal/stores/sqlite"
+	"monstermq.io/edge/internal/winccoanative"
 )
+
+const (
+	// WinCCOAGroupName is the auto-provisioned WinCC OA archive group name.
+	WinCCOAGroupName = "WinCCOA"
+	// WinCCOAUnavailableMessage is the deploy/validation error when WINCCOA stores are used outside WCCOAmmq.
+	WinCCOAUnavailableMessage = "WINCCOA stores need MonsterMQ Edge embedded in the WinCC OA manager (WCCOAmmq) with WinCCOaNative.Namespace enabled"
+)
+
+// WinCCOAGroupConfig returns the auto-provisioned WinCCOA archive group configuration.
+func WinCCOAGroupConfig(root string) stores.ArchiveGroupConfig {
+	if root == "" {
+		root = winccoanative.DefaultNames.Root
+	}
+	return stores.ArchiveGroupConfig{
+		Name:            WinCCOAGroupName,
+		Enabled:         true,
+		TopicFilters:    []string{root + "/#"},
+		LastValType:     stores.MessageStoreWinCCOA,
+		ArchiveType:     stores.ArchiveWinCCOA,
+		PayloadFormat:   stores.PayloadDefault,
+		LastValReadOnly: true,
+		ArchiveReadOnly: true,
+	}
+}
+
+// EffectiveConfig forces the read-only flag on any WINCCOA store side.
+func EffectiveConfig(c stores.ArchiveGroupConfig) stores.ArchiveGroupConfig {
+	if c.LastValType == stores.MessageStoreWinCCOA {
+		c.LastValReadOnly = true
+	}
+	if c.ArchiveType == stores.ArchiveWinCCOA {
+		c.ArchiveReadOnly = true
+	}
+	return c
+}
 
 // Manager owns the active set of archive groups and dispatches every published
 // message to all matching groups. It supports SQLite, PostgreSQL and MongoDB
@@ -34,11 +71,26 @@ type Manager struct {
 	mongoDB  *storemongo.DB
 
 	mu           sync.RWMutex
+	oa           *oastore.ReadOptions
 	groups       map[string]*Group
 	groupCount   atomic.Int32      // mirrors len(groups) for the lock-free HasGroups probe
 	deployError  map[string]string // last deploy error per group name (for the dashboard)
 	onChange     func()            // PeerLink interest routing: the group filters may have changed
 	loggedDbDups sync.Map          // db int -> struct{} to log duplicate warnings once
+}
+
+// SetWinCCOA wires the embedded WinCC OA store reader before Load is called.
+func (m *Manager) SetWinCCOA(o oastore.ReadOptions) {
+	m.mu.Lock()
+	m.oa = &o
+	m.mu.Unlock()
+}
+
+// WinCCOAEnabled reports whether the embedded WinCC OA store reader is wired.
+func (m *Manager) WinCCOAEnabled() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.oa != nil
 }
 
 // HasGroups reports whether any archive group is running. Lock-free so the
@@ -122,6 +174,31 @@ func (m *Manager) Load(ctx context.Context) error {
 		}
 		configs = append(configs, def)
 	}
+	m.mu.RLock()
+	oa := m.oa
+	m.mu.RUnlock()
+	if oa != nil {
+		hasWinCCOA := false
+		for _, c := range configs {
+			if c.Name == WinCCOAGroupName {
+				hasWinCCOA = true
+				break
+			}
+		}
+		if !hasWinCCOA {
+			root := winccoanative.DefaultNames.Root
+			if oa.Names != nil {
+				if n := oa.Names().WithDefaults(); n.Root != "" {
+					root = n.Root
+				}
+			}
+			oaCfg := WinCCOAGroupConfig(root)
+			if err := m.storage.ArchiveConfig.Save(ctx, oaCfg); err != nil {
+				return err
+			}
+			configs = append(configs, oaCfg)
+		}
+	}
 	for _, c := range configs {
 		if err := m.startGroup(ctx, c); err != nil {
 			m.recordDeployError(c.Name, err)
@@ -178,6 +255,7 @@ func (m *Manager) recordDeployError(name string, err error) {
 }
 
 func (m *Manager) startGroup(ctx context.Context, c stores.ArchiveGroupConfig) error {
+	c = EffectiveConfig(c)
 	if !c.Enabled {
 		return nil
 	}
@@ -446,6 +524,18 @@ func (m *Manager) buildLastValStore(ctx context.Context, c stores.ArchiveGroupCo
 			return nil, fmt.Errorf("ensure %s on mongo: %w", name, err)
 		}
 		return s, nil
+	case stores.MessageStoreWinCCOA:
+		m.mu.RLock()
+		oa := m.oa
+		m.mu.RUnlock()
+		if oa == nil {
+			return nil, fmt.Errorf("group %s: %s", c.Name, WinCCOAUnavailableMessage)
+		}
+		s := oastore.NewLastValStore(name, *oa)
+		if err := s.EnsureTable(ctx); err != nil {
+			return nil, err
+		}
+		return s, nil
 	case stores.MessageStoreNone, "":
 		return nil, nil
 	}
@@ -519,6 +609,18 @@ func (m *Manager) buildArchiveStore(ctx context.Context, c stores.ArchiveGroupCo
 			return nil, fmt.Errorf("ensure %s on mongo: %w", name, err)
 		}
 		return a, nil
+	case stores.ArchiveWinCCOA:
+		m.mu.RLock()
+		oa := m.oa
+		m.mu.RUnlock()
+		if oa == nil {
+			return nil, fmt.Errorf("group %s: %s", c.Name, WinCCOAUnavailableMessage)
+		}
+		a := oastore.NewMessageArchive(name, *oa)
+		if err := a.EnsureTable(ctx); err != nil {
+			return nil, err
+		}
+		return a, nil
 	case stores.ArchiveNone, "":
 		return nil, nil
 	}
@@ -537,7 +639,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 	wanted := map[string]stores.ArchiveGroupConfig{}
 	for _, c := range configs {
 		if c.Enabled {
-			wanted[c.Name] = c
+			wanted[c.Name] = EffectiveConfig(c)
 		}
 	}
 
@@ -673,11 +775,67 @@ func (m *Manager) ByRedisDB(db int) *Group {
 	return best
 }
 
-// ResolveGroupForTopic returns the running group that serves a read of topic,
-// or nil. requested is the caller's group name; "" and "Default" both mean "not chosen".
+// ResolveGroupForTopic returns the running group that serves a read of topic
+// (an exact topic or a filter), or nil. requested is the caller's group name;
+// "" and "Default" both mean "not chosen". needArchive selects history reads.
 func (m *Manager) ResolveGroupForTopic(requested, topic string, needArchive bool) *Group {
 	if requested != "" && requested != "Default" {
-		return m.Get(requested)
+		return m.Get(requested) // explicit choice, no fallback
 	}
-	return m.Get("Default")
+	def := m.Get("Default")
+	m.mu.RLock()
+	oa := m.oa
+	m.mu.RUnlock()
+	if oa == nil {
+		return def
+	}
+	t, _ := winccoanative.SplitShared(topic)
+	names := winccoanative.DefaultNames
+	if oa.Names != nil {
+		names = oa.Names().WithDefaults()
+	}
+	if names.Classify(t) != winccoanative.KindNative {
+		return def // #, <root>/#, topics branch, status, non-native
+	}
+	w := m.winccoaGroup(needArchive) // "WinCCOA" if its relevant type is WINCCOA, else the first such group by name
+	switch {
+	case w == nil:
+		return def
+	case def == nil:
+		return w
+	case isWinCCOA(def, needArchive): // Default itself uses WINCCOA for this read
+		return def
+	case !needArchive:
+		return w
+	case def.Archive() != nil && def.MatchesFilter(t): // S4; filter levels are compared literally
+		return def
+	}
+	return w
+}
+
+func isWinCCOA(g *Group, needArchive bool) bool {
+	if g == nil {
+		return false
+	}
+	if needArchive {
+		return g.Config().ArchiveType == stores.ArchiveWinCCOA
+	}
+	return g.Config().LastValType == stores.MessageStoreWinCCOA
+}
+
+func (m *Manager) winccoaGroup(needArchive bool) *Group {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if w, ok := m.groups[WinCCOAGroupName]; ok && isWinCCOA(w, needArchive) {
+		return w
+	}
+	var best *Group
+	for _, g := range m.groups {
+		if isWinCCOA(g, needArchive) {
+			if best == nil || g.Name() < best.Name() {
+				best = g
+			}
+		}
+	}
+	return best
 }

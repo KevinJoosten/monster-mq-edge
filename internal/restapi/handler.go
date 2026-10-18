@@ -285,25 +285,25 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = "Default"
 	}
-	group := h.archives.Get(name)
+	_, hasStart := q["start"]
+	_, hasEnd := q["end"]
+	group := h.archives.ResolveGroupForTopic(q.Get("group"), topic, hasStart || hasEnd)
 	if group == nil {
 		fail(w, 404, "Archive group '"+name+"' not found")
 		return
 	}
-	_, hasStart := q["start"]
-	_, hasEnd := q["end"]
 	if hasStart || hasEnd {
 		if raw {
 			fail(w, 400, "Raw reads do not support history; select one current or retained topic")
 			return
 		}
-		h.readHistory(w, r, topic, name)
+		h.readHistory(w, r, topic, group)
 		return
 	}
 	if raw {
-		h.readRaw(w, r, topic, group.LastValue(), "Archive group '"+name+"' has no last value store")
+		h.readRaw(w, r, topic, group.LastValue(), "Archive group '"+group.Name()+"' has no last value store")
 	} else {
-		h.readMessages(w, r, topic, group.LastValue(), "Archive group '"+name+"' has no last value store")
+		h.readMessages(w, r, topic, group.LastValue(), "Archive group '"+group.Name()+"' has no last value store")
 	}
 }
 
@@ -370,10 +370,10 @@ func parseTime(value string) (*time.Time, error) {
 	}
 	return &t, nil
 }
-func (h *Handler) readHistory(w http.ResponseWriter, r *http.Request, topic, name string) {
-	archiveStore := h.archives.Get(name).Archive()
+func (h *Handler) readHistory(w http.ResponseWriter, r *http.Request, topic string, group *archive.Group) {
+	archiveStore := group.Archive()
 	if archiveStore == nil {
-		fail(w, 404, "Archive group '"+name+"' has no queryable archive store")
+		fail(w, 404, "Archive group '"+group.Name()+"' has no queryable archive store")
 		return
 	}
 	q := r.URL.Query()

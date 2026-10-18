@@ -373,6 +373,9 @@ func encodeSegment(s string, last bool) string {
 // EncodeName encodes one DP/element/system name as a topic segment.
 func EncodeName(s string, last bool) string { return encodeSegment(s, last) }
 
+// DecodeName decodes one percent-encoded topic segment into a DP/element/system name.
+func DecodeName(s string, last bool) (string, error) { return decodeSegment(s, last) }
+
 func unhex(c byte) (byte, bool) {
 	switch {
 	case c >= '0' && c <= '9':

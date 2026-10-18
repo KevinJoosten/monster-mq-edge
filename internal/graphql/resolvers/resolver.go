@@ -375,6 +375,8 @@ func toMessageStoreType(s stores.MessageStoreType) generated.MessageStoreType {
 		return generated.MessageStoreTypeMongodb
 	case stores.MessageStoreMemory:
 		return generated.MessageStoreTypeMemory
+	case stores.MessageStoreWinCCOA:
+		return generated.MessageStoreTypeWinccoa
 	}
 	return generated.MessageStoreTypeNone
 }
@@ -391,6 +393,8 @@ func toMessageArchiveType(s stores.MessageArchiveType) generated.MessageArchiveT
 		return generated.MessageArchiveTypeQuestdb
 	case stores.ArchiveMongoDB:
 		return generated.MessageArchiveTypeMongodb
+	case stores.ArchiveWinCCOA:
+		return generated.MessageArchiveTypeWinccoa
 	}
 	return generated.MessageArchiveTypeNone
 }
@@ -405,6 +409,8 @@ func fromMessageStoreType(t generated.MessageStoreType) stores.MessageStoreType 
 		return stores.MessageStoreMongoDB
 	case generated.MessageStoreTypeMemory:
 		return stores.MessageStoreMemory
+	case generated.MessageStoreTypeWinccoa:
+		return stores.MessageStoreWinCCOA
 	}
 	return stores.MessageStoreNone
 }
@@ -421,6 +427,8 @@ func fromMessageArchiveType(t generated.MessageArchiveType) stores.MessageArchiv
 		return stores.ArchiveQuestDB
 	case generated.MessageArchiveTypeMongodb:
 		return stores.ArchiveMongoDB
+	case generated.MessageArchiveTypeWinccoa:
+		return stores.ArchiveWinCCOA
 	}
 	return stores.ArchiveNone
 }
@@ -984,7 +992,7 @@ func (r *queryResolver) CurrentValue(ctx context.Context, topic string, format *
 	if err := r.requireTopic(ctx, topic, false); err != nil {
 		return nil, err
 	}
-	store := r.lastValueStore(archiveGroup)
+	store := r.lastValueStoreFor(archiveGroup, topic)
 	if store == nil {
 		return nil, nil
 	}
@@ -999,7 +1007,7 @@ func (r *queryResolver) CurrentValues(ctx context.Context, topicFilter string, f
 	if err := r.requireTopic(ctx, topicFilter, false); err != nil {
 		return nil, err
 	}
-	store := r.lastValueStore(archiveGroup)
+	store := r.lastValueStoreFor(archiveGroup, topicFilter)
 	if store == nil {
 		return nil, nil
 	}
@@ -1045,36 +1053,40 @@ func brokerMsgToTopicValue(m stores.BrokerMessage, fmt *generated.DataFormat) *g
 }
 
 func (r *Resolver) lastValueStore(group *string) stores.MessageStore {
-	name := "Default"
-	if group != nil && *group != "" {
-		name = *group
+	return r.lastValueStoreFor(group, "")
+}
+
+func (r *Resolver) lastValueStoreFor(group *string, topic string) stores.MessageStore {
+	if r.Archives == nil {
+		return nil
 	}
-	for _, g := range r.Archives.Snapshot() {
-		if g.Name() == name {
-			return g.LastValue()
-		}
+	g := r.Archives.ResolveGroupForTopic(derefStr(group), topic, false)
+	if g == nil {
+		return nil
 	}
-	return nil
+	return g.LastValue()
 }
 
 func (r *Resolver) archive(group *string) stores.MessageArchive {
-	name := "Default"
-	if group != nil && *group != "" {
-		name = *group
+	return r.archiveFor(group, "")
+}
+
+func (r *Resolver) archiveFor(group *string, topic string) stores.MessageArchive {
+	if r.Archives == nil {
+		return nil
 	}
-	for _, g := range r.Archives.Snapshot() {
-		if g.Name() == name {
-			return g.Archive()
-		}
+	g := r.Archives.ResolveGroupForTopic(derefStr(group), topic, true)
+	if g == nil {
+		return nil
 	}
-	return nil
+	return g.Archive()
 }
 
 func (r *queryResolver) ArchivedMessages(ctx context.Context, topicFilter string, startTime, endTime *string, format *generated.DataFormat, limit *int, archiveGroup *string, includeTopic *bool) ([]*generated.ArchivedMessage, error) {
 	if err := r.requireTopic(ctx, topicFilter, false); err != nil {
 		return nil, err
 	}
-	arc := r.archive(archiveGroup)
+	arc := r.archiveFor(archiveGroup, topicFilter)
 	if arc == nil {
 		return []*generated.ArchivedMessage{}, nil
 	}
@@ -1109,8 +1121,23 @@ func (r *queryResolver) AggregatedMessages(ctx context.Context, topics []string,
 			return nil, err
 		}
 	}
-	arc := r.archive(archiveGroup)
-	if arc == nil {
+	var groupOrder []*archive.Group
+	byGroup := map[*archive.Group][]string{}
+	hasArchive := false
+	for _, topic := range topics {
+		var g *archive.Group
+		if r.Archives != nil {
+			g = r.Archives.ResolveGroupForTopic(derefStr(archiveGroup), topic, true)
+		}
+		if g != nil && g.Archive() != nil {
+			hasArchive = true
+		}
+		if _, seen := byGroup[g]; !seen {
+			groupOrder = append(groupOrder, g)
+		}
+		byGroup[g] = append(byGroup[g], topic)
+	}
+	if !hasArchive {
 		return &generated.AggregatedResult{
 			Columns:    []string{"timestamp"},
 			Rows:       [][]any{},
@@ -1159,9 +1186,26 @@ func (r *queryResolver) AggregatedMessages(ctx context.Context, topics []string,
 		fnStrings = []string{"AVG"}
 	}
 
-	storeRes, err := arc.GetAggregatedHistory(ctx, topics, from, to, intervalMinutes, fnStrings, fields)
-	if err != nil {
-		return nil, err
+	var storeRes *stores.AggregatedResult
+	if len(groupOrder) == 1 {
+		var err error
+		storeRes, err = groupOrder[0].Archive().GetAggregatedHistory(ctx, topics, from, to, intervalMinutes, fnStrings, fields)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		var parts []*stores.AggregatedResult
+		for _, g := range groupOrder {
+			if g == nil || g.Archive() == nil {
+				continue
+			}
+			part, err := g.Archive().GetAggregatedHistory(ctx, byGroup[g], from, to, intervalMinutes, fnStrings, fields)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, part)
+		}
+		storeRes = archive.MergeAggregated(topics, fields, fnStrings, intervalMinutes, from, to, parts)
 	}
 
 	return &generated.AggregatedResult{
@@ -1238,12 +1282,12 @@ func compileSearchMatcher(pattern string) func(string) bool {
 //	                                     "sensor/humid"}        → {"sensor/temp", "sensor/humid"}
 //	pattern = "sensor/temp" (no wildcards, exact match)         → {"sensor/temp"} if it exists
 func (r *queryResolver) BrowseTopics(ctx context.Context, topic string, archiveGroup *string) ([]*generated.Topic, error) {
-	store := r.lastValueStore(archiveGroup)
-	if store == nil {
-		return []*generated.Topic{}, nil
-	}
 	if topic == "" {
 		topic = "+"
+	}
+	store := r.lastValueStoreFor(archiveGroup, topic)
+	if store == nil {
+		return []*generated.Topic{}, nil
 	}
 	patternLevels := strings.Split(topic, "/")
 	extractDepth := len(patternLevels)
@@ -1261,9 +1305,43 @@ func (r *queryResolver) BrowseTopics(ctx context.Context, topic string, archiveG
 		return []*generated.Topic{{Name: topic, IsLeaf: true}}, nil
 	}
 
+	searchFilter := "#"
+	if lb, ok := store.(stores.LevelBrowser); ok {
+		out := []*generated.Topic{}
+		prefix := ""
+		if extractDepth > 1 {
+			prefix = strings.Join(patternLevels[:extractDepth-1], "/")
+		}
+		handled, err := lb.BrowseLevel(ctx, topic, func(name string, leaf bool) bool {
+			full := name
+			if prefix != "" {
+				full = prefix + "/" + name
+			}
+			if !r.allowTopic(ctx, full, false) {
+				return true
+			}
+			out = append(out, &generated.Topic{Name: full, IsLeaf: leaf})
+			return true
+		})
+		if err != nil {
+			return nil, err
+		}
+		if handled {
+			return out, nil
+		}
+		searchFilter = topic
+		if patternLevels[extractDepth-1] == "+" {
+			if prefix == "" {
+				searchFilter = "#"
+			} else {
+				searchFilter = prefix + "/#"
+			}
+		}
+	}
+
 	seen := map[string]struct{}{}
 	leaves := map[string]bool{}
-	err := store.FindMatchingTopics(ctx, "#", func(t string) bool {
+	err := store.FindMatchingTopics(ctx, searchFilter, func(t string) bool {
 		if !r.allowTopic(ctx, t, false) {
 			return true
 		}
@@ -1441,6 +1519,7 @@ func (r *queryResolver) DatabaseConnection(ctx context.Context, name string) (*g
 }
 
 func (r *Resolver) archiveGroupInfoTo(c stores.ArchiveGroupConfig) *generated.ArchiveGroupInfo {
+	c = archive.EffectiveConfig(c)
 	deployed := false
 	var deploymentID *string
 	if r.Archives != nil {
@@ -2142,6 +2221,12 @@ func (r *archiveGroupMutationsResolver) Create(ctx context.Context, _ *generated
 		LastValReadOnly:  boolPtr(input.LastValReadOnly, false),
 		ArchiveReadOnly:  boolPtr(input.ArchiveReadOnly, false),
 	}
+	if (cfg.LastValType == stores.MessageStoreWinCCOA || cfg.ArchiveType == stores.ArchiveWinCCOA) && (r.Archives == nil || !r.Archives.WinCCOAEnabled()) {
+		return &generated.ArchiveGroupResult{
+			Success: false,
+			Message: ptr(fmt.Sprintf("group %s: %s", cfg.Name, archive.WinCCOAUnavailableMessage)),
+		}, nil
+	}
 	if input.PayloadFormat != nil {
 		cfg.PayloadFormat = stores.PayloadFormat(*input.PayloadFormat)
 	}
@@ -2162,6 +2247,7 @@ func (r *archiveGroupMutationsResolver) Create(ctx context.Context, _ *generated
 			}
 		}
 	}
+	cfg = archive.EffectiveConfig(cfg)
 	if err := r.Storage.ArchiveConfig.Save(ctx, cfg); err != nil {
 		return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 	}
@@ -2197,6 +2283,12 @@ func (r *archiveGroupMutationsResolver) Update(ctx context.Context, _ *generated
 	}
 	if input.ArchiveType != nil {
 		existing.ArchiveType = fromMessageArchiveType(*input.ArchiveType)
+	}
+	if (existing.LastValType == stores.MessageStoreWinCCOA || existing.ArchiveType == stores.ArchiveWinCCOA) && (r.Archives == nil || !r.Archives.WinCCOAEnabled()) {
+		return &generated.ArchiveGroupResult{
+			Success: false,
+			Message: ptr(fmt.Sprintf("group %s: %s", existing.Name, archive.WinCCOAUnavailableMessage)),
+		}, nil
 	}
 	if input.DatabaseConnectionName != nil {
 		dbConnName, err := r.validateDatabaseConnectionSelection(ctx, *input.DatabaseConnectionName, existing.LastValType, existing.ArchiveType)
@@ -2258,6 +2350,7 @@ func (r *archiveGroupMutationsResolver) Update(ctx context.Context, _ *generated
 	if input.ArchiveReadOnly != nil {
 		existing.ArchiveReadOnly = *input.ArchiveReadOnly
 	}
+	*existing = archive.EffectiveConfig(*existing)
 	if err := r.Storage.ArchiveConfig.Save(ctx, *existing); err != nil {
 		return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 	}

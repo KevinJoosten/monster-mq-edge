@@ -25,14 +25,22 @@ const (
 	OpDpCreate        uint32 = 10
 	OpDpDelete        uint32 = 11
 	OpTypeCheck       uint32 = 12
+	OpDpGetPeriod     uint32 = 17
+	OpDpQuery         uint32 = 18
+	OpCursorNext      uint32 = 19
+	OpCursorClose     uint32 = 20
 )
+
+// TagIndex is the u32 index into the request's repeated TagName list in a
+// DP_GET_PERIOD answer row.
+const TagIndex byte = 24
 
 // Request flags.
 const (
 	FlagAnswer   uint32 = 1 << 0 // query/connect: deliver the initial answer as an event
 	FlagNoSource uint32 = 1 << 1 // connect: dpConnectNoSource
 	FlagWait     uint32 = 1 << 2 // set: require the OA answer (always set by this package)
-	FlagMore     uint32 = 1 << 3 // event: the query answer continues in another event
+	FlagMore     uint32 = 1 << 3 // event/read: the query or read answer continues in another event or page
 	FlagCreate   uint32 = 1 << 4 // type check: create a missing type from the given elements
 	// FlagSourceTime (connect): connect each name together with the
 	// _online.._stime of its element; every event item then carries a
@@ -43,6 +51,10 @@ const (
 	// the complete list of connected systems; the host sends it once the
 	// distribution state is known (also when no system is connected).
 	FlagSnapshot uint32 = 1 << 6
+	// FlagNewest (DP_GET_PERIOD request): keep the newest samples.
+	FlagNewest uint32 = 1 << 9
+	// FlagTruncated (read answer): the row or sample limit cut the result.
+	FlagTruncated uint32 = 1 << 10
 )
 
 // Resolution is the answer to OpResolve for one name.

@@ -271,7 +271,21 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if err := hydrateSubscriptionIndex(ctx, subs, storage); err != nil {
 		logger.Warn("subscription index hydrate failed", "err", err)
 	}
+	var native *winccoanative.Service
 	archives := archive.NewManager(cfg, storage, sqliteDB, pgDB, mongoDB, logger)
+	if nativeOn && cfg.WinCCOaNative.Namespace {
+		archives.SetWinCCOA(oastore.ReadOptions{
+			API: oahost.API{C: opts.OA},
+			Names: func() winccoanative.Names {
+				if native != nil {
+					return native.Names()
+				}
+				return names
+			},
+			MaxRows: cfg.WinCCOaNative.QueryMaxRows,
+			Logger:  logger,
+		})
+	}
 	if err := archives.Load(ctx); err != nil {
 		logger.Warn("archive groups load failed", "err", err)
 	}
@@ -338,7 +352,6 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	// Native WinCC OA namespace. Added before the storage hook so accepted
 	// commands are consumed (not archived or delivered) and rejected
 	// filters never reach persistence.
-	var native *winccoanative.Service
 	var nativeHook *WinCCOaNativeHook
 	if nativeOn && cfg.WinCCOaNative.Namespace {
 		native = winccoanative.NewService(oahost.API{C: opts.OA}, nativeBroker{Server: server, bus: bus}, winccoanative.Options{

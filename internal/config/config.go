@@ -267,6 +267,8 @@ type WinCCOaNativeConfig struct {
 	// default) or after the topic itself (NAME, e.g. MMQTopic_plant/line1). All brokers of a
 	// distributed system must use the same naming.
 	TopicDpNames string `yaml:"TopicDpNames"`
+	// QueryMaxRows bounds the rows returned by one dpQuery issued by a WINCCOA store.
+	QueryMaxRows int `yaml:"QueryMaxRows"`
 
 	// LegacyStores is the removed Stores list; set only to reject old configs.
 	LegacyStores []string `yaml:"Stores,omitempty"`
@@ -310,6 +312,11 @@ func (w *WinCCOaNativeConfig) validate() error {
 	case WinCCOaEchoBrokerTag, WinCCOaEchoNoSource:
 	default:
 		return fmt.Errorf("WinCCOaNative.EchoPolicy %q must be BROKER_TAG or NO_SOURCE", w.EchoPolicy)
+	}
+	if w.QueryMaxRows == 0 {
+		w.QueryMaxRows = 10000
+	} else if w.QueryMaxRows < 100 || w.QueryMaxRows > 1000000 {
+		return fmt.Errorf("WinCCOaNative.QueryMaxRows %d must be between 100 and 1000000", w.QueryMaxRows)
 	}
 	if len(w.LegacyStores) > 0 {
 		return fmt.Errorf("WinCCOaNative.Stores was removed; use ConfigStoreType: WINCCOA (device and archive configs) and SessionStoreType: WINCCOA")

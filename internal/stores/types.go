@@ -84,6 +84,7 @@ const (
 	ArchiveQuestDB  MessageArchiveType = "QUESTDB"
 	ArchiveMongoDB  MessageArchiveType = "MONGODB"
 	ArchiveSQLite   MessageArchiveType = "SQLITE"
+	ArchiveWinCCOA  MessageArchiveType = "WINCCOA"
 )
 
 type PayloadFormat string

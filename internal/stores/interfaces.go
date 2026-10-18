@@ -19,6 +19,13 @@ type MessageStore interface {
 	Close() error
 }
 
+// LevelBrowser is an optional MessageStore extension for BrowseTopics: it lists
+// the names one level below pattern (literal levels plus one trailing "+").
+// handled is false when the store cannot answer the pattern directly.
+type LevelBrowser interface {
+	BrowseLevel(ctx context.Context, pattern string, yield func(name string, leaf bool) bool) (handled bool, err error)
+}
+
 type DailyCount struct {
 	Date  string `json:"date"`
 	Count int64  `json:"count"`

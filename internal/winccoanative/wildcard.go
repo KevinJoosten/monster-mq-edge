@@ -150,18 +150,45 @@ func (w WildTarget) Pattern() string {
 	return base
 }
 
-// Query returns the dpQueryConnectSingle statement. _online.._stime is the
-// published time and identifies one value change when several queries
-// overlap.
-func (w WildTarget) Query() string {
+// QueryAttrs returns the dpQuery / dpQueryConnectSingle statement for attrs.
+func (w WildTarget) QueryAttrs(attrs ...string) string {
+	quoted := make([]string, len(attrs))
+	for i, a := range attrs {
+		quoted[i] = "'" + a + "'"
+	}
 	// WinCC OA expects REMOTE directly after FROM, before WHERE.
-	q := "SELECT '_online.._value', '_online.._stime' FROM '" + w.Pattern() + "'"
+	q := "SELECT " + strings.Join(quoted, ", ") + " FROM '" + w.Pattern() + "'"
 	if w.Remote {
 		q += " REMOTE '" + w.System + "'"
 	}
 	if w.TypeName != "" {
 		q += ` WHERE _DPT = "` + w.TypeName + `"`
 	}
+	return q
+}
+
+// Query returns the dpQueryConnectSingle statement. _online.._stime is the
+// published time and identifies one value change when several queries
+// overlap.
+func (w WildTarget) Query() string {
+	return w.QueryAttrs("_online.._value", "_online.._stime")
+}
+
+// QueryArchived returns the dpQuery statement that lists DPEs with an
+// archive configuration. The dummy TIMERANGE routes the query to the NGA /
+// archive manager, which owns _archive configs (see WinCC OA's
+// ngaStatistics.ctl).
+func (w WildTarget) QueryArchived() string {
+	q := "SELECT '_archive.._class' FROM '" + w.Pattern() + "'"
+	if w.Remote {
+		q += " REMOTE '" + w.System + "'"
+	}
+	if w.TypeName != "" {
+		q += ` WHERE _DPT = "` + w.TypeName + `" AND '_archive.._class' != ""`
+	} else {
+		q += ` WHERE '_archive.._class' != ""`
+	}
+	q += ` TIMERANGE("2009.02.13 23:31:30", "2009.02.13 23:31:30", 1, 0)`
 	return q
 }
 

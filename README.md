@@ -9,7 +9,7 @@ on devices like the Raspberry Pi 4/5.
 - **Single static binary** (~25 MB), zero CGO. Pure-Go SQLite via `modernc.org/sqlite`.
 - **MQTT 3.1 / 3.1.1 / 5.0** native server engine ([internal/mqtt/](internal/mqtt)) — TCP, WebSocket, TLS, WSS.
 - **Storage**: SQLite (default), PostgreSQL, MongoDB. Schemas are byte-compatible with MonsterMQ Core, so the same DB can be opened by either implementation.
-- **Archive groups** (last-value + history fanout, retention purging) — same model as MonsterMQ Core.
+- **Archive groups** (last-value + history fanout, retention purging) — same model as MonsterMQ Core, plus a direct `WINCCOA` last-value and `dpGetPeriod` history store when embedded in `WCCOAmmq` ([winccoa/doc/winccoa-archive.md](winccoa/doc/winccoa-archive.md)).
 - **GraphQL API** with subscriptions, schema-parity with the existing dashboard.
 - **REST API** for publishing, bodyless current/retained/history reads, bulk and Influx writes, and SSE subscriptions.
 - **Prometheus & Grafana API** — `/metrics` scrape endpoint and PromQL HTTP API (`/api/v1/query`, `/api/v1/query_range`, `/api/v1/series`, `/api/v1/labels`) for Grafana's Prometheus data source. See [doc/grafana.md](doc/grafana.md).
@@ -20,7 +20,7 @@ on devices like the Raspberry Pi 4/5.
 - **Users + ACL** with bcrypt password hashing.
 - **Periodic metrics** surfaced via `Broker.metrics`/`metricsHistory`; history can be persisted or kept in memory.
 - **WinCC Unified bridge** — GraphQL/WebSocket or Open Pipe transport into local MQTT topics.
-- **WinCC Open Architecture bridge** — GraphQL/WebSocket subscriptions from `dpQueryConnectSingle` into local MQTT topics.
+- **WinCC Open Architecture bridge** — GraphQL/WebSocket subscriptions from `dpQueryConnectSingle` into local MQTT topics, or embedded C++ API manager ([winccoa/README.md](winccoa/README.md)).
 - No OPC UA / Kafka / Sparkplug / GenAI / flows.
 
 ## Getting Started

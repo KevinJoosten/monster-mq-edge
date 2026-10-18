@@ -22,7 +22,8 @@ import (
 //	MMQ_LIVE_PORT=1883 MMQ_LIVE_GQL=4000 MMQ_LIVE_PROJECT=Test321 MMQ_LIVE_NODE=<NodeId> \
 //	  go test ./test/integration -run TestLive -v -count=1
 //
-// Prerequisites: winccoa/scripts/mmqLiveFixture.ctl ran in the project,
+// Prerequisites: winccoa/scripts/mmqLiveFixture.ctl and
+// winccoa/scripts/mmqCreateLoadDps.ctl ran in the project,
 // `woa` is on PATH (LD_LIBRARY_PATH includes the WinCC OA bin directory).
 
 type liveEnv struct {
@@ -619,3 +620,111 @@ func TestLiveWildcards(t *testing.T) {
 	msgs := collectTopics(d, 2*time.Second)["winccoa/systems/System1/tags/MMQLive2/speed"]
 	t.Logf("recreated DP through tags/+/speed: %v", msgs)
 }
+
+func TestLiveArchiveHistory(t *testing.T) {
+	e := live(t)
+	if e.gql == 0 {
+		t.Skip("MMQ_LIVE_GQL not set")
+	}
+	t0 := time.Now().UTC().Add(-2 * time.Second)
+	e.set(t, "MMQLive1.speed", "101.25", "float")
+	time.Sleep(200 * time.Millisecond)
+	e.set(t, "MMQLive1.speed", "202.5", "float")
+	time.Sleep(2 * time.Second)
+	t1 := time.Now().UTC().Add(2 * time.Second)
+
+	res := e.graphql(t, fmt.Sprintf(`{
+		cv: currentValue(topic: "winccoa/tags/MMQLive1/speed") { payload timestamp }
+		hist: archivedMessages(topicFilter: "winccoa/tags/MMQLive1/speed", startTime: %q, endTime: %q, limit: 20) { topic payload timestamp }
+		broad: archivedMessages(archiveGroup: "WinCCOA", topicFilter: "#", startTime: %q, endTime: %q, limit: 20) { topic payload timestamp }
+		unarch: archivedMessages(topicFilter: "winccoa/tags/MMQLive2/speed", startTime: %q, endTime: %q, limit: 10) { topic }
+		agg: aggregatedMessages(
+			topics: ["winccoa/tags/MMQLive1/speed"]
+			interval: FIVE_MINUTES
+			startTime: %q
+			endTime: %q
+			functions: [COUNT, AVG]
+		) { columns rows rowCount }
+	}`,
+		t0.Format(time.RFC3339Nano), t1.Format(time.RFC3339Nano),
+		t0.Format(time.RFC3339Nano), t1.Format(time.RFC3339Nano),
+		t0.Format(time.RFC3339Nano), t1.Format(time.RFC3339Nano),
+		t0.Add(-5*time.Minute).Format(time.RFC3339), t1.Add(5*time.Minute).Format(time.RFC3339),
+	))["data"].(map[string]any)
+
+	cv := res["cv"].(map[string]any)
+	if !strings.Contains(fmt.Sprint(cv["payload"]), "202.5") {
+		t.Fatalf("currentValue = %v, want 202.5", cv)
+	}
+
+	hist := res["hist"].([]any)
+	if len(hist) < 2 {
+		t.Fatalf("expected >= 2 archivedMessages for MMQLive1.speed, got %d (%v)", len(hist), hist)
+	}
+	ts0 := hist[0].(map[string]any)["timestamp"].(float64)
+	ts1 := hist[1].(map[string]any)["timestamp"].(float64)
+	if ts0 < ts1 {
+		t.Fatalf("expected descending timestamps, got %v then %v", ts0, ts1)
+	}
+	if !strings.Contains(fmt.Sprint(hist[0].(map[string]any)["payload"]), "202.5") {
+		t.Fatalf("newest archived sample = %v, want 202.5", hist[0])
+	}
+
+	broad := res["broad"].([]any)
+	if len(broad) < 2 {
+		t.Fatalf("expected >= 2 archivedMessages for broad '#', got %d (%v)", len(broad), broad)
+	}
+
+	unarch := res["unarch"].([]any)
+	if len(unarch) != 0 {
+		t.Fatalf("expected 0 archivedMessages for unarchived MMQLive2.speed, got %v", unarch)
+	}
+
+	agg := res["agg"].(map[string]any)
+	if agg["rowCount"].(float64) < 1 {
+		t.Fatalf("expected >= 1 aggregated row, got %v", agg)
+	}
+}
+
+func TestLiveArchiveQueryPaging(t *testing.T) {
+	e := live(t)
+	if e.gql == 0 {
+		t.Skip("MMQ_LIVE_GQL not set")
+	}
+	res := e.graphql(t, `{
+		currentValues(topicFilter: "winccoa/types/MMQLoad/#", limit: 5000) { topic }
+	}`)["data"].(map[string]any)
+	rows := res["currentValues"].([]any)
+	t.Logf("winccoa/types/MMQLoad/#: %d rows", len(rows))
+	if len(rows) != 5000 {
+		t.Fatalf("expected 5000 rows for MMQLoad/#, got %d", len(rows))
+	}
+}
+
+func TestLiveArchiveAbort(t *testing.T) {
+	e := live(t)
+	if e.gql == 0 {
+		t.Skip("MMQ_LIVE_GQL not set")
+	}
+	// Cancel several large queries mid-flight and verify no read cursors or buffers remain open.
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		body, _ := json.Marshal(map[string]any{
+			"query": `{ currentValues(topicFilter: "winccoa/types/MMQLoad/#", limit: 5000) { topic payload } }`,
+		})
+		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("http://127.0.0.1:%d/graphql", e.gql), bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			resp.Body.Close()
+		}
+		cancel()
+	}
+	// Wait for any in-flight manager request to finish and cursors to close, then check stats.
+	time.Sleep(2 * time.Second)
+	st := e.lastStats(t, time.Now().Add(-1500*time.Millisecond))
+	t.Logf("stats after aborted reads: %v", st)
+	if st["archiveReadsOpen"] != 0 || st["archiveReadBytes"] != 0 || st["offThreadCalls"] != 0 || st["archiveReads"] == 0 {
+		t.Fatalf("unexpected open read cursors or off-thread calls: %v", st)
+	}
+}
+

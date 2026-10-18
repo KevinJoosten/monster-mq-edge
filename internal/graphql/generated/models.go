@@ -2050,6 +2050,7 @@ const (
 	MessageArchiveTypeQuestdb  MessageArchiveType = "QUESTDB"
 	MessageArchiveTypeMongodb  MessageArchiveType = "MONGODB"
 	MessageArchiveTypeSQLIte   MessageArchiveType = "SQLITE"
+	MessageArchiveTypeWinccoa  MessageArchiveType = "WINCCOA"
 )
 
 var AllMessageArchiveType = []MessageArchiveType{
@@ -2059,11 +2060,12 @@ var AllMessageArchiveType = []MessageArchiveType{
 	MessageArchiveTypeQuestdb,
 	MessageArchiveTypeMongodb,
 	MessageArchiveTypeSQLIte,
+	MessageArchiveTypeWinccoa,
 }
 
 func (e MessageArchiveType) IsValid() bool {
 	switch e {
-	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeQuestdb, MessageArchiveTypeMongodb, MessageArchiveTypeSQLIte:
+	case MessageArchiveTypeNone, MessageArchiveTypePostgres, MessageArchiveTypeCratedb, MessageArchiveTypeQuestdb, MessageArchiveTypeMongodb, MessageArchiveTypeSQLIte, MessageArchiveTypeWinccoa:
 		return true
 	}
 	return false
@@ -2114,6 +2116,7 @@ const (
 	MessageStoreTypeCratedb   MessageStoreType = "CRATEDB"
 	MessageStoreTypeMongodb   MessageStoreType = "MONGODB"
 	MessageStoreTypeSQLIte    MessageStoreType = "SQLITE"
+	MessageStoreTypeWinccoa   MessageStoreType = "WINCCOA"
 )
 
 var AllMessageStoreType = []MessageStoreType{
@@ -2124,11 +2127,12 @@ var AllMessageStoreType = []MessageStoreType{
 	MessageStoreTypeCratedb,
 	MessageStoreTypeMongodb,
 	MessageStoreTypeSQLIte,
+	MessageStoreTypeWinccoa,
 }
 
 func (e MessageStoreType) IsValid() bool {
 	switch e {
-	case MessageStoreTypeNone, MessageStoreTypeMemory, MessageStoreTypeHazelcast, MessageStoreTypePostgres, MessageStoreTypeCratedb, MessageStoreTypeMongodb, MessageStoreTypeSQLIte:
+	case MessageStoreTypeNone, MessageStoreTypeMemory, MessageStoreTypeHazelcast, MessageStoreTypePostgres, MessageStoreTypeCratedb, MessageStoreTypeMongodb, MessageStoreTypeSQLIte, MessageStoreTypeWinccoa:
 		return true
 	}
 	return false

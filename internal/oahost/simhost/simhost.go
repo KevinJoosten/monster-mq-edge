@@ -40,8 +40,11 @@ type Type struct {
 }
 
 type dp struct {
-	typ    string
-	values map[string]oahost.Value // key: element path + ":" + attr
+	typ        string
+	values     map[string]oahost.Value // key: element path + ":" + attr
+	history    map[string][]histSample
+	unarchived map[string]bool
+	archiveErr map[string]string
 }
 
 type system struct {
@@ -86,12 +89,24 @@ type Host struct {
 	// Redu are the redundancy facts reported by SYS_INFO (zero: not redundant).
 	Redu oahost.SysInfo
 
-	mu      sync.Mutex
-	local   string
-	types   map[string]*Type
-	systems map[string]*system
-	conns   map[uint64]*connection
-	queries map[uint64]*query
+	// Archive / one-shot read test knobs (plan-winccoa-archive.md §1.8).
+	PageBytes         int
+	ReadDelay         time.Duration
+	DisableArchiveOps bool
+	CursorTTL         time.Duration
+	MaxOpenReads      int
+	MaxReadBytes      int
+
+	mu         sync.Mutex
+	local      string
+	types      map[string]*Type
+	systems    map[string]*system
+	conns      map[uint64]*connection
+	queries    map[uint64]*query
+	reads      map[uint64]*readCursor
+	nextReadID uint64
+	readBytes  int
+	queryLog   []string
 	// ownWrites marks addresses written by this manager for NoSource.
 	sets             atomic.Uint64
 	orphans          atomic.Uint64
@@ -108,20 +123,25 @@ func New(localSystem string, queueCap int) *Host {
 		queueCap = 4096
 	}
 	h := &Host{
-		queue:      make(chan request, queueCap),
-		stop:       make(chan struct{}),
-		done:       make(chan struct{}),
-		resume:     make(chan struct{}, 1),
-		TickBudget: 256,
-		BatchLimit: 100,
-		local:      localSystem,
-		types:      map[string]*Type{},
-		systems:    map[string]*system{},
-		conns:      map[uint64]*connection{},
-		queries:    map[uint64]*query{},
-		calls:      map[uint32]*atomic.Uint64{},
+		queue:        make(chan request, queueCap),
+		stop:         make(chan struct{}),
+		done:         make(chan struct{}),
+		resume:       make(chan struct{}, 1),
+		TickBudget:   256,
+		BatchLimit:   100,
+		PageBytes:    oahost.MaxMessage / 2,
+		CursorTTL:    30 * time.Second,
+		MaxOpenReads: 64,
+		MaxReadBytes: 64 * 1024 * 1024,
+		local:        localSystem,
+		types:        map[string]*Type{},
+		systems:      map[string]*system{},
+		conns:        map[uint64]*connection{},
+		queries:      map[uint64]*query{},
+		reads:        map[uint64]*readCursor{},
+		calls:        map[uint32]*atomic.Uint64{},
 	}
-	for op := oahost.OpResolve; op <= oahost.OpSetMeta; op++ {
+	for op := oahost.OpResolve; op <= oahost.OpCursorClose; op++ {
 		h.calls[op] = new(atomic.Uint64)
 	}
 	h.systems[localSystem] = &system{name: localSystem, available: true, dps: map[string]*dp{}}
@@ -429,6 +449,7 @@ func (h *Host) setLocked(address string, v oahost.Value, own bool, stime time.Ti
 	}
 	d.values[el] = v
 	d.values[el+"#stime"] = oahost.Value{Kind: oahost.KindTime, Time: stime.UTC()}
+	h.recordHistoryLocked(d, el, v, stime)
 	_, dpe, _ := splitAddress(address, h.local)
 	full := s.name + ":" + dpe
 	var evs []pendingEvent
@@ -534,6 +555,11 @@ func (h *Host) readAttr(d *dp, el, attr string) oahost.Value {
 			return v
 		}
 		return oahost.Value{Kind: oahost.KindBool}
+	case "_archive.._class":
+		if d.unarchived != nil && d.unarchived[el] {
+			return oahost.Value{Kind: oahost.KindString, Str: ""}
+		}
+		return oahost.Value{Kind: oahost.KindString, Str: h.local + ":_NGA_G_EVENT"}
 	case "", "_online.._value", "_original.._value":
 		return d.values[el]
 	}
@@ -599,6 +625,9 @@ func (h *Host) run() {
 				}
 			}
 		case <-time.After(10 * time.Millisecond):
+			h.mu.Lock()
+			h.expireReadsLocked()
+			h.mu.Unlock()
 		}
 	}
 }
@@ -631,7 +660,11 @@ func (h *Host) handle(r request) {
 	}
 	var w oahost.Writer
 	var evs []pendingEvent
+	var createdCursor uint64
 	h.mu.Lock()
+	h.expireReadsLocked()
+	readDelay := h.ReadDelay
+	disableArchive := h.DisableArchiveOps
 	switch op {
 	case oahost.OpSysInfo:
 		w.String(oahost.TagSysName, h.local)
@@ -696,18 +729,59 @@ func (h *Host) handle(r request) {
 		h.elementMeta(m, &w)
 	case oahost.OpSetMeta:
 		err = h.setMeta(m)
+	case oahost.OpDpGetPeriod, oahost.OpDpQuery, oahost.OpCursorNext, oahost.OpCursorClose:
+		if disableArchive {
+			err = fmt.Errorf("%w: unknown operation %d", oahost.ErrInvalid, op)
+			break
+		}
+		switch op {
+		case oahost.OpDpGetPeriod:
+			createdCursor, err = h.dpGetPeriodLocked(m, &w)
+		case oahost.OpDpQuery:
+			createdCursor, err = h.dpQueryLocked(m, &w)
+		case oahost.OpCursorNext:
+			err = h.cursorNextLocked(m, &w)
+		case oahost.OpCursorClose:
+			h.cursorCloseLocked(m)
+		}
 	default:
-		err = fmt.Errorf("%w: op %d", oahost.ErrInvalid, op)
+		err = fmt.Errorf("%w: unknown operation %d", oahost.ErrInvalid, op)
 	}
 	h.mu.Unlock()
+	if (op == oahost.OpDpGetPeriod || op == oahost.OpDpQuery) && readDelay > 0 && err == nil {
+		select {
+		case <-h.stop:
+			return
+		case <-time.After(readDelay):
+		}
+		if time.Now().After(r.deadline) {
+			if createdCursor != 0 {
+				h.mu.Lock()
+				h.eraseCursorLocked(createdCursor)
+				h.mu.Unlock()
+			}
+			h.expired.Add(1)
+			var ew oahost.Writer
+			ew.String(oahost.TagError, "WinCC OA read timed out")
+			_ = h.client.Complete(r.id, oahost.StatusTimeout, ew.Bytes())
+			return
+		}
+	}
 	if cerr := h.complete(r.id, err, &w); cerr != nil && err == nil {
-		// Nobody waits for this registration any more (timeout or
+		// Nobody waits for this registration or cursor any more (timeout or
 		// cancellation): release it instead of leaking it (spec 3).
 		if op == oahost.OpDpConnect || op == oahost.OpQueryConnect {
 			ref, _ := m.U64(oahost.TagRef)
 			h.mu.Lock()
 			delete(h.conns, ref)
 			delete(h.queries, ref)
+			h.mu.Unlock()
+			h.orphans.Add(1)
+			return
+		}
+		if createdCursor != 0 {
+			h.mu.Lock()
+			h.eraseCursorLocked(createdCursor)
 			h.mu.Unlock()
 			h.orphans.Add(1)
 			return
@@ -889,7 +963,7 @@ func (h *Host) dpConnect(m oahost.Message) ([]pendingEvent, error) {
 
 var (
 	// Like WinCC OA, REMOTE must come directly after FROM, before WHERE.
-	queryRe = regexp.MustCompile(`(?i)^\s*SELECT\s+(.+?)\s+FROM\s+'([^']+)'(?:\s+REMOTE\s+'([^']+)')?(?:\s+WHERE\s+_DPT\s*=\s*"([^"]+)")?\s*$`)
+	queryRe = regexp.MustCompile(`(?i)^\s*SELECT\s+(.+?)\s+FROM\s+'([^']+)'(?:\s+REMOTE\s+'([^']+)')?(?:\s+WHERE\s+(?:_DPT\s*=\s*"([^"]+)"(?:\s+AND\s+'_archive\.\._class'\s*!=\s*"")?|'_archive\.\._class'\s*!=\s*""))?(?:\s+TIMERANGE\([^)]*\))?\s*$`)
 	attrRe  = regexp.MustCompile(`'([^']+)'`)
 )
 

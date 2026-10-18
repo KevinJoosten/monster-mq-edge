@@ -24,8 +24,8 @@ The short version:
   (`bridge/winccua/`, GraphQL or Open Pipe transports), Redis protocol server
   (`internal/redisserver/`, signed off 2026-10-17) and NATS protocol
   server (`nats/`, signed off 2026-10-17; the outbound NATS client bridge
-  remains off-limits). Heavyweight ones
-  (Redis client bridge, Neo4j, Sparkplug, PLC4X, GenAI, flow engine, MCP,
+  remains off-limits), and MCP server (`internal/mcp/`). Heavyweight ones
+  (Redis client bridge, Neo4j, Sparkplug, PLC4X, GenAI, flow engine,
   JDBC/InfluxDB/TimeBase loggers, OPC UA) remain off-limits unless the
   user signs off on adding them — see the parity rule below before
   introducing any new device type.
@@ -117,7 +117,8 @@ internal/
   oahost/                  # WinCC OA embedding contract (TLV, request client);
                            # oahost/simhost is an in-process OA stand-in for tests
   winccoanative/           # native winccoa/systems/<system> namespace, interests, writes
-  stores/oastore/          # MMQConfigs / MMQSessions datapoint stores
+  stores/oastore/          # MMQConfigs / MMQSessions / MMQRetained / MMQUsers datapoint
+                           # stores and WINCCOA last-value store & dpGetPeriod archive
   peerlink/                # PeerLink broker-to-broker forwarding: in-memory
                            # log, capture hook, source/consumer sessions;
                            # peerlink/wire/ is the mmq-peer/1 codec

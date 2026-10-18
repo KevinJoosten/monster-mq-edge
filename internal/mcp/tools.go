@@ -62,6 +62,10 @@ func (s *Server) getArchiveGroup(name string) *archive.Group {
 	return s.archives.Get(groupName)
 }
 
+func (s *Server) getArchiveGroupFor(name, topic string, needArchive bool) *archive.Group {
+	return s.archives.ResolveGroupForTopic(name, topic, needArchive)
+}
+
 func (s *Server) registerTools() {
 	// 1. list-archive-groups
 	type ListArchiveGroupsParams struct{}
@@ -99,7 +103,7 @@ func (s *Server) registerTools() {
 		}
 		includePayload := args.IncludePayload != nil && *args.IncludePayload
 
-		group := s.getArchiveGroup(args.ArchiveGroup)
+		group := s.getArchiveGroupFor(args.ArchiveGroup, args.Namespace, false)
 		var topics []string
 		topicMap := make(map[string]bool)
 
@@ -173,7 +177,7 @@ func (s *Server) registerTools() {
 			desc := s.getTopicDescription(ctx, t)
 			row := []string{t, desc}
 			if includePayload {
-				payload := s.getTopicPayload(ctx, t, group)
+				payload := s.getTopicPayload(ctx, t, s.getArchiveGroupFor(args.ArchiveGroup, t, false))
 				row = append(row, payload)
 			}
 			table = append(table, row)
@@ -238,7 +242,6 @@ func (s *Server) registerTools() {
 		Name:        "get-topic-value",
 		Description: "Retrieve current or most recent values stored for one or more MQTT topics.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args GetTopicValueParams) (*mcp.CallToolResult, any, error) {
-		group := s.getArchiveGroup(args.ArchiveGroup)
 		var table [][]string
 		table = append(table, []string{"topic", "value"})
 
@@ -246,6 +249,7 @@ func (s *Server) registerTools() {
 			if denied := s.requireTopic(ctx, topic, false); denied != nil {
 				return denied, nil, nil
 			}
+			group := s.getArchiveGroupFor(args.ArchiveGroup, topic, false)
 			val := s.getTopicPayload(ctx, topic, group)
 			table = append(table, []string{topic, val})
 		}
@@ -307,7 +311,7 @@ func (s *Server) registerTools() {
 			return denied, nil, nil
 		}
 
-		group := s.getArchiveGroup(args.ArchiveGroup)
+		group := s.getArchiveGroupFor(args.ArchiveGroup, args.Topic, true)
 		if group == nil || group.Archive() == nil {
 			return textResult("Archive group or archive store unavailable"), nil, nil
 		}
@@ -412,8 +416,20 @@ func (s *Server) registerTools() {
 			return textResult("interval parameter required"), nil, nil
 		}
 
-		group := s.getArchiveGroup(args.ArchiveGroup)
-		if group == nil || group.Archive() == nil {
+		var groupOrder []*archive.Group
+		byGroup := map[*archive.Group][]string{}
+		hasArchive := false
+		for _, t := range args.Topics {
+			g := s.getArchiveGroupFor(args.ArchiveGroup, t, true)
+			if g != nil && g.Archive() != nil {
+				hasArchive = true
+			}
+			if _, seen := byGroup[g]; !seen {
+				groupOrder = append(groupOrder, g)
+			}
+			byGroup[g] = append(byGroup[g], t)
+		}
+		if !hasArchive {
 			return textResult("Archive group or archive store unavailable"), nil, nil
 		}
 
@@ -449,9 +465,26 @@ func (s *Server) registerTools() {
 			funcs = []string{"AVG"}
 		}
 
-		res, err := group.Archive().GetAggregatedHistory(ctx, args.Topics, startTime, endTime, intervalMinutes, funcs, args.Fields)
-		if err != nil {
-			return textResult("Error querying aggregated history: " + err.Error()), nil, nil
+		var res *stores.AggregatedResult
+		if len(groupOrder) == 1 {
+			var err error
+			res, err = groupOrder[0].Archive().GetAggregatedHistory(ctx, args.Topics, startTime, endTime, intervalMinutes, funcs, args.Fields)
+			if err != nil {
+				return textResult("Error querying aggregated history: " + err.Error()), nil, nil
+			}
+		} else {
+			var parts []*stores.AggregatedResult
+			for _, g := range groupOrder {
+				if g == nil || g.Archive() == nil {
+					continue
+				}
+				part, err := g.Archive().GetAggregatedHistory(ctx, byGroup[g], startTime, endTime, intervalMinutes, funcs, args.Fields)
+				if err != nil {
+					return textResult("Error querying aggregated history: " + err.Error()), nil, nil
+				}
+				parts = append(parts, part)
+			}
+			res = archive.MergeAggregated(args.Topics, args.Fields, funcs, intervalMinutes, startTime, endTime, parts)
 		}
 
 		var table [][]string

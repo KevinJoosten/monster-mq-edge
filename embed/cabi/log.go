@@ -32,9 +32,11 @@ type hostHandler struct {
 	inner slog.Handler
 }
 
-func newHostLogger(host *cHost, level string) *slog.Logger {
-	var lv slog.Level
-	_ = lv.UnmarshalText([]byte(strings.ToUpper(level)))
+func newHostLogger(host *cHost, _ string) *slog.Logger {
+	// For the WinCC OA manager host, always allow DEBUG records through to
+	// the host callback so that debug log filtering is controlled dynamically
+	// by WinCC OA debug flags (e.g. -dbg 1, -dbg USR1, -dbg OA_CALLS).
+	lv := slog.LevelDebug
 	buf := &bytes.Buffer{}
 	h := &hostHandler{host: host, level: lv, mu: &sync.Mutex{}, buf: buf}
 	h.inner = slog.NewTextHandler(buf, &slog.HandlerOptions{

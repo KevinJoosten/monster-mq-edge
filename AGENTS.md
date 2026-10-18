@@ -174,7 +174,7 @@ make gen                # regenerate gqlgen output
 
 **Integration tests on Windows.** On Windows, never run `go test ./test/integration` or `go test ./...`. Use:
 
-- `test-integration.bat` in cmd or PowerShell;
+- `test-integration.ps1` in PowerShell;
 - `bash scripts/test-integration.sh` in Git Bash, which has no `make`.
 
 Both build `bin\integration.test.exe` and run it from `test/integration`.
@@ -183,7 +183,7 @@ Why: the tests listen on all interfaces, and the Windows firewall asks once per 
 new temp folder on every run, so the owner has to confirm a firewall dialog each time. The fixed path is allowed once
 and stays allowed. A git worktree has its own path and asks once more.
 
-- **Test flags.** Pass them in test-binary form, for example `test-integration.bat -test.run TestPublishSubscribeQoS0
+- **Test flags.** Pass them in test-binary form, for example `.\test-integration.ps1 -test.run TestPublishSubscribeQoS0
   -test.v`.
 - **Other packages.** Unit tests in the other packages (`go test ./internal/...`) can still use plain `go test`.
 

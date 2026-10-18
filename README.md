@@ -39,7 +39,7 @@ Then build and run:
 ./run.sh -b
 
 # Windows
-run.bat -b
+.\run.ps1 -b
 ```
 
 Or use Make directly:

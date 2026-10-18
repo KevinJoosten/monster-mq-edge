@@ -55,14 +55,14 @@ func newBrowse(t *testing.T) (*winccoabrowse.Service, *simhost.Host) {
 	must(sim.CreateDP("System1", "MMQConfigs_k1", "MMQConfigs"))
 	must(sim.CreateDP("System1", "_NGA_G_EVENT", "_NGA_Group"))
 	must(sim.Set("System1:_NGA_G_EVENT.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: false}))
-	must(sim.Set("System1:_NGA_G_EVENT.displayName", oahost.Value{Kind: oahost.KindString, Str: "Event Archive"}))
+	must(sim.Set("System1:_NGA_G_EVENT.displayName", oahost.Value{Kind: oahost.KindString, Str: "0=Event Archive"}))
 	must(sim.CreateDP("System1", "_NGA_G_ALERT", "_NGA_Group"))
 	must(sim.Set("System1:_NGA_G_ALERT.isAlert", oahost.Value{Kind: oahost.KindBool, Bool: true}))
 	must(sim.CreateDP("System1", "_NGA_G_RAW", "_NGA_Group")) // uninitialized attributes
 	must(sim.CreateDP("System1", "_NGA_G_EVENT_2", "_NGA_Group"))
 	must(sim.CreateDP("System1", "_ValueArchive_0", "_ValueArchive"))
 	must(sim.Set("System1:_ValueArchive_0.state", oahost.Value{Kind: oahost.KindInt, Int: 1}))
-	must(sim.Set("System1:_ValueArchive_0.general.arName", oahost.Value{Kind: oahost.KindString, Str: "ValueArchive_0"}))
+	must(sim.Set("System1:_ValueArchive_0.general.arName", oahost.Value{Kind: oahost.KindString, Str: "0=ValueArchive_0"}))
 	must(sim.CreateDP("System1", "_ValueArchive_1", "_ValueArchive"))
 	must(sim.Set("System1:_ValueArchive_1.state", oahost.Value{Kind: oahost.KindInt, Int: 3})) // deleted
 	must(sim.CreateDP("System1", "_ValueArchive_0_2", "_ValueArchive"))

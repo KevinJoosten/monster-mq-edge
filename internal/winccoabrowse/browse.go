@@ -598,22 +598,26 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 			disp := short
 
 			// Best-effort attribute read for displayName/groupName and isAlert
-			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".displayName", name + ":" + dp + ".groupName", name + ":" + dp + ".isAlert"}, s.timeout); err == nil && len(vals) == 3 {
+			if vals, err := s.api.DpGet(ctx, []string{
+				name + ":" + dp + ".displayName:_online.._value",
+				name + ":" + dp + ".groupName:_online.._value",
+				name + ":" + dp + ".isAlert:_online.._value",
+			}, s.timeout); err == nil && len(vals) == 3 {
 				if vals[2].Bool {
 					continue
 				}
-				if s := strings.TrimSpace(vals[0].Str); s != "" {
+				if s := cleanLangText(vals[0].Str); s != "" {
 					disp = s
-				} else if s := strings.TrimSpace(vals[1].Str); s != "" {
+				} else if s := cleanLangText(vals[1].Str); s != "" {
 					disp = s
 				}
 			} else {
-				if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".displayName"}, s.timeout); err == nil && len(vals) == 1 {
-					if s := strings.TrimSpace(vals[0].Str); s != "" {
+				if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".displayName:_online.._value"}, s.timeout); err == nil && len(vals) == 1 {
+					if s := cleanLangText(vals[0].Str); s != "" {
 						disp = s
 					}
-				} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".groupName"}, s.timeout); err == nil && len(vals) == 1 {
-					if s := strings.TrimSpace(vals[0].Str); s != "" {
+				} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".groupName:_online.._value"}, s.timeout); err == nil && len(vals) == 1 {
+					if s := cleanLangText(vals[0].Str); s != "" {
 						disp = s
 					}
 				}
@@ -640,15 +644,18 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 			groupName := strings.TrimPrefix(dp, "_")
 			disp := groupName
 
-			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".state", name + ":" + dp + ".general.arName"}, s.timeout); err == nil && len(vals) == 2 {
+			if vals, err := s.api.DpGet(ctx, []string{
+				name + ":" + dp + ".state:_online.._value",
+				name + ":" + dp + ".general.arName:_online.._value",
+			}, s.timeout); err == nil && len(vals) == 2 {
 				if vals[0].Int == 3 || vals[0].Uint == 3 {
 					continue
 				}
-				if s := strings.TrimSpace(vals[1].Str); s != "" {
+				if s := cleanLangText(vals[1].Str); s != "" {
 					disp = s
 					groupName = s
 				}
-			} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".state"}, s.timeout); err == nil && len(vals) == 1 {
+			} else if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".state:_online.._value"}, s.timeout); err == nil && len(vals) == 1 {
 				if vals[0].Int == 3 || vals[0].Uint == 3 {
 					continue
 				}
@@ -674,11 +681,15 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 			}
 			disp := strings.TrimPrefix(dp, "_")
 
-			if vals, err := s.api.DpGet(ctx, []string{name + ":" + dp + ".isAlert", name + ":" + dp + ".templateName", name + ":" + dp + ".groupName"}, s.timeout); err == nil && len(vals) == 3 {
+			if vals, err := s.api.DpGet(ctx, []string{
+				name + ":" + dp + ".isAlert:_online.._value",
+				name + ":" + dp + ".templateName:_online.._value",
+				name + ":" + dp + ".groupName:_online.._value",
+			}, s.timeout); err == nil && len(vals) == 3 {
 				if vals[0].Bool || vals[1].Str == "CS" {
 					continue
 				}
-				if s := strings.TrimSpace(vals[2].Str); s != "" {
+				if s := cleanLangText(vals[2].Str); s != "" {
 					disp = s
 				}
 			}
@@ -752,3 +763,21 @@ func ResolveArchiveGroup(groups []ArchiveGroup, ref string) string {
 	return ""
 }
 
+// cleanLangText strips language index prefixes (e.g. "0=EVENT" -> "EVENT")
+// that WinCC OA may return for langText attributes.
+func cleanLangText(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.IndexByte(s, '='); idx > 0 {
+		allDigits := true
+		for i := 0; i < idx; i++ {
+			if s[i] < '0' || s[i] > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return strings.TrimSpace(s[idx+1:])
+		}
+	}
+	return s
+}

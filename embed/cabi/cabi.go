@@ -87,10 +87,11 @@ type instance struct {
 	mu      sync.Mutex
 	state   int
 	lastErr string
-	srv     *broker.Server
-	started chan struct{} // closed when the start attempt finished
+	srv      *broker.Server
+	started  chan struct{} // closed when the start attempt finished
 	diagStop func()
-	stopped chan struct{}
+	stopped  chan struct{}
+	levelVar *slog.LevelVar
 }
 
 var (
@@ -182,11 +183,14 @@ func mmq_create(cfg *C.mmq_config, host *C.mmq_host, out *C.uint64_t) (rc C.int3
 		started: make(chan struct{}),
 		stopped: make(chan struct{}),
 	}
-	// The host's DEBUG (WCCOAmmq -dbg USR1) wins; otherwise Logging.Level
-	// from the broker YAML applies.
-	if int32(cfg.log_level) == 0 || inst.cfg.Logging.Level == "" {
+	levelVar := &slog.LevelVar{}
+	// The host's DEBUG (WCCOAmmq -dbg USR1/WORK/1/OA_CALLS) or WARN (-dbg NONE)
+	// wins; otherwise Logging.Level from the broker YAML applies.
+	if int32(cfg.log_level) == 0 || int32(cfg.log_level) >= 2 || inst.cfg.Logging.Level == "" {
 		inst.cfg.Logging.Level = levelName(int32(cfg.log_level))
 	}
+	levelVar.Set(parseLevel(inst.cfg.Logging.Level))
+	inst.levelVar = levelVar
 	*out = C.uint64_t(inst.handle)
 	return C.int32_t(oahost.StatusOK)
 }
@@ -219,7 +223,7 @@ func (in *instance) start() {
 	// Log lines go to the WinCC OA log and to the log bus that feeds the
 	// dashboard's log viewer (GraphQL systemLogs).
 	logBus := mlog.NewBus(in.cfg.Logging.RingBufferSize)
-	logger := slog.New(mlog.NewHandler(logBus, newHostLogger(in.host, in.cfg.Logging.Level).Handler(), in.cfg.NodeID))
+	logger := slog.New(mlog.NewHandler(logBus, newHostLogger(in.host, in.levelVar).Handler(), in.cfg.NodeID))
 	in.client.SetLogger(logger)
 	in.startDiagnostics(logger)
 	srv, err := broker.NewWithOptions(in.cfg, logger, logBus, broker.Options{OA: in.client})
@@ -413,6 +417,27 @@ func mmq_stats(h C.uint64_t, data *C.uint8_t, n C.uint32_t) (rc C.int32_t) {
 	if err := in.client.SetHostStats(b); err != nil {
 		return C.int32_t(oahost.ErrorStatus(err))
 	}
+	return C.int32_t(oahost.StatusOK)
+}
+
+//export mmq_set_log_level
+func mmq_set_log_level(h C.uint64_t, level C.int32_t) (rc C.int32_t) {
+	defer guard(&rc)
+	in, st := current(h)
+	if in == nil {
+		return C.int32_t(st)
+	}
+	lvl := int32(level)
+	if lvl < 0 || lvl > 3 {
+		return C.int32_t(oahost.StatusInvalid)
+	}
+	name := levelName(lvl)
+	in.mu.Lock()
+	in.cfg.Logging.Level = name
+	if in.levelVar != nil {
+		in.levelVar.Set(parseLevel(name))
+	}
+	in.mu.Unlock()
 	return C.int32_t(oahost.StatusOK)
 }
 

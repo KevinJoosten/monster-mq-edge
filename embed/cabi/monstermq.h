@@ -74,6 +74,13 @@ int32_t mmq_event(uint64_t handle, uint64_t ref, const uint8_t *data, uint32_t l
  */
 int32_t mmq_stats(uint64_t handle, const uint8_t *data, uint32_t len);
 
+/*
+ * Dynamically updates the broker's active logging level (MMQ_LOG_DEBUG,
+ * MMQ_LOG_INFO, MMQ_LOG_WARN, MMQ_LOG_ERROR). Non-blocking.
+ * Returns MMQ_OK or MMQ_E_INVALID / MMQ_E_STATE.
+ */
+int32_t mmq_set_log_level(uint64_t handle, int32_t level);
+
 #ifdef __cplusplus
 }
 #endif

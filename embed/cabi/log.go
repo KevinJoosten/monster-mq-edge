@@ -22,25 +22,34 @@ func levelName(l int32) string {
 	return "INFO"
 }
 
+func parseLevel(levelStr string) slog.Level {
+	switch strings.ToUpper(levelStr) {
+	case "DEBUG":
+		return slog.LevelDebug
+	case "WARN", "WARNING":
+		return slog.LevelWarn
+	case "ERROR":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // hostHandler formats records as text and hands each line to the host log
 // callback, which queues it for the WinCC OA log on the manager thread.
 type hostHandler struct {
-	host  *cHost
-	level slog.Level
-	mu    *sync.Mutex
-	buf   *bytes.Buffer
-	inner slog.Handler
+	host     *cHost
+	levelVar *slog.LevelVar
+	mu       *sync.Mutex
+	buf      *bytes.Buffer
+	inner    slog.Handler
 }
 
-func newHostLogger(host *cHost, _ string) *slog.Logger {
-	// For the WinCC OA manager host, always allow DEBUG records through to
-	// the host callback so that debug log filtering is controlled dynamically
-	// by WinCC OA debug flags (e.g. -dbg 1, -dbg USR1, -dbg OA_CALLS).
-	lv := slog.LevelDebug
+func newHostLogger(host *cHost, levelVar *slog.LevelVar) *slog.Logger {
 	buf := &bytes.Buffer{}
-	h := &hostHandler{host: host, level: lv, mu: &sync.Mutex{}, buf: buf}
+	h := &hostHandler{host: host, levelVar: levelVar, mu: &sync.Mutex{}, buf: buf}
 	h.inner = slog.NewTextHandler(buf, &slog.HandlerOptions{
-		Level: lv,
+		Level: levelVar,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) == 0 && (a.Key == slog.TimeKey || a.Key == slog.LevelKey) {
 				return slog.Attr{}
@@ -51,7 +60,12 @@ func newHostLogger(host *cHost, _ string) *slog.Logger {
 	return slog.New(h)
 }
 
-func (h *hostHandler) Enabled(_ context.Context, l slog.Level) bool { return l >= h.level }
+func (h *hostHandler) Enabled(_ context.Context, l slog.Level) bool {
+	if h.levelVar == nil {
+		return true
+	}
+	return l >= h.levelVar.Level()
+}
 
 func (h *hostHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Lock()

@@ -16,13 +16,12 @@ var brokerMetricLabels = []string{
 	"messages_in", "messages_out",
 	"sessions", "subscriptions", "queue_depth",
 	"bus_in", "bus_out",
+	"winccoa_in", "winccoa_out",
 	"mqtt_client_in", "mqtt_client_out",
 	"kafka_client_in", "kafka_client_out",
-	"opcua_client_in",
 	"winccoa_client_in", "winccua_client_in",
 	"nats_client_in", "nats_client_out",
 	"redis_client_in", "redis_client_out",
-	"neo4j_client_in",
 }
 
 var scrapeBrokerMetricLabels = []string{
@@ -33,6 +32,8 @@ var scrapeBrokerMetricLabels = []string{
 	"queue_depth",
 	"bus_in",
 	"bus_out",
+	"winccoa_in",
+	"winccoa_out",
 }
 
 func instantBrokerMetricValue(snap metrics.BrokerSnapshot, label string) (float64, bool) {
@@ -51,6 +52,20 @@ func instantBrokerMetricValue(snap metrics.BrokerSnapshot, label string) (float6
 		return snap.MessageBusIn, true
 	case "bus_out":
 		return snap.MessageBusOut, true
+	case "winccoa_in":
+		return snap.WinCCOaIn, true
+	case "winccoa_out":
+		return snap.WinCCOaOut, true
+	case "winccoa_client_in":
+		return snap.WinCCOaClientIn, true
+	case "mqtt_client_in":
+		return snap.MqttClientIn, true
+	case "mqtt_client_out":
+		return snap.MqttClientOut, true
+	case "kafka_client_in":
+		return snap.KafkaClientIn, true
+	case "kafka_client_out":
+		return snap.KafkaClientOut, true
 	default:
 		return 0, false
 	}
@@ -64,18 +79,18 @@ var historyBrokerMetricKey = map[string]string{
 	"queue_depth":       "queuedMessagesCount",
 	"bus_in":            "messageBusIn",
 	"bus_out":           "messageBusOut",
+	"winccoa_in":        "winCCOaIn",
+	"winccoa_out":       "winCCOaOut",
 	"mqtt_client_in":    "mqttClientIn",
 	"mqtt_client_out":   "mqttClientOut",
 	"kafka_client_in":   "kafkaClientIn",
 	"kafka_client_out":  "kafkaClientOut",
-	"opcua_client_in":   "opcUaClientIn",
 	"winccoa_client_in": "winCCOaClientIn",
 	"winccua_client_in": "winCCUaClientIn",
 	"nats_client_in":    "natsClientIn",
 	"nats_client_out":   "natsClientOut",
 	"redis_client_in":   "redisClientIn",
 	"redis_client_out":  "redisClientOut",
-	"neo4j_client_in":   "neo4jClientIn",
 }
 
 func extractHistoryBrokerMetricValue(payloadJSON, label string) (float64, bool) {

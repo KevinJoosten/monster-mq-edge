@@ -282,6 +282,9 @@ func (a API) dpSet(ctx context.Context, names []string, values []Value, wait boo
 	}
 	start := time.Now()
 	_, err := a.call(ctx, &w, timeout)
+	if err == nil && a.C != nil {
+		a.C.recordValuesIn(len(values))
+	}
 	a.logCall(op, start, err, "count", len(names), "names", nameList(names), "values", valueList(values))
 	return err
 }
@@ -301,6 +304,9 @@ func (a API) DpSetTimed(ctx context.Context, names []string, values []Value, sti
 	}
 	start := time.Now()
 	_, err := a.call(ctx, &w, timeout)
+	if err == nil && a.C != nil {
+		a.C.recordValuesIn(len(values))
+	}
 	a.logCall("dpSetTimed", start, err, "count", len(names), "stime", stime.UTC().Format(time.RFC3339Nano), "names", nameList(names), "values", valueList(values))
 	return err
 }
@@ -328,6 +334,9 @@ func (a API) DpGet(ctx context.Context, names []string, timeout time.Duration) (
 			return nil, err
 		}
 		out[i] = v
+	}
+	if a.C != nil {
+		a.C.recordValuesOut(len(out))
 	}
 	return out, nil
 }

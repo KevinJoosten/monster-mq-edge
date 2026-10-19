@@ -1966,6 +1966,7 @@ func snapshotToBrokerMetrics(s metrics.BrokerSnapshot) *generated.BrokerMetrics 
 		MessagesIn: s.MessagesIn, MessagesOut: s.MessagesOut,
 		MqttClientIn: s.MqttClientIn, MqttClientOut: s.MqttClientOut,
 		KafkaClientIn: s.KafkaClientIn, KafkaClientOut: s.KafkaClientOut,
+		WinCCOaClientIn: s.WinCCOaClientIn,
 		MessageBusIn: s.MessageBusIn, MessageBusOut: s.MessageBusOut,
 		NodeSessionCount:    s.NodeSessionCount,
 		ClusterSessionCount: s.NodeSessionCount,

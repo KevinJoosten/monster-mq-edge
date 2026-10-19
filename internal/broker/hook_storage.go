@@ -341,7 +341,9 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		return
 	}
 	if h.metrics != nil {
-		h.metrics.IncIn()
+		if !(cl.Net.Inline && !pk.Ignore && h.replicated != nil && h.replicated(pk.TopicName)) {
+			h.metrics.IncIn()
+		}
 		if !cl.Net.Inline {
 			h.metrics.IncClientIn(cl.ID)
 		}

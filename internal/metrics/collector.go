@@ -26,6 +26,8 @@ type Collector struct {
 	mqttBridgeOut atomic.Int64
 	kafkaIn       atomic.Int64
 	kafkaOut      atomic.Int64
+	winCCOaIn     atomic.Int64
+	winCCOaOut    atomic.Int64
 	busIn         atomic.Int64
 	busOut        atomic.Int64
 
@@ -44,6 +46,9 @@ type BrokerSnapshot struct {
 	MqttClientOut     float64 `json:"mqttClientOut"`
 	KafkaClientIn     float64 `json:"kafkaClientIn"`
 	KafkaClientOut    float64 `json:"kafkaClientOut"`
+	WinCCOaIn         float64 `json:"winCCOaIn"`
+	WinCCOaOut        float64 `json:"winCCOaOut"`
+	WinCCOaClientIn   float64 `json:"winCCOaClientIn"`
 	MessageBusIn      float64 `json:"messageBusIn"`
 	MessageBusOut     float64 `json:"messageBusOut"`
 	NodeSessionCount  int     `json:"nodeSessionCount"`
@@ -61,12 +66,14 @@ func New(store stores.MetricsStore, nodeID string, interval time.Duration, logge
 	}
 }
 
-func (c *Collector) IncIn()             { c.in.Add(1) }
-func (c *Collector) IncOut()            { c.out.Add(1) }
-func (c *Collector) IncBridgeIn(n int)  { c.mqttBridgeIn.Add(int64(n)) }
-func (c *Collector) IncBridgeOut(n int) { c.mqttBridgeOut.Add(int64(n)) }
-func (c *Collector) IncKafkaIn(n int)   { c.kafkaIn.Add(int64(n)) }
-func (c *Collector) IncKafkaOut(n int)  { c.kafkaOut.Add(int64(n)) }
+func (c *Collector) IncIn()              { c.in.Add(1) }
+func (c *Collector) IncOut()             { c.out.Add(1) }
+func (c *Collector) IncBridgeIn(n int)   { c.mqttBridgeIn.Add(int64(n)) }
+func (c *Collector) IncBridgeOut(n int)  { c.mqttBridgeOut.Add(int64(n)) }
+func (c *Collector) IncKafkaIn(n int)    { c.kafkaIn.Add(int64(n)) }
+func (c *Collector) IncKafkaOut(n int)   { c.kafkaOut.Add(int64(n)) }
+func (c *Collector) IncWinCCOaIn(n int)  { c.winCCOaIn.Add(int64(n)) }
+func (c *Collector) IncWinCCOaOut(n int) { c.winCCOaOut.Add(int64(n)) }
 
 // IncBusIn counts one PeerLink replica applied on this node (messageBusIn);
 // replicas do not count as messagesIn.
@@ -150,6 +157,8 @@ func (c *Collector) Start(ctx context.Context, counts func() (sessions, subs int
 				boN := c.mqttBridgeOut.Swap(0)
 				kiN := c.kafkaIn.Swap(0)
 				koN := c.kafkaOut.Swap(0)
+				oaInN := c.winCCOaIn.Swap(0)
+				oaOutN := c.winCCOaOut.Swap(0)
 				busInN := c.busIn.Swap(0)
 				busOutN := c.busOut.Swap(0)
 				c.tickClients()
@@ -157,15 +166,20 @@ func (c *Collector) Start(ctx context.Context, counts func() (sessions, subs int
 				if counts != nil {
 					sessions, subs, queued = counts()
 				}
+				secs := c.interval.Seconds()
+				oaOutRate := float64(oaOutN) / secs
 				snap := BrokerSnapshot{
-					MessagesIn:        float64(inN) / c.interval.Seconds(),
-					MessagesOut:       float64(outN) / c.interval.Seconds(),
-					MqttClientIn:      float64(biN) / c.interval.Seconds(),
-					MqttClientOut:     float64(boN) / c.interval.Seconds(),
-					KafkaClientIn:     float64(kiN) / c.interval.Seconds(),
-					KafkaClientOut:    float64(koN) / c.interval.Seconds(),
-					MessageBusIn:      float64(busInN) / c.interval.Seconds(),
-					MessageBusOut:     float64(busOutN) / c.interval.Seconds(),
+					MessagesIn:        float64(inN) / secs,
+					MessagesOut:       float64(outN) / secs,
+					MqttClientIn:      float64(biN) / secs,
+					MqttClientOut:     float64(boN) / secs,
+					KafkaClientIn:     float64(kiN) / secs,
+					KafkaClientOut:    float64(koN) / secs,
+					WinCCOaIn:         float64(oaInN) / secs,
+					WinCCOaOut:        oaOutRate,
+					WinCCOaClientIn:   oaOutRate,
+					MessageBusIn:      float64(busInN) / secs,
+					MessageBusOut:     float64(busOutN) / secs,
 					NodeSessionCount:  sessions,
 					SubscriptionCount: subs,
 					QueuedMessages:    queued,

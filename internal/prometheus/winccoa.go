@@ -10,7 +10,7 @@ func isWinCCOAGroup(g *archive.Group) bool {
 	if g == nil {
 		return false
 	}
-	return g.Config().LastValType == stores.MessageStoreWinCCOA
+	return g.Config().LastValType == stores.MessageStoreWinCCOA || g.Config().ArchiveType == stores.ArchiveWinCCOA
 }
 
 func (s *Server) isScopedFilter(filter string) bool {

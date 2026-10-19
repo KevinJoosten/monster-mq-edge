@@ -22,6 +22,7 @@ type Manager struct {
 
 	srvCtx       context.Context
 	reservedRoot string // native topic root, never a query output target
+	incIn        func(int)
 
 	mu         sync.Mutex
 	connectors map[string]Connector
@@ -39,6 +40,8 @@ func NewManager(store stores.DeviceConfigStore, publisher LocalPublisher, nodeID
 		lastConfig: map[string]string{},
 	}
 }
+
+func (m *Manager) SetCounters(incIn func(int)) { m.incIn = incIn }
 
 // SetReservedRoot protects the native WinCC OA namespace of the embedded
 // broker: devices whose output topics fall below root are not started.
@@ -173,7 +176,19 @@ func (m *Manager) startDevice(d stores.DeviceConfig) {
 		}
 	}
 	m.logger.Info("winccoa starting connector", "name", d.Name, "namespace", d.Namespace, "addresses", len(cfg.Addresses))
-	c := New(d.Name, cfg, d.Namespace, m.publisher, m.logger)
+	pub := m.publisher
+	if m.incIn != nil && pub != nil {
+		inc := m.incIn
+		orig := pub
+		pub = func(topic string, payload []byte, retain bool, qos byte) error {
+			err := orig(topic, payload, retain, qos)
+			if err == nil {
+				inc(1)
+			}
+			return err
+		}
+	}
+	c := New(d.Name, cfg, d.Namespace, pub, m.logger)
 	if err := c.Start(m.srvCtx); err != nil {
 		m.logger.Warn("winccoa start failed", "name", d.Name, "err", err)
 		return

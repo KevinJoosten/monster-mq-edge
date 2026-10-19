@@ -154,6 +154,9 @@ func (a API) DpQuery(ctx context.Context, query string, maxRows int, timeout tim
 			qp.Rows = table[1:]
 		}
 		totalRows += len(qp.Rows)
+		if a.C != nil && len(qp.Rows) > 0 {
+			a.C.recordValuesOut(len(qp.Rows))
+		}
 		if page != nil {
 			if cbErr := page(qp); cbErr != nil {
 				a.closeCursorAsync(cursor)
@@ -280,6 +283,9 @@ func (a API) DpGetPeriod(ctx context.Context, req PeriodRequest, timeout time.Du
 		}
 		delivered += len(samples)
 		res.Total = delivered
+		if a.C != nil && len(samples) > 0 {
+			a.C.recordValuesOut(len(samples))
+		}
 		if page != nil && len(samples) > 0 {
 			if cbErr := page(samples); cbErr != nil {
 				a.closeCursorAsync(cursor)

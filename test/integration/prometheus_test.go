@@ -183,9 +183,9 @@ func TestPrometheusRootScrapeLabelsSeriesAndInstant(t *testing.T) {
 		}
 	}
 
-	// Check 7 broker metric lines in exact order
+	// Check 9 broker metric lines in exact order
 	wantBrokerLabels := []string{
-		"messages_in", "messages_out", "sessions", "subscriptions", "queue_depth", "bus_in", "bus_out",
+		"messages_in", "messages_out", "sessions", "subscriptions", "queue_depth", "bus_in", "bus_out", "winccoa_in", "winccoa_out",
 	}
 	lastIdx := -1
 	for _, bl := range wantBrokerLabels {
@@ -242,7 +242,7 @@ func TestPrometheusRootScrapeLabelsSeriesAndInstant(t *testing.T) {
 	if vFieldT1 != `{"status":"success","data":[""]}` {
 		t.Fatalf("label/field/values (t1) = %s", vFieldT1)
 	}
-	want19Metrics := `{"status":"success","data":["messages_in","messages_out","sessions","subscriptions","queue_depth","bus_in","bus_out","mqtt_client_in","mqtt_client_out","kafka_client_in","kafka_client_out","opcua_client_in","winccoa_client_in","winccua_client_in","nats_client_in","nats_client_out","redis_client_in","redis_client_out","neo4j_client_in"]}`
+	want19Metrics := `{"status":"success","data":["messages_in","messages_out","sessions","subscriptions","queue_depth","bus_in","bus_out","winccoa_in","winccoa_out","mqtt_client_in","mqtt_client_out","kafka_client_in","kafka_client_out","winccoa_client_in","winccua_client_in","nats_client_in","nats_client_out","redis_client_in","redis_client_out"]}`
 	_, _, vMetric := promGet(t, promURL+"/api/v1/label/metric/values", nil)
 	if vMetric != want19Metrics {
 		t.Fatalf("label/metric/values = %s, want %s", vMetric, want19Metrics)
@@ -539,10 +539,10 @@ func TestPrometheusNilStores(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Metrics.Enabled: false -> scrape still has 7 zero lines, instant metrics empty
+	// Metrics.Enabled: false -> scrape still has 9 zero lines, instant metrics empty
 	_, _, scrape := promGet(t, promURL+"/metrics", nil)
-	if strings.Count(scrape, fmt.Sprintf(`metrics{node="p-%d",metric=`, promPort)) != 7 {
-		t.Fatalf("scrape should have 7 zero metric lines:\n%s", scrape)
+	if strings.Count(scrape, fmt.Sprintf(`metrics{node="p-%d",metric=`, promPort)) != 9 {
+		t.Fatalf("scrape should have 9 zero metric lines:\n%s", scrape)
 	}
 	_, _, instMetric := promGet(t, promURL+"/api/v1/query?query="+url.QueryEscape(`metrics{metric="sessions"}`), nil)
 	if instMetric != `{"status":"success","data":{"resultType":"vector","result":[]}}` {
@@ -707,8 +707,8 @@ func TestPrometheusAuthAndACL(t *testing.T) {
 		if !strings.Contains(sc, `topic="allowed/a"`) || strings.Contains(sc, `topic="allowed/secret/b"`) || strings.Contains(sc, `topic="other/c"`) {
 			t.Fatalf("reader scrape ACL violation:\n%s", sc)
 		}
-		if strings.Count(sc, fmt.Sprintf(`metrics{node="p-%d",metric=`, promPort)) != 7 {
-			t.Fatalf("reader scrape missing 7 broker metrics:\n%s", sc)
+		if strings.Count(sc, fmt.Sprintf(`metrics{node="p-%d",metric=`, promPort)) != 9 {
+			t.Fatalf("reader scrape missing 9 broker metrics:\n%s", sc)
 		}
 
 		// label/topic/values

@@ -47,11 +47,13 @@ topics{group="Default",topic="sensors/data",field="data.temperature"}
 ```
 
 When `field` is empty (`field=""` or omitted), only plain numeric payloads are
-returned. JSON objects are not coerced without a `field` label. In particular,
-WinCC OA native tag payloads have the shape `{"time":"<ISO>","value":<v>}` and
-require `field="value"`:
+returned, unless the topic belongs to the `WinCCOA` archive group or is a native
+WinCC OA tag, in which case the numeric `value` field from `{"time":"<ISO>","value":<v>}`
+is automatically extracted. You can also specify `field="value"` explicitly:
 
 ```promql
+topics{topic="winccoa/tags/Pump1/speed"}
+# or explicitly:
 topics{topic="winccoa/tags/Pump1/speed",field="value"}
 ```
 
@@ -66,9 +68,10 @@ metrics{node="edge",metric="messages_in"}
 ```
 
 Other metric labels include `messages_out`, `sessions`, `subscriptions`,
-`queue_depth`, `bus_in`, `bus_out`, and connector input/output rates. Discover
-available label values through the API instead of assuming all connectors have
-both directions.
+`queue_depth`, `bus_in`, `bus_out`, `winccoa_in` / `winccoa_out` (values/s
+into and out of the native WinCC OA connection), and connector input/output
+rates. Discover available label values through the API instead of assuming
+all connectors have both directions.
 
 Instant topic queries use the selected last-value store; range queries require
 an archive backend implementing historical queries. Broker metric history

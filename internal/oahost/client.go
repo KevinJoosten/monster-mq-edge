@@ -153,6 +153,8 @@ type Stats struct {
 	EventsDropped    uint64
 	EventsUnrouted   uint64
 	PendingHighWater uint64
+	ValuesIn         uint64
+	ValuesOut        uint64
 }
 
 // Client tracks requests to the host and routes completions and events.
@@ -182,6 +184,10 @@ type Client struct {
 
 	submitted, completed, timedOut, overloaded, late atomic.Uint64
 	delivered, dropped, unrouted, highWater          atomic.Uint64
+	valuesIn, valuesOut                              atomic.Uint64
+
+	incValuesIn  atomic.Pointer[func(int)]
+	incValuesOut atomic.Pointer[func(int)]
 
 	logger atomic.Pointer[slog.Logger]
 
@@ -242,6 +248,41 @@ func (c *Client) Limits() Limits { return c.limits }
 
 // SetLogger sets the logger for the per-call DEBUG lines of API.
 func (c *Client) SetLogger(l *slog.Logger) { c.logger.Store(l) }
+
+// SetValueCounters registers callbacks invoked when values are written into
+// WinCC OA (incIn) or received out of WinCC OA (incOut).
+func (c *Client) SetValueCounters(incIn, incOut func(int)) {
+	if incIn != nil {
+		c.incValuesIn.Store(&incIn)
+	} else {
+		c.incValuesIn.Store(nil)
+	}
+	if incOut != nil {
+		c.incValuesOut.Store(&incOut)
+	} else {
+		c.incValuesOut.Store(nil)
+	}
+}
+
+func (c *Client) recordValuesIn(n int) {
+	if c == nil || n <= 0 {
+		return
+	}
+	c.valuesIn.Add(uint64(n))
+	if fn := c.incValuesIn.Load(); fn != nil && *fn != nil {
+		(*fn)(n)
+	}
+}
+
+func (c *Client) recordValuesOut(n int) {
+	if c == nil || n <= 0 {
+		return
+	}
+	c.valuesOut.Add(uint64(n))
+	if fn := c.incValuesOut.Load(); fn != nil && *fn != nil {
+		(*fn)(n)
+	}
+}
 
 // Call submits msg and waits for its completion, the context, or the
 // deadline, whichever comes first. The request is never retried.
@@ -410,6 +451,19 @@ func (c *Client) deliver(h EventHandler, msg Message) {
 			c.unrouted.Add(1)
 		}
 	}()
+	var vals, rows int
+	for _, f := range msg.Fields {
+		switch f.Tag {
+		case TagValue:
+			vals++
+		case TagRow:
+			rows++
+		}
+	}
+	if rows > 1 {
+		vals += rows - 1
+	}
+	c.recordValuesOut(vals)
 	h(msg)
 	c.delivered.Add(1)
 }
@@ -606,6 +660,8 @@ func (c *Client) Stats() Stats {
 		EventsDropped:    c.dropped.Load(),
 		EventsUnrouted:   c.unrouted.Load(),
 		PendingHighWater: c.highWater.Load(),
+		ValuesIn:         c.valuesIn.Load(),
+		ValuesOut:        c.valuesOut.Load(),
 	}
 }
 

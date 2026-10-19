@@ -341,7 +341,11 @@ func (s *Server) handleQuery(w http.ResponseWriter, r *http.Request) {
 					return true
 				}
 				payload := strings.TrimSpace(string(msg.Payload))
-				if numVal, ok := extractNumericValue(payload, field); ok {
+				effectiveField := field
+				if effectiveField == "" && (isWinCCOAGroup(group) || s.isScopedFilter(msg.TopicName)) {
+					effectiveField = "value"
+				}
+				if numVal, ok := extractNumericValue(payload, effectiveField); ok {
 					result = append(result, topicVectorSample{
 						Metric: topicMetricLabels{
 							Name:  "topics",
@@ -420,6 +424,10 @@ func (s *Server) handleQueryRange(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var raw []samplePoint
+		effectiveField := field
+		if effectiveField == "" && (isWinCCOAGroup(group) || s.isScopedFilter(topic)) {
+			effectiveField = "value"
+		}
 		for _, rec := range records {
 			recTopic := rec.Topic
 			if recTopic == "" {
@@ -428,7 +436,11 @@ func (s *Server) handleQueryRange(w http.ResponseWriter, r *http.Request) {
 			if !s.canRead(r, recTopic) {
 				continue
 			}
-			numVal, ok := extractNumericValue(string(rec.Payload), field)
+			recField := effectiveField
+			if recField == "" && s.isScopedFilter(recTopic) {
+				recField = "value"
+			}
+			numVal, ok := extractNumericValue(string(rec.Payload), recField)
 			if !ok {
 				continue
 			}

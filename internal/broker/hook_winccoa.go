@@ -18,9 +18,10 @@ import (
 // writes and protection of the reserved winccoa/ branches.
 type WinCCOaNativeHook struct {
 	mqtt.HookBase
-	svc    *winccoanative.Service
-	server *mqtt.Server
-	logger *slog.Logger
+	svc     *winccoanative.Service
+	server  *mqtt.Server
+	logger  *slog.Logger
+	metrics MetricsCounter
 
 	mu      sync.Mutex
 	existed map[string]bool
@@ -31,6 +32,8 @@ type WinCCOaNativeHook struct {
 func NewWinCCOaNativeHook(svc *winccoanative.Service, server *mqtt.Server, logger *slog.Logger) *WinCCOaNativeHook {
 	return &WinCCOaNativeHook{svc: svc, server: server, logger: logger, existed: map[string]bool{}}
 }
+
+func (h *WinCCOaNativeHook) SetMetrics(m MetricsCounter) { h.metrics = m }
 
 func (h *WinCCOaNativeHook) ID() string { return "winccoa-native" }
 
@@ -150,6 +153,12 @@ func (h *WinCCOaNativeHook) InlinePublishMessage(clientID string, msg stores.Bro
 	}
 	_, err = h.handlePublish(clientID, pk)
 	if errors.Is(err, packets.CodeSuccessIgnore) {
+		if h.metrics != nil {
+			h.metrics.IncIn()
+			if clientID != inlinePublisher {
+				h.metrics.IncClientIn(clientID)
+			}
+		}
 		return true, nil
 	}
 	return err != nil, err

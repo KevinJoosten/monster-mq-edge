@@ -415,6 +415,13 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var collector *metrics.Collector
 	if cfg.Metrics.Enabled {
 		collector = metrics.New(storage.Metrics, cfg.NodeID, interval, logger)
+		server.AddSysTopics(brokerRateSysTopics(collector))
+		if opts.OA != nil {
+			opts.OA.SetValueCounters(collector.IncWinCCOaIn, collector.IncWinCCOaOut)
+		}
+		if nativeHook != nil {
+			nativeHook.SetMetrics(collector)
+		}
 	}
 
 	var counter MetricsCounter // nil interface, not interface-holding-nil-pointer
@@ -657,6 +664,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var winCCOa *winccoa.Manager
 	if cfg.Features.WinCCOa {
 		winCCOa = winccoa.NewManager(storage.DeviceConfig, publishFn, cfg.NodeID, logger)
+		if collector != nil {
+			winCCOa.SetCounters(collector.IncWinCCOaOut)
+		}
 		if nativeOn {
 			winCCOa.SetReservedRoot(names.Root)
 		}

@@ -109,6 +109,8 @@ type Host struct {
 	queryLog   []string
 	// ownWrites marks addresses written by this manager for NoSource.
 	sets             atomic.Uint64
+	waitSets         atomic.Uint64
+	noWaitSets       atomic.Uint64
 	orphans          atomic.Uint64
 	expired          atomic.Uint64
 	calls            map[uint32]*atomic.Uint64
@@ -192,6 +194,8 @@ func (h *Host) Resume() {
 
 func (h *Host) Expired() uint64        { return h.expired.Load() }
 func (h *Host) Sets() uint64           { return h.sets.Load() }
+func (h *Host) WaitSets() uint64       { return h.waitSets.Load() }
+func (h *Host) NoWaitSets() uint64     { return h.noWaitSets.Load() }
 func (h *Host) Calls(op uint32) uint64 { return h.calls[op].Load() }
 func (h *Host) QueueLen() int          { return len(h.queue) }
 
@@ -863,9 +867,12 @@ func (h *Host) dpSet(m oahost.Message) ([]pendingEvent, error) {
 		decoded[i] = v
 	}
 	stime := time.Now()
-	if ms, ok := m.U64(oahost.TagTime); ok {
+	ms, timed := m.U64(oahost.TagTime)
+	if timed {
 		stime = time.UnixMilli(int64(ms))
 	}
+	flags, _ := m.U32(oahost.TagFlags)
+	wait := flags&oahost.FlagWait != 0
 	var all []pendingEvent
 	for i := range names {
 		evs, err := h.setLocked(string(names[i]), decoded[i], true, stime)
@@ -874,6 +881,13 @@ func (h *Host) dpSet(m oahost.Message) ([]pendingEvent, error) {
 		}
 		h.sets.Add(1)
 		all = append(all, evs...)
+	}
+	if !timed {
+		if wait {
+			h.waitSets.Add(1)
+		} else {
+			h.noWaitSets.Add(1)
+		}
 	}
 	// One set message is one hotlink per group connection: keep its last
 	// event, which carries every value of the set.

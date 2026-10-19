@@ -39,7 +39,7 @@ const TagIndex byte = 24
 const (
 	FlagAnswer   uint32 = 1 << 0 // query/connect: deliver the initial answer as an event
 	FlagNoSource uint32 = 1 << 1 // connect: dpConnectNoSource
-	FlagWait     uint32 = 1 << 2 // set: require the OA answer (always set by this package)
+	FlagWait     uint32 = 1 << 2 // set: wait for the OA answer (dpSetWait)
 	FlagMore     uint32 = 1 << 3 // event/read: the query or read answer continues in another event or page
 	FlagCreate   uint32 = 1 << 4 // type check: create a missing type from the given elements
 	// FlagSourceTime (connect): connect each name together with the
@@ -253,22 +253,36 @@ func (a API) DpDisconnect(ctx context.Context, ref uint64) error {
 	return err
 }
 
-// DpSet writes values and waits for the OA answer. names and values are
-// fully qualified config paths and must have equal length.
+// DpSet writes values and waits for the OA answer (dpSetWait). names and
+// values are fully qualified config paths and must have equal length.
 func (a API) DpSet(ctx context.Context, names []string, values []Value, timeout time.Duration) error {
+	return a.dpSet(ctx, names, values, true, timeout)
+}
+
+// DpSetNoWait writes values without waiting for the OA answer (dpSet). names
+// and values are fully qualified config paths and must have equal length.
+func (a API) DpSetNoWait(ctx context.Context, names []string, values []Value, timeout time.Duration) error {
+	return a.dpSet(ctx, names, values, false, timeout)
+}
+
+func (a API) dpSet(ctx context.Context, names []string, values []Value, wait bool, timeout time.Duration) error {
 	if len(names) == 0 || len(names) != len(values) {
 		return ErrInvalid
 	}
 	var w Writer
 	w.U32(TagOp, OpDpSet)
-	w.U32(TagFlags, FlagWait)
+	op := "dpSet"
+	if wait {
+		w.U32(TagFlags, FlagWait)
+		op = "dpSetWait"
+	}
 	for i := range names {
 		w.String(TagName, names[i])
 		w.Value(TagValue, values[i])
 	}
 	start := time.Now()
 	_, err := a.call(ctx, &w, timeout)
-	a.logCall("dpSetWait", start, err, "count", len(names), "names", nameList(names), "values", valueList(values))
+	a.logCall(op, start, err, "count", len(names), "names", nameList(names), "values", valueList(values))
 	return err
 }
 

@@ -355,13 +355,14 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	var nativeHook *WinCCOaNativeHook
 	if nativeOn && cfg.WinCCOaNative.Namespace {
 		native = winccoanative.NewService(oahost.API{C: opts.OA}, nativeBroker{Server: server, bus: bus}, winccoanative.Options{
-			Names:             names,
-			NodeID:            cfg.NodeID,
-			NoSource:          cfg.WinCCOaNative.EchoPolicy == config.WinCCOaEchoNoSource,
-			ReconcileInterval: opts.NativeReconcile,
-			AllowRootWildcard: cfg.AllowRootWildcard(),
-			TopicDPNames:      cfg.WinCCOaNative.TopicDpNames == config.WinCCOaTopicDpName,
-			PeerLinkStatus:    peerLinkNativeStatus(peerSetup != nil, &pl),
+			Names:              names,
+			NodeID:             cfg.NodeID,
+			NoSource:           cfg.WinCCOaNative.EchoPolicy == config.WinCCOaEchoNoSource,
+			WriteBatchInterval: time.Duration(cfg.WinCCOaNative.EffectiveWriteBatchMs()) * time.Millisecond,
+			ReconcileInterval:  opts.NativeReconcile,
+			AllowRootWildcard:  cfg.AllowRootWildcard(),
+			TopicDPNames:       cfg.WinCCOaNative.TopicDpNames == config.WinCCOaTopicDpName,
+			PeerLinkStatus:     peerLinkNativeStatus(peerSetup != nil, &pl),
 			RetainedStatuses: func(filter string) map[string][]byte {
 				out := map[string][]byte{}
 				if cfg.RetainedStore() == config.StoreMemory {

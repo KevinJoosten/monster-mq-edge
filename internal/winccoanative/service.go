@@ -47,12 +47,13 @@ type Options struct {
 	Names          Names
 	NodeID         string
 	NoSource       bool
-	ResolveTimeout time.Duration
-	WriteTimeout   time.Duration
-	ConnectTimeout time.Duration
-	BatchSize      int
-	MaxInterests   int
-	CatalogTTL     time.Duration
+	ResolveTimeout     time.Duration
+	WriteTimeout       time.Duration
+	ConnectTimeout     time.Duration
+	WriteBatchInterval time.Duration
+	BatchSize          int
+	MaxInterests       int
+	CatalogTTL         time.Duration
 	// ReconcileInterval paces retries of unregistered interests and the
 	// removal of interests whose session is gone.
 	ReconcileInterval time.Duration
@@ -190,6 +191,14 @@ type Service struct {
 	prepared map[string]bool      // Sys:MMQTopic_k... created and configured in this run
 	prepMu   sync.Mutex           // serializes datapoint creation and deletion
 
+	collectMu     sync.Mutex
+	noWaitNames   []string
+	noWaitVals    []oahost.Value
+	noWaitTimer   *time.Timer
+	waitReqs      []waitWriteReq
+	waitItemCount int
+	waitTimer     *time.Timer
+
 	kick    chan struct{}
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -276,6 +285,7 @@ func (s *Service) Stop(ctx context.Context) {
 		return
 	}
 	s.ready.Store(false)
+	s.flushCollected()
 	s.cancel()
 	s.wg.Wait()
 	s.stopWild(ctx)
@@ -1119,7 +1129,8 @@ func (s *Service) Command(clientID, topic string, payload []byte, retain bool, r
 func (s *Service) execute(clientID, topic, addr, readKey string, val oahost.Value, cmd Command, reply Reply, send ReplyPublisher) {
 	ctx, cancel := context.WithTimeout(context.Background(), s.opts.WriteTimeout)
 	defer cancel()
-	err := s.api.DpSet(ctx, []string{addr}, []oahost.Value{val}, s.opts.WriteTimeout)
+	waitFn := s.enqueueWrite([]string{addr}, []oahost.Value{val}, true)
+	err := waitFn(ctx)
 	res := CommandResult{ID: cmd.ID, Topic: topic, Status: "confirmed"}
 	switch {
 	case err == nil:

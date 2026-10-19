@@ -200,12 +200,24 @@ type topicDelivery struct {
 }
 
 // ensureTopicType creates the MMQTopic type on the local system when it is
-// missing. Remote systems must have it already: their broker creates it.
+// missing and marks existing local topic datapoints as prepared so their
+// first publish does not reconfigure them. Remote systems must have the type
+// already: their broker creates it.
 func (s *Service) ensureTopicType(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := s.api.EnsureType(ctx, TopicType, topicElements, topicElementKinds()); err != nil {
 		return fmt.Errorf("datapoint type %s: %w (an existing type with a different layout is not changed)", TopicType, err)
+	}
+	if dps, err := s.api.DpNames(ctx, TopicType+"_*", TopicType, s.opts.ResolveTimeout); err == nil {
+		s.mu.Lock()
+		for _, dp := range dps {
+			if !strings.Contains(dp, ":") {
+				dp = s.localSystem + ":" + dp
+			}
+			s.prepared[dp] = true
+		}
+		s.mu.Unlock()
 	}
 	return nil
 }
@@ -741,13 +753,14 @@ func (s *Service) topicCreated(sysDP string) {
 	}
 }
 
-// PublishTopic writes an MQTT publish of the topics branch to its datapoint
-// and returns when WinCC OA confirmed it. A non-retained publish goes to the
-// value element, a retained one to the retained element; a retained publish
-// with an empty payload clears the retained element and deletes the
-// datapoint. Subscribers get the message through the datapoint connection
-// only, on every system.
-func (s *Service) PublishTopic(topic string, payload []byte, retain bool) (Verdict, string) {
+// PublishTopic writes an MQTT publish of the topics branch to its datapoint.
+// With wait (QoS > 0) it uses dpSetWait and returns when WinCC OA confirmed
+// the write; without wait (QoS 0) it uses dpSet without waiting for the Event
+// Manager answer. A non-retained publish goes to the value element, a
+// retained one to the retained element; a retained publish with an empty
+// payload clears the retained element and deletes the datapoint. Subscribers
+// get the message through the datapoint connection only, on every system.
+func (s *Service) PublishTopic(topic string, payload []byte, retain, wait bool) (Verdict, string) {
 	t, err := s.opts.Names.ParseTopic(topic)
 	if err != nil {
 		return Invalid, err.Error()
@@ -759,7 +772,7 @@ func (s *Service) PublishTopic(topic string, payload []byte, retain bool) (Verdi
 	ctx, cancel := context.WithTimeout(context.Background(), s.opts.WriteTimeout)
 	defer cancel()
 	if retain && len(payload) == 0 {
-		return s.deleteTopic(ctx, sysDP, t.Topic)
+		return s.deleteTopic(ctx, sysDP, wait)
 	}
 	el := topicElValue
 	if retain {
@@ -768,10 +781,18 @@ func (s *Service) PublishTopic(topic string, payload []byte, retain bool) (Verdi
 	addr := sysDP + "." + el + ":" + WriteAttr
 	val := oahost.Value{Kind: oahost.KindBytes, Bytes: payload}
 	for attempt := 0; ; attempt++ {
-		if err := s.prepareTopic(ctx, sysDP, t.Topic); err != nil {
+		s.mu.Lock()
+		done := s.prepared[sysDP]
+		s.mu.Unlock()
+		if !done {
+			err := s.createOrWriteTopic(ctx, sysDP, t.Topic, addr, val, wait)
+			if err == nil {
+				return Accept, ""
+			}
 			return topicVerdict(err)
 		}
-		err := s.api.DpSet(ctx, []string{addr}, []oahost.Value{val}, s.opts.WriteTimeout)
+		waitFn := s.enqueueWrite([]string{addr}, []oahost.Value{val}, wait)
+		err := waitFn(ctx)
 		if err == nil {
 			return Accept, ""
 		}
@@ -793,70 +814,80 @@ func topicVerdict(err error) (Verdict, string) {
 	return Unavailable, err.Error()
 }
 
-// prepareTopic makes sure the datapoint of a topic exists with its topic
-// element set and the last value storage of the value element turned off.
-// It runs once per datapoint and broker lifetime; later publishes only
-// write the value.
-func (s *Service) prepareTopic(ctx context.Context, sysDP, topic string) error {
+// createOrWriteTopic ensures the datapoint of a topic exists and writes val.
+// When a new datapoint is created, its topic element and the
+// last-value-storage-off flag on the value element are set once together with
+// val in a single dpSet/dpSetWait call; when the datapoint already exists,
+// only addr is written.
+func (s *Service) createOrWriteTopic(ctx context.Context, sysDP, topic, addr string, val oahost.Value, wait bool) error {
+	s.prepMu.Lock()
 	s.mu.Lock()
 	done := s.prepared[sysDP]
 	s.mu.Unlock()
-	if done {
-		return nil
-	}
-	s.prepMu.Lock()
-	defer s.prepMu.Unlock()
-	s.mu.Lock()
-	done = s.prepared[sysDP]
-	s.mu.Unlock()
-	if done {
-		return nil
-	}
-	res, err := s.api.Resolve(ctx, sysDP+"."+topicElTopic)
-	if err != nil {
-		return err
-	}
-	created := false
-	if !res.Exists {
-		if err := s.api.DpCreate(ctx, sysDP, TopicType, s.opts.WriteTimeout); err != nil && !strings.Contains(err.Error(), "exists") {
-			return fmt.Errorf("create %s for %s: %w", sysDP, topic, err)
+	if !done {
+		res, err := s.api.Resolve(ctx, sysDP+"."+topicElTopic)
+		if err != nil {
+			s.prepMu.Unlock()
+			return err
 		}
-		created = true
-	} else if res.TypeName != "" && res.TypeName != TopicType {
-		return fmt.Errorf("%w: %s has type %s, not %s", oahost.ErrInvalid, sysDP, res.TypeName, TopicType)
-	} else if err := s.checkTopicElement(ctx, sysDP, topic); err != nil {
-		return err
+		if !res.Exists {
+			if err := s.api.DpCreate(ctx, sysDP, TopicType, s.opts.WriteTimeout); err != nil && !strings.Contains(err.Error(), "exists") {
+				s.prepMu.Unlock()
+				return fmt.Errorf("create %s for %s: %w", sysDP, topic, err)
+			}
+			s.topicCreatedHere(sysDP, topic)
+			waitFn := s.enqueueWrite(
+				[]string{
+					sysDP + "." + topicElTopic + ":" + WriteAttr,
+					sysDP + "." + topicElValue + ":" + lastValueStorageOff,
+					addr,
+				},
+				[]oahost.Value{
+					{Kind: oahost.KindString, Str: topic},
+					{Kind: oahost.KindBool, Bool: true},
+					val,
+				},
+				wait,
+			)
+			s.mu.Lock()
+			s.prepared[sysDP] = true
+			s.mu.Unlock()
+			s.prepMu.Unlock()
+			if err := waitFn(ctx); err != nil {
+				s.mu.Lock()
+				delete(s.prepared, sysDP)
+				s.mu.Unlock()
+				return fmt.Errorf("configure %s for %s: %w", sysDP, topic, err)
+			}
+			return nil
+		}
+		if res.TypeName != "" && res.TypeName != TopicType {
+			s.prepMu.Unlock()
+			return fmt.Errorf("%w: %s has type %s, not %s", oahost.ErrInvalid, sysDP, res.TypeName, TopicType)
+		}
+		s.mu.Lock()
+		s.prepared[sysDP] = true
+		s.mu.Unlock()
 	}
-	err = s.api.DpSet(ctx,
-		[]string{sysDP + "." + topicElTopic + ":" + WriteAttr, sysDP + "." + topicElValue + ":" + lastValueStorageOff},
-		[]oahost.Value{{Kind: oahost.KindString, Str: topic}, {Kind: oahost.KindBool, Bool: true}},
-		s.opts.WriteTimeout)
-	if err != nil {
-		return fmt.Errorf("configure %s for %s: %w", sysDP, topic, err)
-	}
-	s.mu.Lock()
-	s.prepared[sysDP] = true
-	s.mu.Unlock()
-	if created {
-		s.topicCreatedHere(sysDP, topic)
-	}
-	return nil
+	waitFn := s.enqueueWrite([]string{addr}, []oahost.Value{val}, wait)
+	s.prepMu.Unlock()
+	return waitFn(ctx)
 }
 
 // deleteTopic clears the retained element, so connected subscribers get
 // the empty retained message, then deletes the datapoint.
-func (s *Service) deleteTopic(ctx context.Context, sysDP, topic string) (Verdict, string) {
+func (s *Service) deleteTopic(ctx context.Context, sysDP string, wait bool) (Verdict, string) {
 	s.prepMu.Lock()
 	defer s.prepMu.Unlock()
+	s.flushCollected()
 	s.mu.Lock()
 	delete(s.prepared, sysDP)
 	s.mu.Unlock()
-	if err := s.checkTopicElement(ctx, sysDP, topic); errors.Is(err, oahost.ErrNotFound) {
-		return Accept, ""
-	} else if err != nil {
-		return topicVerdict(err)
+	set := s.api.DpSetNoWait
+	if wait {
+		set = s.api.DpSet
 	}
-	err := s.api.DpSet(ctx, []string{sysDP + "." + topicElRetained + ":" + WriteAttr},
+	err := set(ctx, []string{sysDP + "." + topicElRetained + ":" + WriteAttr},
 		[]oahost.Value{{Kind: oahost.KindBytes}}, s.opts.WriteTimeout)
 	if errors.Is(err, oahost.ErrNotFound) {
 		return Accept, ""
@@ -870,15 +901,191 @@ func (s *Service) deleteTopic(ctx context.Context, sysDP, topic string) (Verdict
 	return Accept, ""
 }
 
-// checkTopicElement makes sure an existing datapoint holds topic (or none
-// yet), so a name collision never overwrites or deletes another topic.
-func (s *Service) checkTopicElement(ctx context.Context, sysDP, topic string) error {
-	vals, err := s.api.DpGet(ctx, []string{sysDP + "." + topicElTopic + ":" + DefaultAttr}, s.opts.WriteTimeout)
-	if err != nil {
-		return err
+const maxWriteBatchItems = 1000
+
+type waitWriteReq struct {
+	names []string
+	vals  []oahost.Value
+	done  chan error
+}
+
+// enqueueWrite queues names and vals into the write collector when
+// WriteBatchInterval > 0, or returns an immediate dpSet/dpSetWait closure
+// when WriteBatchInterval <= 0.
+func (s *Service) enqueueWrite(names []string, vals []oahost.Value, wait bool) func(context.Context) error {
+	if s.opts.WriteBatchInterval <= 0 {
+		if wait {
+			return func(ctx context.Context) error {
+				return s.api.DpSet(ctx, names, vals, s.opts.WriteTimeout)
+			}
+		}
+		return func(ctx context.Context) error {
+			return s.api.DpSetNoWait(ctx, names, vals, s.opts.WriteTimeout)
+		}
 	}
-	if have := vals[0].Str; have != "" && have != topic {
-		return fmt.Errorf("%w: %s holds %q, not %q", ErrTopicCollision, sysDP, have, topic)
+	if !wait {
+		var bNames []string
+		var bVals []oahost.Value
+		s.collectMu.Lock()
+		s.noWaitNames = append(s.noWaitNames, names...)
+		s.noWaitVals = append(s.noWaitVals, vals...)
+		if len(s.noWaitNames) >= maxWriteBatchItems {
+			if s.noWaitTimer != nil {
+				s.noWaitTimer.Stop()
+				s.noWaitTimer = nil
+			}
+			bNames, bVals = s.noWaitNames, s.noWaitVals
+			s.noWaitNames, s.noWaitVals = nil, nil
+		} else if s.noWaitTimer == nil {
+			s.noWaitTimer = time.AfterFunc(s.opts.WriteBatchInterval, s.onNoWaitTimer)
+		}
+		s.collectMu.Unlock()
+		if len(bNames) > 0 {
+			s.sendNoWaitBatch(bNames, bVals)
+		}
+		return func(context.Context) error { return nil }
 	}
-	return nil
+
+	ch := make(chan error, 1)
+	var noWaitNames []string
+	var noWaitVals []oahost.Value
+	var flushReqs []waitWriteReq
+	s.collectMu.Lock()
+	if len(s.noWaitNames) > 0 {
+		if s.noWaitTimer != nil {
+			s.noWaitTimer.Stop()
+			s.noWaitTimer = nil
+		}
+		noWaitNames, noWaitVals = s.noWaitNames, s.noWaitVals
+		s.noWaitNames, s.noWaitVals = nil, nil
+	}
+	s.waitReqs = append(s.waitReqs, waitWriteReq{names: names, vals: vals, done: ch})
+	s.waitItemCount += len(names)
+	if s.waitItemCount >= maxWriteBatchItems {
+		if s.waitTimer != nil {
+			s.waitTimer.Stop()
+			s.waitTimer = nil
+		}
+		flushReqs = s.waitReqs
+		s.waitReqs = nil
+		s.waitItemCount = 0
+	} else if s.waitTimer == nil {
+		s.waitTimer = time.AfterFunc(s.opts.WriteBatchInterval, s.onWaitTimer)
+	}
+	s.collectMu.Unlock()
+	if len(noWaitNames) > 0 {
+		s.sendNoWaitBatch(noWaitNames, noWaitVals)
+	}
+	if len(flushReqs) > 0 {
+		s.sendWaitBatch(flushReqs)
+	}
+	return func(ctx context.Context) error {
+		select {
+		case err := <-ch:
+			return err
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *Service) onNoWaitTimer() {
+	s.collectMu.Lock()
+	s.noWaitTimer = nil
+	names, vals := s.noWaitNames, s.noWaitVals
+	s.noWaitNames, s.noWaitVals = nil, nil
+	s.collectMu.Unlock()
+	if len(names) > 0 {
+		s.sendNoWaitBatch(names, vals)
+	}
+}
+
+func (s *Service) onWaitTimer() {
+	s.collectMu.Lock()
+	s.waitTimer = nil
+	noWaitNames, noWaitVals := s.noWaitNames, s.noWaitVals
+	if len(noWaitNames) > 0 {
+		if s.noWaitTimer != nil {
+			s.noWaitTimer.Stop()
+			s.noWaitTimer = nil
+		}
+		s.noWaitNames, s.noWaitVals = nil, nil
+	}
+	reqs := s.waitReqs
+	s.waitReqs = nil
+	s.waitItemCount = 0
+	s.collectMu.Unlock()
+	if len(noWaitNames) > 0 {
+		s.sendNoWaitBatch(noWaitNames, noWaitVals)
+	}
+	if len(reqs) > 0 {
+		s.sendWaitBatch(reqs)
+	}
+}
+
+func (s *Service) flushCollected() {
+	s.collectMu.Lock()
+	if s.noWaitTimer != nil {
+		s.noWaitTimer.Stop()
+		s.noWaitTimer = nil
+	}
+	if s.waitTimer != nil {
+		s.waitTimer.Stop()
+		s.waitTimer = nil
+	}
+	noWaitNames, noWaitVals := s.noWaitNames, s.noWaitVals
+	s.noWaitNames, s.noWaitVals = nil, nil
+	reqs := s.waitReqs
+	s.waitReqs = nil
+	s.waitItemCount = 0
+	s.collectMu.Unlock()
+	if len(noWaitNames) > 0 {
+		s.sendNoWaitBatch(noWaitNames, noWaitVals)
+	}
+	if len(reqs) > 0 {
+		s.sendWaitBatch(reqs)
+	}
+}
+
+func (s *Service) sendNoWaitBatch(names []string, vals []oahost.Value) {
+	ctx, cancel := context.WithTimeout(context.Background(), s.opts.WriteTimeout)
+	defer cancel()
+	err := s.api.DpSetNoWait(ctx, names, vals, s.opts.WriteTimeout)
+	if errors.Is(err, oahost.ErrNotFound) {
+		s.mu.Lock()
+		for _, n := range names {
+			if dp, _, ok := strings.Cut(n, "."); ok {
+				delete(s.prepared, dp)
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *Service) sendWaitBatch(reqs []waitWriteReq) {
+	total := 0
+	for _, r := range reqs {
+		total += len(r.names)
+	}
+	names := make([]string, 0, total)
+	vals := make([]oahost.Value, 0, total)
+	for _, r := range reqs {
+		names = append(names, r.names...)
+		vals = append(vals, r.vals...)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.opts.WriteTimeout)
+	defer cancel()
+	err := s.api.DpSet(ctx, names, vals, s.opts.WriteTimeout)
+	if errors.Is(err, oahost.ErrNotFound) {
+		s.mu.Lock()
+		for _, n := range names {
+			if dp, _, ok := strings.Cut(n, "."); ok {
+				delete(s.prepared, dp)
+			}
+		}
+		s.mu.Unlock()
+	}
+	for _, r := range reqs {
+		r.done <- err
+	}
 }

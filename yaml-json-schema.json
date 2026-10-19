@@ -468,7 +468,8 @@
         "TopicsName": { "type": "string", "default": "topics", "pattern": "^[^/+#%]+$", "description": "Topic level for MQTT topics kept in MMQTopic datapoints and replicated through WinCC OA: <TopicRoot>/<SystemsName>/<system>/<TopicsName>/<topic>." },
         "LocalShortcut": { "type": "boolean", "default": true, "description": "Also offer the local system without the system part: <TopicRoot>/<TagsName>/..., <TopicRoot>/<TypesName>/..., status on <TopicRoot>." },
         "EchoPolicy": { "type": "string", "enum": ["BROKER_TAG", "NO_SOURCE"], "default": "BROKER_TAG", "description": "How values written through MQTT are echoed to native subscribers." },
-        "QueryMaxRows": { "type": "integer", "minimum": 100, "maximum": 1000000, "default": 10000, "description": "Row limit of one dpQuery issued by a WINCCOA store, used for wildcard reads, topic search and browse." }
+        "QueryMaxRows": { "type": "integer", "minimum": 100, "maximum": 1000000, "default": 10000, "description": "Row limit of one dpQuery issued by a WINCCOA store, used for wildcard reads, topic search and browse." },
+        "WriteBatchMs": { "type": "integer", "minimum": 0, "maximum": 60000, "default": 10, "description": "Collect dpSet writes over this window in milliseconds into one bulk dpSet call; 0 sends each write immediately in a single dpSet." }
       }
     },
     "Redfish": {

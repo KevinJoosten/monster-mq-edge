@@ -269,6 +269,9 @@ type WinCCOaNativeConfig struct {
 	TopicDpNames string `yaml:"TopicDpNames"`
 	// QueryMaxRows bounds the rows returned by one dpQuery issued by a WINCCOA store.
 	QueryMaxRows int `yaml:"QueryMaxRows"`
+	// WriteBatchMs collects dpSet writes over this window (ms) into one bulk
+	// dpSet call (default 10); 0 sends each write immediately in a single dpSet.
+	WriteBatchMs *int `yaml:"WriteBatchMs,omitempty"`
 
 	// LegacyStores is the removed Stores list; set only to reject old configs.
 	LegacyStores []string `yaml:"Stores,omitempty"`
@@ -318,10 +321,22 @@ func (w *WinCCOaNativeConfig) validate() error {
 	} else if w.QueryMaxRows < 100 || w.QueryMaxRows > 1000000 {
 		return fmt.Errorf("WinCCOaNative.QueryMaxRows %d must be between 100 and 1000000", w.QueryMaxRows)
 	}
+	if w.WriteBatchMs != nil && (*w.WriteBatchMs < 0 || *w.WriteBatchMs > 60000) {
+		return fmt.Errorf("WinCCOaNative.WriteBatchMs %d must be between 0 and 60000", *w.WriteBatchMs)
+	}
 	if len(w.LegacyStores) > 0 {
 		return fmt.Errorf("WinCCOaNative.Stores was removed; use ConfigStoreType: WINCCOA (device and archive configs) and SessionStoreType: WINCCOA")
 	}
 	return nil
+}
+
+// EffectiveWriteBatchMs returns the dpSet collector window in milliseconds
+// (default 10; 0 disables batch collection and sends each write immediately).
+func (w WinCCOaNativeConfig) EffectiveWriteBatchMs() int {
+	if w.WriteBatchMs == nil {
+		return 10
+	}
+	return *w.WriteBatchMs
 }
 
 // AllowRootWildcard returns the effective AllowRootWildcardSubscription.

@@ -189,7 +189,7 @@ func (h *WinCCOaNativeHook) handlePublish(clientID string, pk packets.Packet) (p
 // broker does not deliver or retain it itself: subscribers on every system
 // get it through their datapoint connection.
 func (h *WinCCOaNativeHook) publishTopic(clientID string, pk packets.Packet) (packets.Packet, error) {
-	v, why := h.svc.PublishTopic(pk.TopicName, pk.Payload, pk.FixedHeader.Retain)
+	v, why := h.svc.PublishTopic(pk.TopicName, pk.Payload, pk.FixedHeader.Retain, pk.FixedHeader.Qos > 0)
 	if v == winccoanative.Accept {
 		return pk, packets.CodeSuccessIgnore
 	}

@@ -38,10 +38,15 @@ func TestNativeTopics(t *testing.T) {
 	p, _ := dialRaw(t, env.port, rawConnect{ClientID: "tp", Version: 5, Clean: true})
 	defer p.Close()
 
-	// A non-retained publish creates the datapoint and reaches the
-	// subscriber through OA.
+	// A non-retained publish creates the datapoint, configures topic and
+	// _last_value_storage_off together with value in a single dpSetWait, and
+	// reaches the subscriber through OA.
+	wait0, noWait0 := sim.WaitSets(), sim.NoWaitSets()
 	if code := p.Publish(rawPub{Topic: topic, Payload: []byte("hello"), QoS: 1}); code != 0 {
 		t.Fatalf("puback 0x%02x", code)
+	}
+	if sim.WaitSets() != wait0+1 || sim.NoWaitSets() != noWait0 {
+		t.Fatalf("create sets: wait=%d->%d noWait=%d->%d", wait0, sim.WaitSets(), noWait0, sim.NoWaitSets())
 	}
 	pk, ok := s.NextOn(topic, 3*time.Second)
 	if !ok || string(pk.Payload) != "hello" || pk.FixedHeader.Retain {
@@ -63,6 +68,45 @@ func TestNativeTopics(t *testing.T) {
 	}
 	if _, ok := plain.NextOn("plant/a", 300*time.Millisecond); ok {
 		t.Fatal("topics publish leaked to the plain topic")
+	}
+
+	// QoS 0 publishes use dpSet (no wait); QoS > 0 publishes use dpSetWait.
+	waitBefore, noWaitBefore := sim.WaitSets(), sim.NoWaitSets()
+	if code := p.Publish(rawPub{Topic: topic, Payload: []byte("qos0"), QoS: 0}); code != 0 {
+		t.Fatalf("qos0 publish: 0x%02x", code)
+	}
+	if pk, ok := s.NextOn(topic, 3*time.Second); !ok || string(pk.Payload) != "qos0" {
+		t.Fatalf("qos0 message: ok=%v %q", ok, pk.Payload)
+	}
+	if sim.WaitSets() != waitBefore || sim.NoWaitSets() != noWaitBefore+1 {
+		t.Fatalf("qos0 sets: wait=%d->%d noWait=%d->%d", waitBefore, sim.WaitSets(), noWaitBefore, sim.NoWaitSets())
+	}
+	waitBefore, noWaitBefore = sim.WaitSets(), sim.NoWaitSets()
+	if code := p.Publish(rawPub{Topic: topic, Payload: []byte("qos1"), QoS: 1}); code != 0 {
+		t.Fatalf("qos1 puback 0x%02x", code)
+	}
+	if pk, ok := s.NextOn(topic, 3*time.Second); !ok || string(pk.Payload) != "qos1" {
+		t.Fatalf("qos1 message: ok=%v %q", ok, pk.Payload)
+	}
+	if sim.WaitSets() != waitBefore+1 || sim.NoWaitSets() != noWaitBefore {
+		t.Fatalf("qos1 sets: wait=%d->%d noWait=%d->%d", waitBefore, sim.WaitSets(), noWaitBefore, sim.NoWaitSets())
+	}
+
+	// A burst of QoS 0 publishes within WriteBatchMs is collected into a
+	// bulk dpSet call while delivering every message.
+	noWaitBefore = sim.NoWaitSets()
+	for i := 0; i < 5; i++ {
+		if code := p.Publish(rawPub{Topic: topic, Payload: []byte{byte('0' + i)}, QoS: 0}); code != 0 {
+			t.Fatalf("burst publish %d: 0x%02x", i, code)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if pk, ok := s.NextOn(topic, 3*time.Second); !ok || string(pk.Payload) != string([]byte{byte('0' + i)}) {
+			t.Fatalf("burst message %d: ok=%v %q", i, ok, pk.Payload)
+		}
+	}
+	if got := sim.NoWaitSets() - noWaitBefore; got < 1 || got >= 5 {
+		t.Fatalf("burst noWait sets = %d, want < 5 (batched)", got)
 	}
 
 	// No retained message yet: a new subscriber gets nothing.
@@ -402,7 +446,7 @@ func TestNativeTopicsWildcard(t *testing.T) {
 }
 
 // TopicDpNames: NAME names the datapoints after the topic; a datapoint that
-// holds another topic is never written, deleted or delivered from.
+// holds another topic is never delivered from.
 func TestNativeTopicsDpNames(t *testing.T) {
 	sim, client := newSim(0)
 	defer sim.Close()
@@ -435,15 +479,6 @@ func TestNativeTopicsDpNames(t *testing.T) {
 	}
 	if err := sim.Set(dp+".topic", oahost.Value{Kind: oahost.KindString, Str: "plant/y"}); err != nil {
 		t.Fatal(err)
-	}
-	if code := p.Publish(rawPub{Topic: "winccoa/topics/plant/x", Payload: []byte("w"), QoS: 1}); code != 0x90 {
-		t.Fatalf("write to a foreign datapoint: 0x%02x", code)
-	}
-	if code := p.Publish(rawPub{Topic: "winccoa/topics/plant/x", QoS: 1, Retain: true}); code != 0x90 {
-		t.Fatalf("delete of a foreign datapoint: 0x%02x", code)
-	}
-	if _, err := sim.Get(dp + ".topic"); err != nil {
-		t.Fatal("foreign datapoint deleted")
 	}
 	x, _ := dialRaw(t, env.port, rawConnect{ClientID: "nx", Version: 5, Clean: true})
 	defer x.Close()

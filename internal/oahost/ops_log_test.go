@@ -52,6 +52,9 @@ func TestCallsLoggedAtDebug(t *testing.T) {
 	if err := api.DpSet(ctx, names, values, 0); err != nil {
 		t.Fatal(err)
 	}
+	if err := api.DpSetNoWait(ctx, names[:1], values[:1], 0); err != nil {
+		t.Fatal(err)
+	}
 	if err := api.DpSetTimed(ctx, names[:1], values[:1], time.Now(), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -70,6 +73,7 @@ func TestCallsLoggedAtDebug(t *testing.T) {
 		`query="SELECT '_online.._value', '_online.._stime' FROM 'Tag*.'"`,
 		`msg="oa dpQueryDisconnect"`,
 		`msg="oa dpSetWait" count=25`,
+		`msg="oa dpSet" count=1`,
 		`msg="oa dpSetTimed" count=1`,
 		`(+5 more)`,
 		`msg="oa dpConnect"`,

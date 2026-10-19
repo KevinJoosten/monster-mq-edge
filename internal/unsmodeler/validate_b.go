@@ -413,6 +413,10 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 	if oa != nil && len(existing) > 0 {
 		real, err := oa.DatapointTypes(ctx, "", existing)
 		if err == nil {
+			var addressed map[int]string
+			if api, ok := oa.(interface{ API() oahost.API }); ok {
+				addressed = addressedElements(ctx, api.API(), local, doc.Datapoints, existingIdx, real)
+			}
 			for k, rt := range real {
 				i := existingIdx[k]
 				d := doc.Datapoints[i]
@@ -423,10 +427,8 @@ func validateB(ctx context.Context, doc *Document, env ValidationEnv) []Issue {
 					add(SeverityError, ptr+"/name", "datapoint %s exists with type %s, not %s", d.Name, rt, d.Type)
 				default:
 					sev, msg := SeverityInfo, ""
-					if api, ok := oa.(interface{ API() oahost.API }); ok {
-						if el := addressedElement(ctx, api.API(), local, d); el != "" {
-							sev, msg = SeverityWarning, fmt.Sprintf("; element %s has a driver address, the flow would compete with the driver", quoteJSON(el))
-						}
+					if el := addressed[i]; el != "" {
+						sev, msg = SeverityWarning, fmt.Sprintf("; element %s has a driver address, the flow would compete with the driver", quoteJSON(el))
 					}
 					add(sev, ptr+"/name", "datapoint %s exists with type %s; it is skipped at create and fed by the flow%s", d.Name, rt, msg)
 				}
@@ -457,15 +459,40 @@ func oaToDirectionB(oaType string) string {
 	return ""
 }
 
-func addressedElement(ctx context.Context, api oahost.API, local string, d *Datapoint) string {
-	for _, b := range d.Bindings {
-		dpe := local + ":" + d.Name + "." + b.Element
-		vals, err := api.DpGet(ctx, []string{dpe + ":_address.._type"}, 5*time.Second)
-		if err == nil && len(vals) == 1 && (vals[0].Int != 0 || vals[0].Uint != 0) {
-			return b.Element
+func addressedElements(ctx context.Context, api oahost.API, local string, dps []*Datapoint, existingIdx []int, real []string) map[int]string {
+	var (
+		addrs []string
+		dpIdx []int
+		elems []string
+	)
+	for k, rt := range real {
+		i := existingIdx[k]
+		d := dps[i]
+		if rt == "" || rt != d.Type {
+			continue
+		}
+		for _, b := range d.Bindings {
+			dpe := local + ":" + d.Name + "." + b.Element
+			addrs = append(addrs, dpe+":_address.._type")
+			dpIdx = append(dpIdx, i)
+			elems = append(elems, b.Element)
 		}
 	}
-	return ""
+	if len(addrs) == 0 {
+		return nil
+	}
+	vals := getEach(ctx, api, addrs, 5*time.Second)
+	out := map[int]string{}
+	for idx, v := range vals {
+		i := dpIdx[idx]
+		if _, already := out[i]; already {
+			continue
+		}
+		if v != nil && (v.Int != 0 || v.Uint != 0) {
+			out[i] = elems[idx]
+		}
+	}
+	return out
 }
 
 func checkRange(r *PvRange, ptr string, add func(sev, path, format string, args ...any)) {

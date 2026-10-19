@@ -265,6 +265,34 @@ func (r *RuntimeB) Stop() {
 	r.cnt.DPEs.Store(0)
 }
 
+// Seed feeds the current cached payload of each target topic that has not yet
+// received a live message so the flow and Live Monitor populate immediately.
+func (r *RuntimeB) Seed(ctx context.Context, src TopicSource) {
+	if src == nil {
+		return
+	}
+	r.mu.Lock()
+	topics := make([]string, 0, len(r.targets))
+	for t := range r.targets {
+		if r.received[t] == 0 {
+			topics = append(topics, t)
+		}
+	}
+	r.mu.Unlock()
+	sort.Strings(topics)
+	for _, t := range topics {
+		r.mu.Lock()
+		seen := r.received[t] > 0 || r.stopped
+		r.mu.Unlock()
+		if seen {
+			continue
+		}
+		if payload, ok := src.Last(ctx, t); ok && len(payload) > 0 {
+			r.onMessage(t, payload, time.Now())
+		}
+	}
+}
+
 // Status returns the flow state per source topic.
 func (r *RuntimeB) Status() []TopicStatus {
 	r.mu.Lock()

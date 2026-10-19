@@ -588,21 +588,37 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 	// 1. NGA (_NGA_Group)
 	ngaNames, err := s.api.DpNames(ctx, name+":*", "_NGA_Group", s.timeout)
 	if err == nil && len(ngaNames) > 0 {
+		var ngaDPs []string
+		var ngaReads []string
 		for _, full := range ngaNames {
 			_, dp := splitSystem(full)
 			dp = strings.TrimSuffix(dp, ".")
 			if strings.HasSuffix(dp, "_2") || strings.EqualFold(dp, "_NGA_G_ALERT") || strings.HasSuffix(strings.ToUpper(dp), "_ALERT") {
 				continue
 			}
+			ngaDPs = append(ngaDPs, dp)
+			ngaReads = append(ngaReads,
+				name+":"+dp+".displayName:_online.._value",
+				name+":"+dp+".groupName:_online.._value",
+				name+":"+dp+".isAlert:_online.._value",
+			)
+		}
+		var batchVals []oahost.Value
+		if len(ngaReads) > 0 {
+			if vals, err := s.api.DpGet(ctx, ngaReads, s.timeout); err == nil && len(vals) == len(ngaReads) {
+				batchVals = vals
+			}
+		}
+		for i, dp := range ngaDPs {
 			short := strings.TrimPrefix(dp, "_NGA_G_")
 			disp := short
-
-			// Best-effort attribute read for displayName/groupName and isAlert
-			if vals, err := s.api.DpGet(ctx, []string{
-				name + ":" + dp + ".displayName:_online.._value",
-				name + ":" + dp + ".groupName:_online.._value",
-				name + ":" + dp + ".isAlert:_online.._value",
-			}, s.timeout); err == nil && len(vals) == 3 {
+			var vals []oahost.Value
+			if batchVals != nil {
+				vals = batchVals[3*i : 3*i+3]
+			} else if v, err := s.api.DpGet(ctx, ngaReads[3*i:3*i+3], s.timeout); err == nil && len(v) == 3 {
+				vals = v
+			}
+			if len(vals) == 3 {
 				if vals[2].Bool {
 					continue
 				}
@@ -635,19 +651,36 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 	// 2. HDB / ValueArchive (_ValueArchive)
 	hdbNames, err := s.api.DpNames(ctx, name+":_ValueArchive_*", "_ValueArchive", s.timeout)
 	if err == nil && len(hdbNames) > 0 {
+		var hdbDPs []string
+		var hdbReads []string
 		for _, full := range hdbNames {
 			_, dp := splitSystem(full)
 			dp = strings.TrimSuffix(dp, ".")
 			if strings.HasSuffix(dp, "_2") {
 				continue
 			}
+			hdbDPs = append(hdbDPs, dp)
+			hdbReads = append(hdbReads,
+				name+":"+dp+".state:_online.._value",
+				name+":"+dp+".general.arName:_online.._value",
+			)
+		}
+		var batchVals []oahost.Value
+		if len(hdbReads) > 0 {
+			if vals, err := s.api.DpGet(ctx, hdbReads, s.timeout); err == nil && len(vals) == len(hdbReads) {
+				batchVals = vals
+			}
+		}
+		for i, dp := range hdbDPs {
 			groupName := strings.TrimPrefix(dp, "_")
 			disp := groupName
-
-			if vals, err := s.api.DpGet(ctx, []string{
-				name + ":" + dp + ".state:_online.._value",
-				name + ":" + dp + ".general.arName:_online.._value",
-			}, s.timeout); err == nil && len(vals) == 2 {
+			var vals []oahost.Value
+			if batchVals != nil {
+				vals = batchVals[2*i : 2*i+2]
+			} else if v, err := s.api.DpGet(ctx, hdbReads[2*i:2*i+2], s.timeout); err == nil && len(v) == 2 {
+				vals = v
+			}
+			if len(vals) == 2 {
 				if vals[0].Int == 3 || vals[0].Uint == 3 {
 					continue
 				}
@@ -673,19 +706,36 @@ func (s *Service) ArchiveGroups(ctx context.Context, system string) ([]ArchiveGr
 	// 3. RDB (_RDBArchiveGroups)
 	rdbNames, err := s.api.DpNames(ctx, name+":*", "_RDBArchiveGroups", s.timeout)
 	if err == nil && len(rdbNames) > 0 {
+		var rdbDPs []string
+		var rdbReads []string
 		for _, full := range rdbNames {
 			_, dp := splitSystem(full)
 			dp = strings.TrimSuffix(dp, ".")
 			if strings.HasSuffix(dp, "_2") || strings.EqualFold(dp, "_ALERT") || strings.HasSuffix(strings.ToUpper(dp), "_ALERT") {
 				continue
 			}
+			rdbDPs = append(rdbDPs, dp)
+			rdbReads = append(rdbReads,
+				name+":"+dp+".isAlert:_online.._value",
+				name+":"+dp+".templateName:_online.._value",
+				name+":"+dp+".groupName:_online.._value",
+			)
+		}
+		var batchVals []oahost.Value
+		if len(rdbReads) > 0 {
+			if vals, err := s.api.DpGet(ctx, rdbReads, s.timeout); err == nil && len(vals) == len(rdbReads) {
+				batchVals = vals
+			}
+		}
+		for i, dp := range rdbDPs {
 			disp := strings.TrimPrefix(dp, "_")
-
-			if vals, err := s.api.DpGet(ctx, []string{
-				name + ":" + dp + ".isAlert:_online.._value",
-				name + ":" + dp + ".templateName:_online.._value",
-				name + ":" + dp + ".groupName:_online.._value",
-			}, s.timeout); err == nil && len(vals) == 3 {
+			var vals []oahost.Value
+			if batchVals != nil {
+				vals = batchVals[3*i : 3*i+3]
+			} else if v, err := s.api.DpGet(ctx, rdbReads[3*i:3*i+3], s.timeout); err == nil && len(v) == 3 {
+				vals = v
+			}
+			if len(vals) == 3 {
 				if vals[0].Bool || vals[1].Str == "CS" {
 					continue
 				}

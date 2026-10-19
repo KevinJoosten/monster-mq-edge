@@ -257,6 +257,9 @@ func (m *Manager) startFlow(ctx context.Context, dev *device) {
 	m.mu.Lock()
 	dev.flow = flow
 	m.mu.Unlock()
+	if flow != nil && m.topics != nil {
+		flow.Seed(ctx, m.topics)
+	}
 	m.log.Info("uns flow started", "device", dev.cfg.Name, "topics", len(targets))
 }
 

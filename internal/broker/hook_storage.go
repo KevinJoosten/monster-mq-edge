@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -357,10 +359,10 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 		return // nobody consumes the message; skip uuid/copy/dispatch entirely
 	}
 	msg := stores.BrokerMessage{
-		MessageUUID: uuid.NewString(),
+		MessageUUID: fastUUID(),
 		MessageID:   pk.PacketID,
 		TopicName:   pk.TopicName,
-		Payload:     append([]byte(nil), pk.Payload...),
+		Payload:     pk.Payload,
 		QoS:         pk.FixedHeader.Qos,
 		IsRetain:    pk.FixedHeader.Retain,
 		IsDup:       pk.FixedHeader.Dup,
@@ -580,6 +582,27 @@ func (h *StorageHook) PendingReplicas(source string) int {
 // id (source, epoch, offset) instead of reading crypto/rand per message:
 // fnv64a(source) xor epoch, then the offset, as a version 8 (custom) UUID.
 // Snapshot values have no offset and get a random one.
+// fastUUID generates an RFC 4122 v4 UUID using Go's per-thread ChaCha8 CSPRNG
+// in math/rand/v2 without global mutex contention or OS entropy syscalls per publish.
+func fastUUID() string {
+	var b [16]byte
+	binary.LittleEndian.PutUint64(b[0:8], rand.Uint64())
+	binary.LittleEndian.PutUint64(b[8:16], rand.Uint64())
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	var buf [36]byte
+	hex.Encode(buf[0:8], b[0:4])
+	buf[8] = '-'
+	hex.Encode(buf[9:13], b[4:6])
+	buf[13] = '-'
+	hex.Encode(buf[14:18], b[6:8])
+	buf[18] = '-'
+	hex.Encode(buf[19:23], b[8:10])
+	buf[23] = '-'
+	hex.Encode(buf[24:36], b[10:16])
+	return string(buf[:])
+}
+
 func replicaUUID(f *packets.Forward) string {
 	if f.Offset == 0 {
 		return uuid.NewString()

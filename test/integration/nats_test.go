@@ -807,7 +807,7 @@ func TestNatsSessionLifecycle(t *testing.T) {
 	}
 }
 
-// 9. Slow consumer (E3)
+// 9. Slow consumer does not block publisher or disconnect subscriber when no limit is configured
 func TestNatsSlowConsumer(t *testing.T) {
 	srv, _, natsPort := startWithNats(t)
 	defer srv.Close()
@@ -820,49 +820,26 @@ func TestNatsSlowConsumer(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	nc, _ := nats.Connect(fmt.Sprintf("nats://127.0.0.1:%d", natsPort))
+	defer nc.Close()
 
-	// Send messages until bus overflow triggers
-	largePayload := make([]byte, 64*1024)
+	largePayload := make([]byte, 16*1024)
 	for i := range largePayload {
 		largePayload[i] = 'X'
 	}
 
-	// Don't read on conn; push messages until slow consumer error and disconnect
+	// Don't read on conn; push messages and verify publisher is not blocked
 	for i := 0; i < 2000; i++ {
 		_ = nc.Publish("slow.test", largePayload)
 	}
 	_ = nc.Flush()
 
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	foundSlowErr := false
-	for {
-		line, err := r.ReadString('\n')
-		if err != nil {
-			break
-		}
-		if strings.Contains(line, "Slow Consumer") {
-			foundSlowErr = true
-			break
-		}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	line, err := r.ReadString('\n')
+	if err != nil {
+		t.Fatalf("expected subscriber connection to stay open and receive messages, got err: %v", err)
 	}
-	if !foundSlowErr {
-		t.Fatal("expected Slow Consumer error on overflow")
-	}
-
-	// Close publisher so only conn's session lifecycle is under test
-	nc.Close()
-
-	// Its session disappears and the broker keeps serving
-	time.Sleep(100 * time.Millisecond)
-	var natsSessions []string
-	_ = srv.Storage().Sessions.IterateSessions(context.Background(), func(s stores.SessionInfo) bool {
-		if strings.HasPrefix(s.ClientID, "nats-") {
-			natsSessions = append(natsSessions, s.ClientID)
-		}
-		return true
-	})
-	if len(natsSessions) > 0 {
-		t.Fatalf("expected nats session to disappear, found: %v", natsSessions)
+	if !strings.HasPrefix(line, "MSG slow.test 1 ") {
+		t.Fatalf("expected MSG frame on subscriber, got: %q", line)
 	}
 
 	// Broker keeps serving: publish and receive normally

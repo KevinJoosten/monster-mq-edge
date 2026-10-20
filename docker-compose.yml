@@ -1,0 +1,21 @@
+services:
+  monstermq-edge:
+    image: rocworks/monstermq-edge:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: monstermq-edge
+    entrypoint: ["/monstermq-edge", "-config", "/etc/monstermq/config.yaml"]
+    restart: unless-stopped
+    ports:
+      - "1883:1883"   # MQTT TCP
+      #- "1884:1884"   # MQTT WebSocket
+      #- "8883:8883"   # MQTT TLS
+      #- "8884:8884"   # MQTT WSS
+      #- "4000:4000"   # GraphQL HTTP
+      #- "4001:4001"   # GraphQL HTTPS
+      #- "6379:6379"   # Redis protocol server
+      #- "4222:4222"   # NATS protocol server
+    volumes:
+      - ./config.yaml:/etc/monstermq/config.yaml:ro
+      - ./data:/data

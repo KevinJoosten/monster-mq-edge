@@ -1,9 +1,10 @@
 package redisserver
 
 import (
-	"context"
+	"bufio"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"monstermq.io/edge/internal/stores"
@@ -109,11 +110,32 @@ func (c *Conn) handleSubscribe(args [][]byte, isPattern bool) error {
 			continue
 		}
 
-		subID, msgCh, overflowCh := c.server.deps.Bus.SubscribeWithOverflow([]string{item.mqttFilter}, 1024)
-		ctx, cancel := context.WithCancel(context.Background())
-		holder := &subscriptionHolder{
-			id:     uint64(subID),
-			cancel: cancel,
+		c.ensureSubWriter()
+		holder := &subscriptionHolder{}
+		holder.active.Store(true)
+		reqName := item.requested
+		pf := item.postFilter
+		subID := c.server.deps.Bus.SubscribeFunc([]string{item.mqttFilter}, func(msg stores.BrokerMessage) {
+			if !holder.active.Load() || c.closed.Load() {
+				return
+			}
+			if pf != nil && !pf(msg.TopicName) {
+				return
+			}
+			select {
+			case c.subCh <- pubSubDelivery{holder: holder, isPattern: isPattern, pattern: reqName, msg: msg}:
+			default:
+				c.subDropped.Add(1)
+				if c.subOverloaded.CompareAndSwap(false, true) && c.server.deps.Logger != nil {
+					c.server.deps.Logger.Warn("redis subscriber outbound queue overloaded; dropping messages", "client", c.clientID)
+				}
+			}
+		})
+		holder.id = uint64(subID)
+		holder.cancel = func() {
+			if holder.active.CompareAndSwap(true, false) && c.server.deps.Bus != nil {
+				c.server.deps.Bus.Unsubscribe(subID)
+			}
 		}
 		c.subs[key] = holder
 		total := len(c.subs)
@@ -125,86 +147,128 @@ func (c *Conn) handleSubscribe(args [][]byte, isPattern bool) error {
 			respInteger(int64(total)),
 		}).writeResp(c.writer)
 		c.writeMu.Unlock()
-
-		go c.runSubscription(ctx, subID, key, item.postFilter, msgCh, overflowCh)
 	}
 
 	return nil
 }
 
-func (c *Conn) runSubscription(
-	ctx context.Context,
-	subID int,
-	key subKey,
-	postFilter func(string) bool,
-	msgCh <-chan stores.BrokerMessage,
-	overflowCh <-chan struct{},
-) {
-	defer func() {
-		if c.server.deps.Bus != nil {
-			c.server.deps.Bus.Unsubscribe(subID)
-		}
-	}()
+func (c *Conn) ensureSubWriter() {
+	c.subWriterOnce.Do(func() {
+		c.subCh = make(chan pubSubDelivery, 65536)
+		go c.subWriterLoop()
+	})
+}
 
+func (c *Conn) subWriterLoop() {
 	for {
 		select {
-		case <-ctx.Done():
+		case <-c.subStopCh:
 			return
-		case <-overflowCh:
-			// E7: subscriber overflow, close connection
-			if c.server.deps.Logger != nil {
-				c.server.deps.Logger.Warn("redis subscriber overflow, closing connection", "client", c.clientID)
-			}
-			c.writeMu.Lock()
-			_ = c.writeError("ERR slow subscriber, messages dropped, closing connection")
-			_ = c.flush()
-			c.writeMu.Unlock()
-			c.Close()
-			return
-		case msg, ok := <-msgCh:
-			if !ok {
-				return
-			}
-			if postFilter != nil && !postFilter(msg.TopicName) {
-				continue
-			}
-			// F12: delivery-time ACL check
-			if !c.canRead(msg.TopicName) {
-				continue
-			}
-
-			c.writeMu.Lock()
-			var err error
-			if key.isPattern {
-				err = respArray([]respValue{
-					respBulk([]byte("pmessage")),
-					respBulk([]byte(key.name)),
-					respBulk([]byte(msg.TopicName)),
-					respBulk(msg.Payload),
-				}).writeResp(c.writer)
-			} else {
-				err = respArray([]respValue{
-					respBulk([]byte("message")),
-					respBulk([]byte(msg.TopicName)),
-					respBulk(msg.Payload),
-				}).writeResp(c.writer)
-			}
-			if err == nil {
-				_ = c.flush()
-			}
-			c.writeMu.Unlock()
-
-			if err != nil {
+		case d := <-c.subCh:
+			if !c.writePubSubBatch(d) {
 				c.Close()
 				return
 			}
-
-			// F11: out-counter
-			if c.server.deps.Collector != nil {
-				c.server.deps.Collector.IncClientOut(c.clientID)
+			if c.subOverloaded.Load() && len(c.subCh) < cap(c.subCh)/4 {
+				if c.subOverloaded.CompareAndSwap(true, false) {
+					dropped := c.subDropped.Swap(0)
+					if c.server.deps.Logger != nil {
+						c.server.deps.Logger.Info("redis subscriber outbound queue overload cleared", "client", c.clientID, "dropped", dropped)
+					}
+				}
 			}
 		}
 	}
+}
+
+func (c *Conn) writePubSubBatch(first pubSubDelivery) bool {
+	c.writeMu.Lock()
+	var err error
+	sentCount := 0
+
+	writeOne := func(d pubSubDelivery) bool {
+		if !d.holder.active.Load() || !c.canRead(d.msg.TopicName) {
+			return true
+		}
+		if err = writePubSubFrame(c.writer, d.isPattern, d.pattern, d.msg.TopicName, d.msg.Payload); err != nil {
+			return false
+		}
+		sentCount++
+		return true
+	}
+
+	if writeOne(first) {
+		for i := 0; i < 256 && c.writer.Buffered() < 65536; i++ {
+			select {
+			case d := <-c.subCh:
+				if !writeOne(d) {
+					i = 256
+				}
+			default:
+				i = 256
+			}
+		}
+	}
+
+	if err == nil && sentCount > 0 {
+		err = c.flush()
+	}
+	c.writeMu.Unlock()
+
+	if err != nil {
+		return false
+	}
+	if c.server.deps.Collector != nil && sentCount > 0 {
+		for i := 0; i < sentCount; i++ {
+			c.server.deps.Collector.IncClientOut(c.clientID)
+		}
+	}
+	return true
+}
+
+func writePubSubFrame(w *bufio.Writer, isPattern bool, pattern, topic string, payload []byte) error {
+	var scratch [64]byte
+	if isPattern {
+		b := append(scratch[:0], "*4\r\n$8\r\npmessage\r\n$"...)
+		b = strconv.AppendInt(b, int64(len(pattern)), 10)
+		b = append(b, '\r', '\n')
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(pattern); err != nil {
+			return err
+		}
+		b = append(scratch[:0], "\r\n$"...)
+		b = strconv.AppendInt(b, int64(len(topic)), 10)
+		b = append(b, '\r', '\n')
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(topic); err != nil {
+			return err
+		}
+	} else {
+		b := append(scratch[:0], "*3\r\n$7\r\nmessage\r\n$"...)
+		b = strconv.AppendInt(b, int64(len(topic)), 10)
+		b = append(b, '\r', '\n')
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(topic); err != nil {
+			return err
+		}
+	}
+	b := append(scratch[:0], "\r\n$"...)
+	b = strconv.AppendInt(b, int64(len(payload)), 10)
+	b = append(b, '\r', '\n')
+	if _, err := w.Write(b); err != nil {
+		return err
+	}
+	if _, err := w.Write(payload); err != nil {
+		return err
+	}
+	_, err := w.WriteString("\r\n")
+	return err
 }
 
 func (c *Conn) handleUnsubscribe(args [][]byte, isPattern bool) error {

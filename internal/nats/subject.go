@@ -2,16 +2,21 @@ package nats
 
 import "strings"
 
+var (
+	subjectToTopicReplacer = strings.NewReplacer(".", "/", "*", "+", ">", "#")
+	topicToSubjectReplacer = strings.NewReplacer("/", ".", "+", "*", "#", ">", " ", "_")
+)
+
 // SubjectToTopic converts a NATS subject or filter to an MQTT topic or filter:
 // . -> /, * -> +, > -> #. Character-wise and global (NC:492-494).
 func SubjectToTopic(subject string) string {
-	return strings.NewReplacer(".", "/", "*", "+", ">", "#").Replace(subject)
+	return subjectToTopicReplacer.Replace(subject)
 }
 
 // TopicToSubject converts an MQTT topic or filter to a NATS subject or filter:
 // / -> ., + -> *, # -> >, space -> _ (NC:502-504).
 func TopicToSubject(topic string) string {
-	return strings.NewReplacer("/", ".", "+", "*", "#", ">", " ", "_").Replace(topic)
+	return topicToSubjectReplacer.Replace(topic)
 }
 
 // topicMatchesFilter checks if a concrete MQTT topic matches an MQTT topic filter,

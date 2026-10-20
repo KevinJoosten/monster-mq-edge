@@ -104,6 +104,7 @@ func (a *OutboundTopicAliases) Set(topic string) (uint16, bool) {
 // keyed on share group then client id.
 type SharedSubscriptions struct {
 	internal map[string]map[string]packets.Subscription
+	count    atomic.Int32
 	sync.RWMutex
 }
 
@@ -114,24 +115,34 @@ func NewSharedSubscriptions() *SharedSubscriptions {
 	}
 }
 
+func (s *SharedSubscriptions) refreshCountLocked() {
+	n := 0
+	for _, group := range s.internal {
+		n += len(group)
+	}
+	s.count.Store(int32(n))
+}
+
 // Add creates a new shared subscription for a group and client id pair.
 func (s *SharedSubscriptions) Add(group, id string, val packets.Subscription) {
 	s.Lock()
-	defer s.Unlock()
 	if _, ok := s.internal[group]; !ok {
 		s.internal[group] = map[string]packets.Subscription{}
 	}
 	s.internal[group][id] = val
+	s.refreshCountLocked()
+	s.Unlock()
 }
 
 // Delete deletes a client id from a shared subscription group.
 func (s *SharedSubscriptions) Delete(group, id string) {
 	s.Lock()
-	defer s.Unlock()
 	delete(s.internal[group], id)
 	if len(s.internal[group]) == 0 {
 		delete(s.internal, group)
 	}
+	s.refreshCountLocked()
+	s.Unlock()
 }
 
 // Get returns the subscription properties for a client id in a share group, if one exists.
@@ -165,6 +176,20 @@ func (s *SharedSubscriptions) Len() int {
 	return n
 }
 
+// Each calls fn for every shared subscription while holding the read lock.
+func (s *SharedSubscriptions) Each(fn func(group, id string, sub packets.Subscription)) {
+	if s.count.Load() == 0 {
+		return
+	}
+	s.RLock()
+	defer s.RUnlock()
+	for group, subs := range s.internal {
+		for id, sub := range subs {
+			fn(group, id, sub)
+		}
+	}
+}
+
 // GetAll returns all shared subscription groups and their subscriptions.
 func (s *SharedSubscriptions) GetAll() map[string]map[string]packets.Subscription {
 	s.RLock()
@@ -190,6 +215,7 @@ type InlineSubFn func(cl *Client, sub packets.Subscription, pk packets.Packet)
 // InlineSubscriptions represents a map of internal subscriptions keyed on client.
 type InlineSubscriptions struct {
 	internal map[int]InlineSubscription
+	count    atomic.Int32
 	sync.RWMutex
 }
 
@@ -203,8 +229,21 @@ func NewInlineSubscriptions() *InlineSubscriptions {
 // Add adds a new internal subscription for a client id.
 func (s *InlineSubscriptions) Add(val InlineSubscription) {
 	s.Lock()
-	defer s.Unlock()
 	s.internal[val.Identifier] = val
+	s.count.Store(int32(len(s.internal)))
+	s.Unlock()
+}
+
+// Each calls fn for every inline subscription while holding the read lock.
+func (s *InlineSubscriptions) Each(fn func(id int, sub InlineSubscription)) {
+	if s.count.Load() == 0 {
+		return
+	}
+	s.RLock()
+	defer s.RUnlock()
+	for k, v := range s.internal {
+		fn(k, v)
+	}
 }
 
 // GetAll returns all internal subscriptions.
@@ -237,13 +276,15 @@ func (s *InlineSubscriptions) Len() int {
 // Delete removes an internal subscription by the client id.
 func (s *InlineSubscriptions) Delete(id int) {
 	s.Lock()
-	defer s.Unlock()
 	delete(s.internal, id)
+	s.count.Store(int32(len(s.internal)))
+	s.Unlock()
 }
 
 // Subscriptions is a map of subscriptions keyed on client.
 type Subscriptions struct {
 	internal map[string]packets.Subscription
+	snap     atomic.Pointer[map[string]packets.Subscription]
 	sync.RWMutex
 }
 
@@ -254,20 +295,34 @@ func NewSubscriptions() *Subscriptions {
 	}
 }
 
+func (s *Subscriptions) refreshSnapLocked() {
+	if len(s.internal) == 0 {
+		s.snap.Store(nil)
+		return
+	}
+	m := make(map[string]packets.Subscription, len(s.internal))
+	for k, v := range s.internal {
+		m[k] = v
+	}
+	s.snap.Store(&m)
+}
+
 // Add adds a new subscription for a client. ID can be a filter in the
 // case this map is client state, or a client id if particle state.
 func (s *Subscriptions) Add(id string, val packets.Subscription) {
 	s.Lock()
-	defer s.Unlock()
 	s.internal[id] = val
+	s.refreshSnapLocked()
+	s.Unlock()
 }
 
-// Each calls fn for every subscription while holding the read lock, avoiding
-// the map copy of GetAll. fn must not call back into methods of s.
+// Each calls fn for every subscription using the lock-free snapshot.
 func (s *Subscriptions) Each(fn func(id string, sub packets.Subscription)) {
-	s.RLock()
-	defer s.RUnlock()
-	for k, v := range s.internal {
+	m := s.snap.Load()
+	if m == nil {
+		return
+	}
+	for k, v := range *m {
 		fn(k, v)
 	}
 }
@@ -302,8 +357,9 @@ func (s *Subscriptions) Len() int {
 // Delete removes a subscription by client or filter id.
 func (s *Subscriptions) Delete(id string) {
 	s.Lock()
-	defer s.Unlock()
 	delete(s.internal, id)
+	s.refreshSnapLocked()
+	s.Unlock()
 }
 
 // ClientSubscriptions is a map of aggregated subscriptions for a client.
@@ -342,6 +398,9 @@ func (s *Subscribers) SelectShared() {
 // and the non-shared subscribers, to ensure that no subscriber gets multiple messages
 // due to have both types of subscription matching the same filter.
 func (s *Subscribers) MergeSharedSelected() {
+	if s.Subscriptions == nil && len(s.SharedSelected) > 0 {
+		s.Subscriptions = map[string]packets.Subscription{}
+	}
 	for client, sub := range s.SharedSelected {
 		cls, ok := s.Subscriptions[client]
 		if !ok {
@@ -645,12 +704,13 @@ func (x *TopicsIndex) scanMessages(filter string, d int, n *particle, pks []pack
 // Subscribers returns a map of clients who are subscribed to matching filters,
 // their subscription ids and highest qos.
 func (x *TopicsIndex) Subscribers(topic string) *Subscribers {
-	return x.scanSubscribers(topic, 0, nil, &Subscribers{
-		Shared:              map[string]map[string]packets.Subscription{},
-		SharedSelected:      map[string]packets.Subscription{},
-		Subscriptions:       map[string]packets.Subscription{},
-		InlineSubscriptions: map[int]InlineSubscription{},
-	})
+	subs := &Subscribers{
+		Subscriptions: map[string]packets.Subscription{},
+	}
+	if len(topic) == 0 {
+		return subs
+	}
+	return x.scanSubscribersRem(topic, topic, x.root, subs)
 }
 
 // scanSubscribers returns a list of client subscriptions matching an indexed topic address.
@@ -658,34 +718,60 @@ func (x *TopicsIndex) scanSubscribers(topic string, d int, n *particle, subs *Su
 	if n == nil {
 		n = x.root
 	}
-
 	if len(topic) == 0 {
 		return subs
 	}
+	rem := topic
+	for i := 0; i < d; i++ {
+		slash := strings.IndexByte(rem, '/')
+		if slash < 0 {
+			return subs
+		}
+		rem = rem[slash+1:]
+	}
+	return x.scanSubscribersRem(topic, rem, n, subs)
+}
 
-	key, hasNext := isolateParticle(topic, d)
-	for _, partKey := range []string{key, "+"} {
-		if particle := n.particles.get(partKey); particle != nil { // [MQTT-3.3.2-3]
-			if hasNext {
-				x.scanSubscribers(topic, d+1, particle, subs)
-			} else {
-				x.gatherSubscriptions(topic, particle, subs)
-				x.gatherSharedSubscriptions(particle, subs)
-				x.gatherInlineSubscriptions(particle, subs)
+func (x *TopicsIndex) scanSubscribersRem(topic, rem string, n *particle, subs *Subscribers) *Subscribers {
+	var key, nextRem string
+	hasNext := false
+	if slash := strings.IndexByte(rem, '/'); slash >= 0 {
+		key = rem[:slash]
+		nextRem = rem[slash+1:]
+		hasNext = true
+	} else {
+		key = rem
+	}
 
-				if wild := particle.particles.get("#"); wild != nil && partKey != "+" {
-					x.gatherSubscriptions(topic, wild, subs) // also match any subs where filter/# is filter as per 4.7.1.2
-					x.gatherSharedSubscriptions(wild, subs)
-					x.gatherInlineSubscriptions(wild, subs)
-				}
+	exact, plus, hash := n.particles.getMatch(key)
+	if exact != nil { // [MQTT-3.3.2-3]
+		if hasNext {
+			x.scanSubscribersRem(topic, nextRem, exact, subs)
+		} else {
+			x.gatherSubscriptions(topic, exact, subs)
+			x.gatherSharedSubscriptions(exact, subs)
+			x.gatherInlineSubscriptions(exact, subs)
+
+			if wild := exact.particles.get("#"); wild != nil {
+				x.gatherSubscriptions(topic, wild, subs) // also match any subs where filter/# is filter as per 4.7.1.2
+				x.gatherSharedSubscriptions(wild, subs)
+				x.gatherInlineSubscriptions(wild, subs)
 			}
 		}
 	}
-
-	if particle := n.particles.get("#"); particle != nil {
-		x.gatherSubscriptions(topic, particle, subs)
-		x.gatherSharedSubscriptions(particle, subs)
-		x.gatherInlineSubscriptions(particle, subs)
+	if plus != nil && key != "+" { // [MQTT-3.3.2-3]
+		if hasNext {
+			x.scanSubscribersRem(topic, nextRem, plus, subs)
+		} else {
+			x.gatherSubscriptions(topic, plus, subs)
+			x.gatherSharedSubscriptions(plus, subs)
+			x.gatherInlineSubscriptions(plus, subs)
+		}
+	}
+	if hash != nil {
+		x.gatherSubscriptions(topic, hash, subs)
+		x.gatherSharedSubscriptions(hash, subs)
+		x.gatherInlineSubscriptions(hash, subs)
 	}
 
 	return subs
@@ -720,30 +806,25 @@ func (x *TopicsIndex) gatherSubscriptions(topic string, particle *particle, subs
 
 // gatherSharedSubscriptions gathers all shared subscriptions for a particle.
 func (x *TopicsIndex) gatherSharedSubscriptions(particle *particle, subs *Subscribers) {
-	if subs.Shared == nil {
-		subs.Shared = map[string]map[string]packets.Subscription{}
-	}
-
-	for _, shares := range particle.shared.GetAll() {
-		for client, sub := range shares {
-			if _, ok := subs.Shared[sub.Filter]; !ok {
-				subs.Shared[sub.Filter] = map[string]packets.Subscription{}
-			}
-
-			subs.Shared[sub.Filter][client] = sub
+	particle.shared.Each(func(_, client string, sub packets.Subscription) {
+		if subs.Shared == nil {
+			subs.Shared = map[string]map[string]packets.Subscription{}
 		}
-	}
+		if _, ok := subs.Shared[sub.Filter]; !ok {
+			subs.Shared[sub.Filter] = map[string]packets.Subscription{}
+		}
+		subs.Shared[sub.Filter][client] = sub
+	})
 }
 
-// gatherSharedSubscriptions gathers all inline subscriptions for a particle.
+// gatherInlineSubscriptions gathers all inline subscriptions for a particle.
 func (x *TopicsIndex) gatherInlineSubscriptions(particle *particle, subs *Subscribers) {
-	if subs.InlineSubscriptions == nil {
-		subs.InlineSubscriptions = map[int]InlineSubscription{}
-	}
-
-	for id, inline := range particle.inlineSubscriptions.GetAll() {
+	particle.inlineSubscriptions.Each(func(id int, inline InlineSubscription) {
+		if subs.InlineSubscriptions == nil {
+			subs.InlineSubscriptions = map[int]InlineSubscription{}
+		}
 		subs.InlineSubscriptions[id] = inline
-	}
+	})
 }
 
 // isolateParticle extracts a particle between d / and d+1 / without allocations.
@@ -781,13 +862,15 @@ func IsValidFilter(filter string, forPublish bool) bool {
 	}
 
 	if forPublish {
+		if strings.IndexByte(filter, '+') >= 0 || strings.IndexByte(filter, '#') >= 0 {
+			return false //[MQTT-3.3.2-2]
+		}
+		if len(filter) == 0 || (filter[0] != '$' && filter[0] != '/') {
+			return true
+		}
 		if len(filter) >= len(SysPrefix) && strings.EqualFold(filter[0:len(SysPrefix)], SysPrefix) {
 			// 4.7.2 Non-normative - The Server SHOULD prevent Clients from using such Topic Names [$SYS] to exchange messages with other Clients.
 			return false
-		}
-
-		if strings.ContainsRune(filter, '+') || strings.ContainsRune(filter, '#') {
-			return false //[MQTT-3.3.2-2]
 		}
 	}
 
@@ -818,10 +901,22 @@ func IsValidFilter(filter string, forPublish bool) bool {
 	}
 
 	// wildcards must occupy an entire topic level [MQTT-4.7.1-2] [MQTT-4.7.1-3]
-	for _, level := range strings.Split(filter, "/") {
-		if (strings.ContainsRune(level, '+') && level != "+") || (strings.ContainsRune(level, '#') && level != "#") {
+	rem := filter
+	for {
+		var level string
+		slash := strings.IndexByte(rem, '/')
+		if slash >= 0 {
+			level = rem[:slash]
+		} else {
+			level = rem
+		}
+		if (strings.IndexByte(level, '+') >= 0 && level != "+") || (strings.IndexByte(level, '#') >= 0 && level != "#") {
 			return false
 		}
+		if slash < 0 {
+			break
+		}
+		rem = rem[slash+1:]
 	}
 
 	return true
@@ -854,6 +949,7 @@ func newParticle(key string, parent *particle) *particle {
 // particles is a concurrency safe map of particles.
 type particles struct {
 	internal map[string]*particle
+	snap     atomic.Pointer[map[string]*particle]
 	sync.RWMutex
 }
 
@@ -864,10 +960,23 @@ func newParticles() particles {
 	}
 }
 
+func (p *particles) refreshSnapLocked() {
+	if len(p.internal) == 0 {
+		p.snap.Store(nil)
+		return
+	}
+	m := make(map[string]*particle, len(p.internal))
+	for k, v := range p.internal {
+		m[k] = v
+	}
+	p.snap.Store(&m)
+}
+
 // add adds a new particle.
 func (p *particles) add(val *particle) {
 	p.Lock()
 	p.internal[val.key] = val
+	p.refreshSnapLocked()
 	p.Unlock()
 }
 
@@ -875,7 +984,7 @@ func (p *particles) add(val *particle) {
 func (p *particles) getAll() map[string]*particle {
 	p.RLock()
 	defer p.RUnlock()
-	m := map[string]*particle{}
+	m := make(map[string]*particle, len(p.internal))
 	for k, v := range p.internal {
 		m[k] = v
 	}
@@ -884,22 +993,40 @@ func (p *particles) getAll() map[string]*particle {
 
 // get returns a particle by id (key).
 func (p *particles) get(id string) *particle {
-	p.RLock()
-	defer p.RUnlock()
-	return p.internal[id]
+	m := p.snap.Load()
+	if m == nil {
+		return nil
+	}
+	return (*m)[id]
+}
+
+// getMatch returns the exact, single-level wildcard (+), and multi-level wildcard (#)
+// child particles using the lock-free snapshot.
+func (p *particles) getMatch(key string) (exact, plus, hash *particle) {
+	m := p.snap.Load()
+	if m == nil {
+		return nil, nil, nil
+	}
+	mm := *m
+	exact = mm[key]
+	plus = mm["+"]
+	hash = mm["#"]
+	return
 }
 
 // len returns the number of particles.
 func (p *particles) len() int {
-	p.RLock()
-	defer p.RUnlock()
-	val := len(p.internal)
-	return val
+	m := p.snap.Load()
+	if m == nil {
+		return 0
+	}
+	return len(*m)
 }
 
 // delete removes a particle.
 func (p *particles) delete(id string) {
 	p.Lock()
-	defer p.Unlock()
 	delete(p.internal, id)
+	p.refreshSnapLocked()
+	p.Unlock()
 }

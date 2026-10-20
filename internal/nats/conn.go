@@ -36,31 +36,43 @@ type sidState struct {
 	stopped     atomic.Bool
 }
 
+type natsSubDelivery struct {
+	state *sidState
+	msg   stores.BrokerMessage
+}
+
 // Conn represents a single client connection to the NATS server.
 type Conn struct {
-	server         *Server
-	netConn        net.Conn
-	clientID       string
-	writer         *bufio.Writer
-	writeMu        sync.Mutex
-	mu             sync.Mutex
-	authenticated  bool
-	username       string
-	verbose        bool
-	headersEnabled bool
-	registered     bool
-	closed         bool
-	sids           map[string]*sidState
-	js             *jetstream
+	server            *Server
+	netConn           net.Conn
+	clientID          string
+	writer            *bufio.Writer
+	writeMu           sync.Mutex
+	mu                sync.Mutex
+	authenticated     bool
+	username          string
+	verbose           bool
+	headersEnabled    bool
+	registered        bool
+	closed            bool
+	sids              map[string]*sidState
+	subCh             chan natsSubDelivery
+	subWriterOnce     sync.Once
+	subStopCh         chan struct{}
+	subOverloaded     atomic.Bool
+	subDropped        atomic.Int64
+	lastWriteDeadline int64
+	js                *jetstream
 }
 
 func newConn(s *Server, nc net.Conn) *Conn {
 	c := &Conn{
-		server:   s,
-		netConn:  nc,
-		clientID: "nats-" + uuid.NewString(),
-		writer:   bufio.NewWriter(nc),
-		sids:     make(map[string]*sidState),
+		server:    s,
+		netConn:   nc,
+		clientID:  "nats-" + uuid.NewString(),
+		writer:    bufio.NewWriterSize(nc, 65536),
+		sids:      make(map[string]*sidState),
+		subStopCh: make(chan struct{}),
 	}
 	c.js = newJetstream(c)
 	return c
@@ -77,7 +89,7 @@ func (c *Conn) serve() {
 		return
 	}
 
-	br := bufio.NewReader(c.netConn)
+	br := bufio.NewReaderSize(c.netConn, 65536)
 	var lineBuf []byte
 
 	for {
@@ -303,78 +315,224 @@ func (c *Conn) handleSub(args string) {
 		return
 	}
 
-	subID, ch, overflow := c.server.deps.Bus.SubscribeWithOverflow([]string{topic}, 1024)
+	c.ensureSubWriter()
 	state := &sidState{
 		sid:         sid,
 		subject:     subject,
 		topicFilter: topic,
-		subID:       subID,
 		stopCh:      make(chan struct{}),
 	}
+	subID := c.server.deps.Bus.SubscribeFunc([]string{topic}, func(msg stores.BrokerMessage) {
+		if state.stopped.Load() {
+			return
+		}
+		if !dollarTopicMatches(msg.TopicName, []string{state.topicFilter}) {
+			return
+		}
+		select {
+		case c.subCh <- natsSubDelivery{state: state, msg: msg}:
+		default:
+			c.subDropped.Add(1)
+			if c.subOverloaded.CompareAndSwap(false, true) && c.server.deps.Logger != nil {
+				c.server.deps.Logger.Warn("nats subscriber outbound queue overloaded; dropping messages", "client", c.clientID)
+			}
+		}
+	})
+	state.subID = subID
 
 	c.mu.Lock()
 	c.sids[sid] = state
 	c.mu.Unlock()
 
-	go func() {
-		select {
-		case <-state.stopCh:
-		case <-overflow:
-			_ = c.writeError("Slow Consumer")
-			c.close()
-		}
-	}()
-
-	go c.runSidReader(state, ch, overflow)
 	c.js.onSubscribe()
 }
 
-func (c *Conn) runSidReader(state *sidState, ch <-chan stores.BrokerMessage, overflow <-chan struct{}) {
+func (c *Conn) ensureSubWriter() {
+	c.subWriterOnce.Do(func() {
+		c.subCh = make(chan natsSubDelivery, 65536)
+		go c.subWriterLoop()
+	})
+}
+
+func (c *Conn) subWriterLoop() {
 	for {
 		select {
-		case <-state.stopCh:
+		case <-c.subStopCh:
 			return
-		case <-overflow:
-			// E3: Slow consumer on bus overflow
-			_ = c.writeError("Slow Consumer")
-			c.close()
-			return
-		case msg, ok := <-ch:
-			if !ok {
+		case d := <-c.subCh:
+			if !c.writeSubBatch(d) {
+				c.close()
 				return
 			}
-			// Leading wildcard rule for '$' topics
-			if !dollarTopicMatches(msg.TopicName, []string{state.topicFilter}) {
-				continue
-			}
-			// F6: Delivery-time ACL check
-			if !c.canSubscribe(msg.TopicName) {
-				continue
-			}
-
-			subject := TopicToSubject(msg.TopicName)
-			replyTo := ""
-			if msg.ResponseTopic != "" {
-				replyTo = TopicToSubject(msg.ResponseTopic)
-			}
-
-			c.deliverMsg(subject, state.sid, replyTo, msg.UserProperties, msg.Payload)
-
-			if c.server.deps.Counter != nil {
-				c.server.deps.Counter.IncClientOut(c.clientID)
-			}
-
-			c.mu.Lock()
-			state.delivered++
-			shouldRemove := state.maxMsgs != nil && state.delivered >= *state.maxMsgs
-			c.mu.Unlock()
-
-			if shouldRemove {
-				c.removeSid(state.sid)
-				return
+			if c.subOverloaded.Load() && len(c.subCh) < cap(c.subCh)/4 {
+				if c.subOverloaded.CompareAndSwap(true, false) {
+					dropped := c.subDropped.Swap(0)
+					if c.server.deps.Logger != nil {
+						c.server.deps.Logger.Info("nats subscriber outbound queue overload cleared", "client", c.clientID, "dropped", dropped)
+					}
+				}
 			}
 		}
 	}
+}
+
+func (c *Conn) writeSubBatch(first natsSubDelivery) bool {
+	c.mu.Lock()
+	headersEnabled := c.headersEnabled
+	c.mu.Unlock()
+
+	var toRemove []string
+	sentCount := 0
+
+	c.writeMu.Lock()
+	if c.isClosed() {
+		c.writeMu.Unlock()
+		return false
+	}
+
+	var writeErr error
+	writeOne := func(d natsSubDelivery) bool {
+		if d.state.stopped.Load() {
+			return true
+		}
+		if !c.canSubscribe(d.msg.TopicName) {
+			return true
+		}
+
+		c.mu.Lock()
+		if d.state.maxMsgs != nil && d.state.delivered >= *d.state.maxMsgs {
+			c.mu.Unlock()
+			return true
+		}
+		d.state.delivered++
+		reachedMax := d.state.maxMsgs != nil && d.state.delivered >= *d.state.maxMsgs
+		c.mu.Unlock()
+
+		subject := TopicToSubject(d.msg.TopicName)
+		replyTo := ""
+		if d.msg.ResponseTopic != "" {
+			replyTo = TopicToSubject(d.msg.ResponseTopic)
+		}
+		var headerBlock string
+		if headersEnabled && len(d.msg.UserProperties) > 0 {
+			headerBlock = formatHeaders("", d.msg.UserProperties, nil)
+		}
+
+		if writeErr = writeNatsMsgFrame(c.writer, subject, d.state.sid, replyTo, headerBlock, d.msg.Payload); writeErr != nil {
+			return false
+		}
+		sentCount++
+		if reachedMax {
+			d.state.stopped.Store(true)
+			toRemove = append(toRemove, d.state.sid)
+		}
+		return true
+	}
+
+	if writeOne(first) {
+		for i := 0; i < 256 && c.writer.Buffered() < 65536; i++ {
+			select {
+			case d := <-c.subCh:
+				if !writeOne(d) {
+					i = 256
+				}
+			default:
+				i = 256
+			}
+		}
+	}
+
+	if writeErr == nil && sentCount > 0 {
+		writeErr = c.flushLocked()
+	}
+	c.writeMu.Unlock()
+
+	for _, sid := range toRemove {
+		c.removeSid(sid)
+	}
+
+	if writeErr != nil {
+		return false
+	}
+	if c.server.deps.Counter != nil && sentCount > 0 {
+		for i := 0; i < sentCount; i++ {
+			c.server.deps.Counter.IncClientOut(c.clientID)
+		}
+	}
+	return true
+}
+
+func writeNatsMsgFrame(w *bufio.Writer, subject, sid, replyTo, headerBlock string, payload []byte) error {
+	var scratch [64]byte
+	if headerBlock != "" {
+		if _, err := w.WriteString("HMSG "); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(subject); err != nil {
+			return err
+		}
+		if err := w.WriteByte(' '); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(sid); err != nil {
+			return err
+		}
+		if err := w.WriteByte(' '); err != nil {
+			return err
+		}
+		if replyTo != "" {
+			if _, err := w.WriteString(replyTo); err != nil {
+				return err
+			}
+			if err := w.WriteByte(' '); err != nil {
+				return err
+			}
+		}
+		b := strconv.AppendInt(scratch[:0], int64(len(headerBlock)), 10)
+		b = append(b, ' ')
+		b = strconv.AppendInt(b, int64(len(headerBlock)+len(payload)), 10)
+		b = append(b, '\r', '\n')
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(headerBlock); err != nil {
+			return err
+		}
+	} else {
+		if _, err := w.WriteString("MSG "); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(subject); err != nil {
+			return err
+		}
+		if err := w.WriteByte(' '); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(sid); err != nil {
+			return err
+		}
+		if err := w.WriteByte(' '); err != nil {
+			return err
+		}
+		if replyTo != "" {
+			if _, err := w.WriteString(replyTo); err != nil {
+				return err
+			}
+			if err := w.WriteByte(' '); err != nil {
+				return err
+			}
+		}
+		b := strconv.AppendInt(scratch[:0], int64(len(payload)), 10)
+		b = append(b, '\r', '\n')
+		if _, err := w.Write(b); err != nil {
+			return err
+		}
+	}
+	if _, err := w.Write(payload); err != nil {
+		return err
+	}
+	_, err := w.WriteString("\r\n")
+	return err
 }
 
 func (c *Conn) handleUnsub(args string) {
@@ -474,15 +632,18 @@ func (c *Conn) handlePub(br *bufio.Reader, args string, withHeaders bool) bool {
 		return false
 	}
 
+	isJS := isJetStreamSubject(subject)
+	var mqttTopic string
+	if !isJS {
+		mqttTopic = SubjectToTopic(subject)
+	}
+
 	discard := false
 	if !c.checkAuth() {
 		discard = true
-	} else {
-		mqttTopic := SubjectToTopic(subject)
-		if !isJetStreamSubject(subject) && !c.canPublish(mqttTopic) {
-			_ = c.writeError(fmt.Sprintf("Permissions Violation for Publish to \"%s\"", subject))
-			discard = true
-		}
+	} else if !isJS && !c.canPublish(mqttTopic) {
+		_ = c.writeError(fmt.Sprintf("Permissions Violation for Publish to \"%s\"", subject))
+		discard = true
 	}
 
 	replyTo := ""
@@ -507,12 +668,10 @@ func (c *Conn) handlePub(br *bufio.Reader, args string, withHeaders bool) bool {
 	}
 	payload := payloadWithHeaders[headerBytes:]
 
-	if isJetStreamSubject(subject) {
+	if isJS {
 		c.js.handlePublish(subject, replyTo, headers, payload)
 		return true
 	}
-
-	mqttTopic := SubjectToTopic(subject)
 	var respTopic string
 	if replyTo != "" {
 		respTopic = SubjectToTopic(replyTo)
@@ -610,6 +769,15 @@ func (c *Conn) writeError(msg string) error {
 	return c.writeLine(fmt.Sprintf("-ERR '%s'", msg))
 }
 
+func (c *Conn) flushLocked() error {
+	now := time.Now().UnixNano()
+	if now-c.lastWriteDeadline >= int64(time.Second) {
+		c.lastWriteDeadline = now
+		_ = c.netConn.SetWriteDeadline(time.Unix(0, now+int64(10*time.Second)))
+	}
+	return c.writer.Flush()
+}
+
 func (c *Conn) writeRaw(chunks [][]byte) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -618,14 +786,12 @@ func (c *Conn) writeRaw(chunks [][]byte) error {
 		return net.ErrClosed
 	}
 
-	// 10s write deadline (E3)
-	_ = c.netConn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	for _, chunk := range chunks {
 		if _, err := c.writer.Write(chunk); err != nil {
 			return err
 		}
 	}
-	return c.writer.Flush()
+	return c.flushLocked()
 }
 
 func (c *Conn) isClosed() bool {
@@ -641,6 +807,7 @@ func (c *Conn) close() {
 		return
 	}
 	c.closed = true
+	close(c.subStopCh)
 	clientID := c.clientID
 	sids := make([]*sidState, 0, len(c.sids))
 	for _, s := range c.sids {

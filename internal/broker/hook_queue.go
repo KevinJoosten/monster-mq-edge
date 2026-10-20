@@ -41,6 +41,7 @@ type QueueHook struct {
 	// separately so the publish hot path can bail out with a single
 	// length check instead of resolving subscribers on every message.
 	offline         map[string]struct{}
+	offlineCount    atomic.Int32
 	clientUsernames map[string]string
 
 	pendingByPacketID map[string]map[uint16]string // clientID -> packetID -> messageUUID
@@ -111,6 +112,7 @@ func (h *QueueHook) hydratePersistentClients() {
 			h.mu.Lock()
 			h.persistent[info.ClientID] = true
 			h.offline[info.ClientID] = struct{}{} // nobody is connected yet at hydrate time
+			h.offlineCount.Store(int32(len(h.offline)))
 			if info.Information != "" {
 				var parsed struct {
 					Username string `json:"Username"`
@@ -153,10 +155,7 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 	if f := pk.Forward; f != nil && (!h.peer.Queue || f.Will || f.Snapshot) {
 		return
 	}
-	h.mu.RLock()
-	noneOffline := len(h.offline) == 0
-	h.mu.RUnlock()
-	if noneOffline {
+	if h.offlineCount.Load() == 0 {
 		return
 	}
 
@@ -277,6 +276,7 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 		delete(h.clientUsernames, cl.ID)
 	}
 	delete(h.offline, cl.ID)
+	h.offlineCount.Store(int32(len(h.offline)))
 	h.mu.Unlock()
 
 	if cl.Properties.Clean {
@@ -467,6 +467,7 @@ func (h *QueueHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
 		h.offline[cl.ID] = struct{}{}
 		h.clientUsernames[cl.ID] = string(cl.Properties.Username)
 	}
+	h.offlineCount.Store(int32(len(h.offline)))
 	h.mu.Unlock()
 	if expire {
 		h.clearPendingAcks(cl.ID)
@@ -478,6 +479,7 @@ func (h *QueueHook) OnClientExpired(cl *mqtt.Client) {
 	delete(h.persistent, cl.ID)
 	delete(h.offline, cl.ID)
 	delete(h.clientUsernames, cl.ID)
+	h.offlineCount.Store(int32(len(h.offline)))
 	h.mu.Unlock()
 	h.clearPendingAcks(cl.ID)
 }

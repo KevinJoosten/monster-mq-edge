@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"monstermq.io/edge/internal/bridge/kafkaclient"
 	"monstermq.io/edge/internal/bridge/mqttclient"
@@ -20,6 +21,7 @@ type InlinePublisher struct {
 	srv     *mqtt.Server
 	mu      sync.Mutex
 	clients map[string]*mqtt.Client
+	snap    atomic.Pointer[map[string]*mqtt.Client]
 }
 
 func NewInlinePublisher(srv *mqtt.Server) *InlinePublisher {
@@ -53,7 +55,20 @@ func (p *InlinePublisher) PublishMessage(clientID string, msg stores.BrokerMessa
 	})
 }
 
+func (p *InlinePublisher) refreshSnapLocked() {
+	cp := make(map[string]*mqtt.Client, len(p.clients))
+	for k, v := range p.clients {
+		cp[k] = v
+	}
+	p.snap.Store(&cp)
+}
+
 func (p *InlinePublisher) client(id string) *mqtt.Client {
+	if snap := p.snap.Load(); snap != nil {
+		if cl, ok := (*snap)[id]; ok {
+			return cl
+		}
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	cl, ok := p.clients[id]
@@ -61,6 +76,7 @@ func (p *InlinePublisher) client(id string) *mqtt.Client {
 		cl = p.srv.NewClient(nil, mqtt.LocalListener, id, true)
 		cl.Properties.ProtocolVersion = 5 // the engine keeps properties for MQTT 5 publishers
 		p.clients[id] = cl
+		p.refreshSnapLocked()
 	}
 	return cl
 }
@@ -70,6 +86,7 @@ func (p *InlinePublisher) client(id string) *mqtt.Client {
 func (p *InlinePublisher) Release(clientID string) {
 	p.mu.Lock()
 	delete(p.clients, clientID)
+	p.refreshSnapLocked()
 	p.mu.Unlock()
 }
 

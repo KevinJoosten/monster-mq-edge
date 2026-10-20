@@ -12,14 +12,33 @@ import (
 	"monstermq.io/edge/internal/stores"
 )
 
-type MessageStore struct {
-	name string
+const numShards = 64
+
+type messageShard struct {
 	mu   sync.RWMutex
 	data map[string]stores.BrokerMessage
 }
 
+type MessageStore struct {
+	name   string
+	shards [numShards]messageShard
+}
+
 func NewMessageStore(name string) *MessageStore {
-	return &MessageStore{name: name, data: map[string]stores.BrokerMessage{}}
+	s := &MessageStore{name: name}
+	for i := range s.shards {
+		s.shards[i].data = make(map[string]stores.BrokerMessage)
+	}
+	return s
+}
+
+func shardFor(topic string) uint32 {
+	h := uint32(2166136261)
+	for i := 0; i < len(topic); i++ {
+		h ^= uint32(topic[i])
+		h *= 16777619
+	}
+	return h & (numShards - 1)
 }
 
 func (s *MessageStore) Name() string                  { return s.name }
@@ -28,48 +47,64 @@ func (s *MessageStore) Close() error                  { return nil }
 func (s *MessageStore) EnsureTable(_ context.Context) error { return nil }
 
 func (s *MessageStore) Get(_ context.Context, topic string) (*stores.BrokerMessage, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if m, ok := s.data[topic]; ok {
+	sh := &s.shards[shardFor(topic)]
+	sh.mu.RLock()
+	defer sh.mu.RUnlock()
+	if m, ok := sh.data[topic]; ok {
 		copy := m
 		return &copy, nil
 	}
 	return nil, nil
 }
 
+// PutOne inserts or updates a single message without slice or context allocations.
+func (s *MessageStore) PutOne(m stores.BrokerMessage) {
+	sh := &s.shards[shardFor(m.TopicName)]
+	sh.mu.Lock()
+	sh.data[m.TopicName] = m
+	sh.mu.Unlock()
+}
+
+// DelOne deletes a single topic without slice or context allocations.
+func (s *MessageStore) DelOne(topic string) {
+	sh := &s.shards[shardFor(topic)]
+	sh.mu.Lock()
+	delete(sh.data, topic)
+	sh.mu.Unlock()
+}
+
 func (s *MessageStore) AddAll(_ context.Context, msgs []stores.BrokerMessage) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, m := range msgs {
-		s.data[m.TopicName] = m
+		s.PutOne(m)
 	}
 	return nil
 }
 
 func (s *MessageStore) DelAll(_ context.Context, topics []string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for _, t := range topics {
-		delete(s.data, t)
+		s.DelOne(t)
 	}
 	return nil
 }
 
 func (s *MessageStore) FindMatchingMessages(_ context.Context, pattern string, yield func(stores.BrokerMessage) bool) error {
-	s.mu.RLock()
-	keys := make([]string, 0, len(s.data))
-	for k := range s.data {
-		keys = append(keys, k)
+	var keys []string
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.RLock()
+		for k := range sh.data {
+			if matchTopic(pattern, k) {
+				keys = append(keys, k)
+			}
+		}
+		sh.mu.RUnlock()
 	}
-	s.mu.RUnlock()
 	sort.Strings(keys)
 	for _, k := range keys {
-		if !matchTopic(pattern, k) {
-			continue
-		}
-		s.mu.RLock()
-		m, ok := s.data[k]
-		s.mu.RUnlock()
+		sh := &s.shards[shardFor(k)]
+		sh.mu.RLock()
+		m, ok := sh.data[k]
+		sh.mu.RUnlock()
 		if !ok {
 			continue
 		}
@@ -87,70 +122,94 @@ func (s *MessageStore) FindMatchingMessages(_ context.Context, pattern string, y
 }
 
 func (s *MessageStore) FindMatchingTopics(_ context.Context, pattern string, yield func(string) bool) error {
-	s.mu.RLock()
-	keys := make([]string, 0, len(s.data))
-	for k := range s.data {
-		keys = append(keys, k)
+	var keys []string
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.RLock()
+		for k := range sh.data {
+			if matchTopic(pattern, k) {
+				keys = append(keys, k)
+			}
+		}
+		sh.mu.RUnlock()
 	}
-	s.mu.RUnlock()
 	sort.Strings(keys)
 	for _, k := range keys {
-		if matchTopic(pattern, k) {
-			if !yield(k) {
-				return nil
-			}
+		if !yield(k) {
+			return nil
 		}
 	}
 	return nil
 }
 
 func (s *MessageStore) PurgeOlderThan(_ context.Context, t time.Time) (stores.PurgeResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	var n int64
-	for k, m := range s.data {
-		if m.Time.Before(t) {
-			delete(s.data, k)
-			n++
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.Lock()
+		for k, m := range sh.data {
+			if m.Time.Before(t) {
+				delete(sh.data, k)
+				n++
+			}
 		}
+		sh.mu.Unlock()
 	}
 	return stores.PurgeResult{DeletedRows: n}, nil
 }
 
 func (s *MessageStore) PurgeExpired(_ context.Context) (stores.PurgeResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now().UnixMilli()
 	var n int64
-	for k, m := range s.data {
-		if m.MessageExpiryInterval != nil && *m.MessageExpiryInterval > 0 && !m.Time.IsZero() {
-			if (now-m.Time.UnixMilli())/1000 >= int64(*m.MessageExpiryInterval) {
-				delete(s.data, k)
-				n++
+	for i := range s.shards {
+		sh := &s.shards[i]
+		sh.mu.Lock()
+		for k, m := range sh.data {
+			if m.MessageExpiryInterval != nil && *m.MessageExpiryInterval > 0 && !m.Time.IsZero() {
+				if (now-m.Time.UnixMilli())/1000 >= int64(*m.MessageExpiryInterval) {
+					delete(sh.data, k)
+					n++
+				}
 			}
 		}
+		sh.mu.Unlock()
 	}
 	return stores.PurgeResult{DeletedRows: n}, nil
 }
 
 func matchTopic(pattern, topic string) bool {
-	pp := strings.Split(pattern, "/")
-	tt := strings.Split(topic, "/")
-	for i, p := range pp {
-		if p == "#" {
+	if pattern == "#" {
+		return true
+	}
+	for {
+		var pSeg string
+		pSlash := strings.IndexByte(pattern, '/')
+		if pSlash >= 0 {
+			pSeg = pattern[:pSlash]
+		} else {
+			pSeg = pattern
+		}
+		if pSeg == "#" {
 			return true
 		}
-		if i >= len(tt) {
+
+		var tSeg string
+		tSlash := strings.IndexByte(topic, '/')
+		if tSlash >= 0 {
+			tSeg = topic[:tSlash]
+		} else {
+			tSeg = topic
+		}
+
+		if pSeg != "+" && pSeg != tSeg {
 			return false
 		}
-		if p == "+" {
-			continue
+		if pSlash < 0 || tSlash < 0 {
+			return pSlash < 0 && tSlash < 0
 		}
-		if p != tt[i] {
-			return false
-		}
+		pattern = pattern[pSlash+1:]
+		topic = topic[tSlash+1:]
 	}
-	return len(pp) == len(tt)
 }
 
 var _ stores.MessageStore = (*MessageStore)(nil)

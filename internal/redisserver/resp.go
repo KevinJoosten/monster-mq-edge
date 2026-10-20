@@ -74,11 +74,15 @@ func readMultibulk(r *bufio.Reader, maxMsgSize int) ([][]byte, error) {
 			return nil, err
 		}
 
-		crlf := make([]byte, 2)
-		if _, err := io.ReadFull(r, crlf); err != nil {
+		cr, err := r.ReadByte()
+		if err != nil {
 			return nil, err
 		}
-		if crlf[0] != '\r' || crlf[1] != '\n' {
+		lf, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if cr != '\r' || lf != '\n' {
 			return nil, errProtocol("ERR Protocol error: invalid bulk length")
 		}
 
@@ -105,8 +109,25 @@ func readInline(r *bufio.Reader) ([][]byte, error) {
 }
 
 func readLine(r *bufio.Reader, maxLen int) ([]byte, error) {
+	slice, err := r.ReadSlice('\n')
+	if err == nil && len(slice) >= 2 && slice[len(slice)-2] == '\r' {
+		res := slice[:len(slice)-2]
+		if len(res) > maxLen {
+			return nil, errProtocol("ERR Protocol error: too big inline request")
+		}
+		return res, nil
+	}
 	var buf []byte
+	if len(slice) > 0 {
+		buf = append(buf, slice...)
+	}
+	if err != nil && err != bufio.ErrBufferFull {
+		return nil, err
+	}
 	for {
+		if len(buf) > maxLen {
+			return nil, errProtocol("ERR Protocol error: too big inline request")
+		}
 		b, err := r.ReadByte()
 		if err != nil {
 			return nil, err
@@ -117,14 +138,14 @@ func readLine(r *bufio.Reader, maxLen int) ([]byte, error) {
 				return nil, err
 			}
 			if next == '\n' {
+				if len(buf) > maxLen {
+					return nil, errProtocol("ERR Protocol error: too big inline request")
+				}
 				return buf, nil
 			}
 			buf = append(buf, b, next)
 		} else {
 			buf = append(buf, b)
-		}
-		if len(buf) > maxLen {
-			return nil, errProtocol("ERR Protocol error: too big inline request")
 		}
 	}
 }
@@ -150,7 +171,16 @@ func (v respErr) writeResp(w *bufio.Writer) error {
 type respInteger int64
 
 func (v respInteger) writeResp(w *bufio.Writer) error {
-	_, err := fmt.Fprintf(w, ":%d\r\n", int64(v))
+	if v == 0 {
+		_, err := w.WriteString(":0\r\n")
+		return err
+	}
+	var scratch [32]byte
+	b := scratch[:0]
+	b = append(b, ':')
+	b = strconv.AppendInt(b, int64(v), 10)
+	b = append(b, '\r', '\n')
+	_, err := w.Write(b)
 	return err
 }
 

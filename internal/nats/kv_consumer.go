@@ -177,12 +177,12 @@ func (j *jetstream) consumerCreate(path string, request map[string]any, replyTo 
 		return
 	}
 
-	subID, ch, overflow := j.conn.server.deps.Bus.SubscribeWithOverflow(filters, 1024)
+	subID, ch := j.conn.server.deps.Bus.Subscribe(filters, 65536)
 	consumer.busSubID = subID
 	j.consumers[name] = consumer
 	j.mu.Unlock()
 
-	go j.runConsumerBusReader(consumer, ch, overflow)
+	go j.runConsumerBusReader(consumer, ch)
 
 	go func() {
 		snapshotMap := make(map[string]stores.BrokerMessage)
@@ -241,14 +241,10 @@ func (j *jetstream) consumerCreate(path string, request map[string]any, replyTo 
 	}()
 }
 
-func (j *jetstream) runConsumerBusReader(c *Consumer, ch <-chan stores.BrokerMessage, overflow <-chan struct{}) {
+func (j *jetstream) runConsumerBusReader(c *Consumer, ch <-chan stores.BrokerMessage) {
 	for {
 		select {
 		case <-c.stopCh:
-			return
-		case <-overflow:
-			_ = j.conn.writeError("Slow Consumer")
-			j.conn.close()
 			return
 		case msg, ok := <-ch:
 			if !ok {
@@ -268,13 +264,9 @@ func (j *jetstream) runConsumerBusReader(c *Consumer, ch <-chan stores.BrokerMes
 
 			c.mu.Lock()
 			if !c.ready {
-				if len(c.pendingLive) >= 1024 {
-					c.mu.Unlock()
-					_ = j.conn.writeError("Slow Consumer")
-					j.conn.close()
-					return
+				if len(c.pendingLive) < 65536 {
+					c.pendingLive = append(c.pendingLive, msg)
 				}
-				c.pendingLive = append(c.pendingLive, msg)
 				c.mu.Unlock()
 			} else {
 				c.mu.Unlock()

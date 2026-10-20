@@ -657,24 +657,45 @@ func (pk *Packet) PingrespDecode(buf []byte) error {
 
 // PublishEncode encodes a Publish packet.
 func (pk *Packet) PublishEncode(buf *bytes.Buffer) error {
+	if pk.FixedHeader.Qos > 0 && pk.PacketID == 0 {
+		return ErrProtocolViolationNoPacketID // [MQTT-2.2.1-2]
+	}
+
+	topicLen := len(pk.TopicName)
+	if pk.ProtocolVersion != 5 {
+		rem := 2 + topicLen + len(pk.Payload)
+		if pk.FixedHeader.Qos > 0 {
+			rem += 2
+		}
+		pk.FixedHeader.Remaining = rem
+		pk.FixedHeader.Encode(buf)
+		buf.WriteByte(byte(topicLen >> 8))
+		buf.WriteByte(byte(topicLen))
+		buf.WriteString(pk.TopicName) // [MQTT-3.3.2-1]
+		if pk.FixedHeader.Qos > 0 {
+			buf.WriteByte(byte(pk.PacketID >> 8))
+			buf.WriteByte(byte(pk.PacketID))
+		}
+		buf.Write(pk.Payload)
+		return nil
+	}
+
 	nb := mempool.GetBuffer()
 	defer mempool.PutBuffer(nb)
 
-	nb.Write(encodeString(pk.TopicName)) // [MQTT-3.3.2-1]
+	nb.WriteByte(byte(topicLen >> 8))
+	nb.WriteByte(byte(topicLen))
+	nb.WriteString(pk.TopicName) // [MQTT-3.3.2-1]
 
 	if pk.FixedHeader.Qos > 0 {
-		if pk.PacketID == 0 {
-			return ErrProtocolViolationNoPacketID // [MQTT-2.2.1-2]
-		}
-		nb.Write(encodeUint16(pk.PacketID))
+		nb.WriteByte(byte(pk.PacketID >> 8))
+		nb.WriteByte(byte(pk.PacketID))
 	}
 
-	if pk.ProtocolVersion == 5 {
-		pb := mempool.GetBuffer()
-		defer mempool.PutBuffer(pb)
-		pk.Properties.Encode(pk.FixedHeader.Type, pk.Mods, pb, nb.Len()+len(pk.Payload))
-		nb.Write(pb.Bytes())
-	}
+	pb := mempool.GetBuffer()
+	defer mempool.PutBuffer(pb)
+	pk.Properties.Encode(pk.FixedHeader.Type, pk.Mods, pb, nb.Len()+len(pk.Payload))
+	nb.Write(pb.Bytes())
 
 	pk.FixedHeader.Remaining = nb.Len() + len(pk.Payload)
 	pk.FixedHeader.Encode(buf)

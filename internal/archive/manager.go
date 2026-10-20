@@ -73,6 +73,7 @@ type Manager struct {
 	mu           sync.RWMutex
 	oa           *oastore.ReadOptions
 	groups       map[string]*Group
+	groupsSnap   atomic.Pointer[[]*Group]
 	groupCount   atomic.Int32      // mirrors len(groups) for the lock-free HasGroups probe
 	deployError  map[string]string // last deploy error per group name (for the dashboard)
 	onChange     func()            // PeerLink interest routing: the group filters may have changed
@@ -281,7 +282,7 @@ func (m *Manager) startGroup(ctx context.Context, c stores.ArchiveGroupConfig) e
 	g.Start()
 	m.mu.Lock()
 	m.groups[c.Name] = g
-	m.groupCount.Store(int32(len(m.groups)))
+	m.refreshGroupsSnapLocked()
 	delete(m.deployError, c.Name)
 	m.mu.Unlock()
 	closeOnErr = false
@@ -654,7 +655,7 @@ func (m *Manager) Reload(ctx context.Context) error {
 			g.Stop()
 			m.mu.Lock()
 			delete(m.groups, name)
-			m.groupCount.Store(int32(len(m.groups)))
+			m.refreshGroupsSnapLocked()
 			m.mu.Unlock()
 		}
 	}
@@ -713,11 +714,22 @@ func configsEqual(a, b stores.ArchiveGroupConfig) bool {
 	return true
 }
 
+func (m *Manager) refreshGroupsSnapLocked() {
+	snap := make([]*Group, 0, len(m.groups))
+	for _, g := range m.groups {
+		snap = append(snap, g)
+	}
+	m.groupsSnap.Store(&snap)
+	m.groupCount.Store(int32(len(snap)))
+}
+
 // Dispatch routes msg to every matching group.
 func (m *Manager) Dispatch(msg stores.BrokerMessage) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	for _, g := range m.groups {
+	snap := m.groupsSnap.Load()
+	if snap == nil {
+		return
+	}
+	for _, g := range *snap {
 		if g.Matches(msg.TopicName, msg.IsRetain) {
 			g.Submit(msg)
 		}
@@ -731,7 +743,7 @@ func (m *Manager) Stop() {
 		g.Stop()
 	}
 	m.groups = map[string]*Group{}
-	m.groupCount.Store(0)
+	m.refreshGroupsSnapLocked()
 }
 
 // Snapshot returns a stable view of the current groups for resolvers.
@@ -754,11 +766,13 @@ func (m *Manager) Get(name string) *Group {
 // ByRedisDB returns the running group whose effective RedisDbNumber is db, or nil.
 // If duplicates appear after start, the lowest group name wins and a warning is logged once per DB.
 func (m *Manager) ByRedisDB(db int) *Group {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	snap := m.groupsSnap.Load()
+	if snap == nil {
+		return nil
+	}
 	var best *Group
 	dupCount := 0
-	for _, g := range m.groups {
+	for _, g := range *snap {
 		eff := g.Config().EffectiveRedisDbNumber()
 		if eff != nil && *eff == db {
 			if best == nil || g.Name() < best.Name() {

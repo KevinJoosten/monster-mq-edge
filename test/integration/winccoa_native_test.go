@@ -621,7 +621,10 @@ func TestNativeRestoreBatches(t *testing.T) {
 func TestNativeOverload(t *testing.T) {
 	sim, client := newSim(8)
 	defer sim.Close()
-	env := startNative(t, 27108, filepath.Join(t.TempDir(), "n.db"), sim, client, nil, broker.Options{})
+	env := startNative(t, 27108, filepath.Join(t.TempDir(), "n.db"), sim, client, func(c *config.Config) {
+		zero := 0
+		c.WinCCOaNative.WriteBatchMs = &zero
+	}, broker.Options{})
 	defer env.srv.Close()
 
 	c, _ := dialRaw(t, env.port, rawConnect{ClientID: "ov", Version: 5, Clean: true})

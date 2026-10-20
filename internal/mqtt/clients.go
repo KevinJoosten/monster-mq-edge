@@ -34,28 +34,41 @@ type ReadFn func(*Client, packets.Packet) error
 // Clients contains a map of the clients known by the broker.
 type Clients struct {
 	internal map[string]*Client // clients known by the broker, keyed on client id.
+	snap     atomic.Pointer[map[string]*Client]
 	sync.RWMutex
 }
 
 // NewClients returns an instance of Clients.
 func NewClients() *Clients {
-	return &Clients{
+	c := &Clients{
 		internal: make(map[string]*Client),
 	}
+	empty := make(map[string]*Client)
+	c.snap.Store(&empty)
+	return c
+}
+
+func (cl *Clients) refreshSnapLocked() {
+	m := make(map[string]*Client, len(cl.internal))
+	for k, v := range cl.internal {
+		m[k] = v
+	}
+	cl.snap.Store(&m)
 }
 
 // Add adds a new client to the clients map, keyed on client id.
 func (cl *Clients) Add(val *Client) {
 	cl.Lock()
-	defer cl.Unlock()
 	cl.internal[val.ID] = val
+	cl.refreshSnapLocked()
+	cl.Unlock()
 }
 
 // GetAll returns all the clients.
 func (cl *Clients) GetAll() map[string]*Client {
 	cl.RLock()
 	defer cl.RUnlock()
-	m := map[string]*Client{}
+	m := make(map[string]*Client, len(cl.internal))
 	for k, v := range cl.internal {
 		m[k] = v
 	}
@@ -64,6 +77,10 @@ func (cl *Clients) GetAll() map[string]*Client {
 
 // Get returns the value of a client if it exists.
 func (cl *Clients) Get(id string) (*Client, bool) {
+	if s := cl.snap.Load(); s != nil {
+		val, ok := (*s)[id]
+		return val, ok
+	}
 	cl.RLock()
 	defer cl.RUnlock()
 	val, ok := cl.internal[id]
@@ -72,17 +89,20 @@ func (cl *Clients) Get(id string) (*Client, bool) {
 
 // Len returns the length of the clients map.
 func (cl *Clients) Len() int {
+	if s := cl.snap.Load(); s != nil {
+		return len(*s)
+	}
 	cl.RLock()
 	defer cl.RUnlock()
-	val := len(cl.internal)
-	return val
+	return len(cl.internal)
 }
 
 // Delete removes a client from the internal map.
 func (cl *Clients) Delete(id string) {
 	cl.Lock()
-	defer cl.Unlock()
 	delete(cl.internal, id)
+	cl.refreshSnapLocked()
+	cl.Unlock()
 }
 
 // GetByListener returns clients matching a listener id.
@@ -151,9 +171,12 @@ type ClientState struct {
 	packetID        uint32               // the current highest packetID
 	open            context.Context      // indicate that the client is open for packet exchange
 	cancelOpen      context.CancelFunc   // cancel function for open context
-	outboundQty     int32                // number of messages currently in the outbound queue
-	Keepalive       uint16               // the number of seconds the connection can wait
-	ServerKeepalive bool                 // keepalive was set by the server
+	outboundQty       int32                // number of messages currently in the outbound queue
+	writeOverloaded   atomic.Bool          // true while outbound queue is dropping packets
+	droppedInOverload atomic.Int64         // packets dropped during current overload window
+	lastDeadline      int64                // last unix second and keepalive applied via SetDeadline
+	Keepalive         uint16               // the number of seconds the connection can wait
+	ServerKeepalive   bool                 // keepalive was set by the server
 }
 
 // newClient returns a new instance of Client. This is almost exclusively used by Server
@@ -187,19 +210,185 @@ func newClient(c net.Conn, o *ops) *Client {
 	return cl
 }
 
+var outboundPacketPool = sync.Pool{
+	New: func() any {
+		return new(packets.Packet)
+	},
+}
+
 // WriteLoop ranges over pending outbound messages and writes them to the client connection.
 func (cl *Client) WriteLoop() {
+	overloadRecoveryThreshold := cap(cl.State.outbound) / 4
 	for {
 		select {
 		case pk := <-cl.State.outbound:
-			if err := cl.WritePacket(*pk); err != nil {
-				// TODO : Figure out what to do with error
-				cl.ops.log.Debug("failed publishing packet", "error", err, "client", cl.ID, "packet", pk)
+			cl.writeOutboundBatch(pk)
+			if cl.State.writeOverloaded.Load() && len(cl.State.outbound) <= overloadRecoveryThreshold {
+				if cl.State.writeOverloaded.CompareAndSwap(true, false) {
+					dropped := cl.State.droppedInOverload.Swap(0)
+					cl.ops.log.Info("client outbound write queue overload cleared", "client", cl.ID, "dropped", dropped)
+				}
 			}
-			atomic.AddInt32(&cl.State.outboundQty, -1)
 		case <-cl.State.open.Done():
 			return
 		}
+	}
+}
+
+// writeOutboundBatch encodes first and any immediately queued packets into
+// cl.Net.outbuf and flushes once when the queue is drained or the buffer fills.
+func (cl *Client) writeOutboundBatch(first *packets.Packet) {
+	if cl.Closed() || cl.Net.Conn == nil {
+		*first = packets.Packet{}
+		outboundPacketPool.Put(first)
+		atomic.AddInt32(&cl.State.outboundQty, -1)
+		return
+	}
+
+	hasEncodeHook := cl.ops.hooks.Provides(OnPacketEncode)
+	hasSentHook := cl.ops.hooks.Provides(OnPacketSent)
+	maxBuf := cl.ops.options.ClientNetWriteBufferSize
+	if maxBuf <= 0 {
+		maxBuf = 65536
+	}
+
+	var (
+		totalBytes   int64
+		totalPackets int64
+		totalPublish int64
+		dequeued     int32
+		nowUnix      int64
+	)
+
+	cl.Lock()
+	if cl.Net.outbuf == nil {
+		cl.Net.outbuf = bytes.NewBuffer(make([]byte, 0, maxBuf))
+	}
+
+	pk := first
+	for {
+		dequeued++
+		if pk.Expiry > 0 {
+			if nowUnix == 0 {
+				nowUnix = time.Now().Unix()
+			}
+			expiry := pk.Expiry - nowUnix
+			if expiry < 1 {
+				expiry = 1
+			}
+			pk.Properties.MessageExpiryInterval = uint32(expiry)
+		}
+		pk.ProtocolVersion = cl.Properties.ProtocolVersion
+		if pk.Mods.MaxSize == 0 {
+			pk.Mods.MaxSize = cl.Properties.Props.MaximumPacketSize
+		}
+		if cl.Properties.Props.RequestProblemInfoFlag && cl.Properties.Props.RequestProblemInfo == 0x0 {
+			pk.Mods.DisallowProblemInfo = true
+		}
+		if pk.FixedHeader.Type != packets.Connack || cl.Properties.Props.RequestResponseInfo == 0x1 || cl.ops.options.Capabilities.Compatibilities.AlwaysReturnResponseInfo {
+			pk.Mods.AllowResponseInfo = true
+		}
+		if hasEncodeHook {
+			*pk = cl.ops.hooks.OnPacketEncode(cl, *pk)
+		}
+
+		startLen := cl.Net.outbuf.Len()
+		var err error
+		if pk.FixedHeader.Type == packets.Publish {
+			err = pk.PublishEncode(cl.Net.outbuf)
+		} else {
+			err = encodeOtherPacket(pk, cl.Net.outbuf)
+		}
+		if err == nil {
+			pktLen := cl.Net.outbuf.Len() - startLen
+			if pk.Mods.MaxSize > 0 && uint32(pktLen) > pk.Mods.MaxSize {
+				cl.Net.outbuf.Truncate(startLen)
+			} else {
+				totalBytes += int64(pktLen)
+				totalPackets++
+				if pk.FixedHeader.Type == packets.Publish {
+					totalPublish++
+				}
+				if hasSentHook {
+					raw := cl.Net.outbuf.Bytes()[startLen:]
+					cl.ops.hooks.OnPacketSent(cl, *pk, raw)
+				}
+			}
+		}
+
+		*pk = packets.Packet{}
+		outboundPacketPool.Put(pk)
+
+		if cl.Net.outbuf.Len() >= maxBuf {
+			_ = cl.flushOutbuf()
+		}
+
+		// Drain up to 256 packets per lock acquisition if more are waiting
+		if dequeued >= 256 {
+			break
+		}
+		select {
+		case next := <-cl.State.outbound:
+			pk = next
+		default:
+			pk = nil
+		}
+		if pk == nil {
+			break
+		}
+	}
+
+	if cl.Net.outbuf.Len() > 0 && (len(cl.State.outbound) == 0 || cl.Net.outbuf.Len() >= maxBuf) {
+		_ = cl.flushOutbuf()
+	}
+	cl.Unlock()
+
+	atomic.AddInt32(&cl.State.outboundQty, -dequeued)
+	if totalBytes > 0 {
+		atomic.AddInt64(&cl.ops.info.BytesSent, totalBytes)
+	}
+	if totalPackets > 0 {
+		atomic.AddInt64(&cl.ops.info.PacketsSent, totalPackets)
+	}
+	if totalPublish > 0 {
+		atomic.AddInt64(&cl.ops.info.MessagesSent, totalPublish)
+	}
+}
+
+func encodeOtherPacket(pk *packets.Packet, buf *bytes.Buffer) error {
+	switch pk.FixedHeader.Type {
+	case packets.Connect:
+		return pk.ConnectEncode(buf)
+	case packets.Connack:
+		return pk.ConnackEncode(buf)
+	case packets.Publish:
+		return pk.PublishEncode(buf)
+	case packets.Puback:
+		return pk.PubackEncode(buf)
+	case packets.Pubrec:
+		return pk.PubrecEncode(buf)
+	case packets.Pubrel:
+		return pk.PubrelEncode(buf)
+	case packets.Pubcomp:
+		return pk.PubcompEncode(buf)
+	case packets.Subscribe:
+		return pk.SubscribeEncode(buf)
+	case packets.Suback:
+		return pk.SubackEncode(buf)
+	case packets.Unsubscribe:
+		return pk.UnsubscribeEncode(buf)
+	case packets.Unsuback:
+		return pk.UnsubackEncode(buf)
+	case packets.Pingreq:
+		return pk.PingreqEncode(buf)
+	case packets.Pingresp:
+		return pk.PingrespEncode(buf)
+	case packets.Disconnect:
+		return pk.DisconnectEncode(buf)
+	case packets.Auth:
+		return pk.AuthEncode(buf)
+	default:
+		return fmt.Errorf("%w: %v", packets.ErrNoValidPacketAvailable, pk.FixedHeader.Type)
 	}
 }
 
@@ -257,14 +446,23 @@ func (cl *Client) ParseConnect(lid string, pk packets.Packet) {
 
 // refreshDeadline refreshes the read/write deadline for the net.Conn connection.
 func (cl *Client) refreshDeadline(keepalive uint16) {
-	var expiry time.Time // nil time can be used to disable deadline if keepalive = 0
-	if keepalive > 0 {
-		expiry = time.Now().Add(time.Duration(keepalive+(keepalive/2)) * time.Second) // [MQTT-3.1.2-22]
+	if cl.Net.Conn == nil {
+		return
 	}
-
-	if cl.Net.Conn != nil {
-		_ = cl.Net.Conn.SetDeadline(expiry) // [MQTT-3.1.2-22]
+	if keepalive == 0 {
+		if atomic.SwapInt64(&cl.State.lastDeadline, -1) != -1 {
+			_ = cl.Net.Conn.SetDeadline(time.Time{}) // [MQTT-3.1.2-22]
+		}
+		return
 	}
+	now := time.Now()
+	stamp := (now.Unix() << 16) | int64(keepalive)
+	if atomic.LoadInt64(&cl.State.lastDeadline) == stamp {
+		return
+	}
+	atomic.StoreInt64(&cl.State.lastDeadline, stamp)
+	expiry := now.Add(time.Duration(keepalive+(keepalive/2)) * time.Second) // [MQTT-3.1.2-22]
+	_ = cl.Net.Conn.SetDeadline(expiry)                                     // [MQTT-3.1.2-22]
 }
 
 // NextPacketID returns the next available (unused) packet id for the client.
@@ -368,6 +566,7 @@ func (cl *Client) ClearExpiredInflights(now, maximumExpiry int64) []uint16 {
 // packets to be handled by the packetHandler.
 func (cl *Client) Read(packetHandler ReadFn) error {
 	var err error
+	var fh packets.FixedHeader
 
 	for {
 		if cl.Closed() {
@@ -375,13 +574,13 @@ func (cl *Client) Read(packetHandler ReadFn) error {
 		}
 
 		cl.refreshDeadline(cl.State.Keepalive)
-		fh := new(packets.FixedHeader)
-		err = cl.ReadFixedHeader(fh)
+		fh = packets.FixedHeader{}
+		err = cl.ReadFixedHeader(&fh)
 		if err != nil {
 			return keepaliveErr(err)
 		}
 
-		pk, err := cl.ReadPacket(fh)
+		pk, err := cl.ReadPacket(&fh)
 		if err != nil {
 			return keepaliveErr(err)
 		}
@@ -617,7 +816,7 @@ func (cl *Client) WritePacket(pk packets.Packet) error {
 		cl.Lock()
 		defer cl.Unlock()
 		if len(cl.State.outbound) == 0 {
-			if cl.Net.outbuf == nil {
+			if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
 				return buf.WriteTo(cl.Net.Conn)
 			}
 
@@ -628,11 +827,13 @@ func (cl *Client) WritePacket(pk packets.Packet) error {
 		}
 
 		// there are more writes in the queue
-		if cl.Net.outbuf == nil {
+		if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
 			if buf.Len() >= cl.ops.options.ClientNetWriteBufferSize {
 				return buf.WriteTo(cl.Net.Conn)
 			}
-			cl.Net.outbuf = new(bytes.Buffer)
+			if cl.Net.outbuf == nil {
+				cl.Net.outbuf = bytes.NewBuffer(make([]byte, 0, cl.ops.options.ClientNetWriteBufferSize))
+			}
 		}
 
 		n, _ := cl.Net.outbuf.Write(buf.Bytes()) // will always be successful
@@ -659,13 +860,13 @@ func (cl *Client) WritePacket(pk packets.Packet) error {
 }
 
 func (cl *Client) flushOutbuf() (err error) {
-	if cl.Net.outbuf == nil {
+	if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
 		return
 	}
 
 	_, err = cl.Net.outbuf.WriteTo(cl.Net.Conn)
 	if err == nil {
-		cl.Net.outbuf = nil
+		cl.Net.outbuf.Reset()
 	}
 	return
 }

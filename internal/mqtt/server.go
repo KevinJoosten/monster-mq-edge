@@ -67,7 +67,7 @@ func NewDefaultServerCapabilities() *Capabilities {
 	return &Capabilities{
 		MaximumClients:               math.MaxInt64,  // maximum number of connected clients
 		MaximumMessageExpiryInterval: 60 * 60 * 24,   // maximum message expiry if message expiry is 0 or over
-		MaximumClientWritesPending:   1024 * 8,       // maximum number of pending message writes for a client
+		MaximumClientWritesPending:   1024 * 64,      // maximum number of pending message writes for a client
 		MaximumSessionExpiryInterval: math.MaxUint32, // maximum number of seconds to keep disconnected sessions
 		MaximumPacketSize:            0,              // no maximum packet size
 		maximumPacketID:              math.MaxUint16,
@@ -243,11 +243,11 @@ func (o *Options) ensureDefaults() {
 	}
 
 	if o.ClientNetWriteBufferSize == 0 {
-		o.ClientNetWriteBufferSize = 1024 * 2
+		o.ClientNetWriteBufferSize = 1024 * 64
 	}
 
 	if o.ClientNetReadBufferSize == 0 {
-		o.ClientNetReadBufferSize = 1024 * 2
+		o.ClientNetReadBufferSize = 1024 * 64
 	}
 
 	if o.Logger == nil {
@@ -1034,7 +1034,7 @@ func (s *Server) processPublish(cl *Client, pk packets.Packet) error {
 
 	s.stampPublish(cl, &pk)
 
-	if !cl.Net.Inline {
+	if !cl.Net.Inline && pk.FixedHeader.Qos > 0 {
 		if pki, ok := cl.State.Inflight.Get(pk.PacketID); ok {
 			if pki.FixedHeader.Type == packets.Pubrec { // [MQTT-4.3.3-10]
 				ack := s.buildAck(pk.PacketID, packets.Pubrec, 0, pk.Properties, packets.ErrPacketIdentifierInUse)
@@ -1267,8 +1267,8 @@ func (s *Server) publishToSubscribers(pk packets.Packet) {
 	for id, subs := range subscribers.Subscriptions {
 		if cl, ok := s.Clients.Get(id); ok {
 			_, err := s.publishToClient(cl, subs, pk)
-			if err != nil {
-				s.Log.Debug("failed publishing packet", "error", err, "client", cl.ID, "packet", pk)
+			if err != nil && !errors.Is(err, packets.ErrPendingClientWritesExceeded) {
+				s.Log.Debug("failed publishing packet", "error", err, "client", cl.ID, "topic", pk.TopicName)
 			}
 		}
 	}
@@ -1280,52 +1280,82 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 		return pk, nil // [MQTT-3.8.3-3]
 	}
 
-	out := pk.Copy(false)
 	if !s.hooks.OnACLCheck(cl, pk.TopicName, false) {
-		return out, packets.ErrNotAuthorized
+		return packets.Packet{}, packets.ErrNotAuthorized
 	}
+
+	outPtr := outboundPacketPool.Get().(*packets.Packet)
+	*outPtr = packets.Packet{
+		FixedHeader: packets.FixedHeader{
+			Remaining: pk.FixedHeader.Remaining,
+			Type:      pk.FixedHeader.Type,
+			Retain:    pk.FixedHeader.Retain,
+			Dup:       false, // [MQTT-4.3.1-1] [MQTT-4.3.2-2]
+			Qos:       pk.FixedHeader.Qos,
+		},
+		Mods: packets.Mods{
+			MaxSize: pk.Mods.MaxSize,
+		},
+		ReservedBit:     pk.ReservedBit,
+		ProtocolVersion: pk.ProtocolVersion,
+		TopicName:       pk.TopicName,
+		Payload:         pk.Payload,
+		Properties:      pk.Properties.Copy(false),
+		SessionPresent:  pk.SessionPresent,
+		ReasonCode:      pk.ReasonCode,
+		Created:         pk.Created,
+		Expiry:          pk.Expiry,
+		Origin:          pk.Origin,
+	}
+
 	if !sub.FwdRetainedFlag && ((cl.Properties.ProtocolVersion == 5 && !sub.RetainAsPublished) || cl.Properties.ProtocolVersion < 5) { // ![MQTT-3.3.1-13] [v3 MQTT-3.3.1-9]
-		out.FixedHeader.Retain = false // [MQTT-3.3.1-12]
+		outPtr.FixedHeader.Retain = false // [MQTT-3.3.1-12]
 	}
 
 	if ids := sub.SubscriptionIdentifiers(); len(ids) > 0 { // [MQTT-3.3.4-3]
-		out.Properties.SubscriptionIdentifier = ids // [MQTT-3.3.4-4] ![MQTT-3.3.4-5]
+		outPtr.Properties.SubscriptionIdentifier = ids // [MQTT-3.3.4-4] ![MQTT-3.3.4-5]
 	}
 
-	if out.FixedHeader.Qos > sub.Qos {
-		out.FixedHeader.Qos = sub.Qos
+	if outPtr.FixedHeader.Qos > sub.Qos {
+		outPtr.FixedHeader.Qos = sub.Qos
 	}
 
-	if out.FixedHeader.Qos > s.Options.Capabilities.MaximumQos {
-		out.FixedHeader.Qos = s.Options.Capabilities.MaximumQos // [MQTT-3.2.2-9]
+	if outPtr.FixedHeader.Qos > s.Options.Capabilities.MaximumQos {
+		outPtr.FixedHeader.Qos = s.Options.Capabilities.MaximumQos // [MQTT-3.2.2-9]
 	}
 
 	if cl.Properties.Props.TopicAliasMaximum > 0 {
 		var aliasExists bool
-		out.Properties.TopicAlias, aliasExists = cl.State.TopicAliases.Outbound.Set(pk.TopicName)
-		if out.Properties.TopicAlias > 0 {
-			out.Properties.TopicAliasFlag = true
+		outPtr.Properties.TopicAlias, aliasExists = cl.State.TopicAliases.Outbound.Set(pk.TopicName)
+		if outPtr.Properties.TopicAlias > 0 {
+			outPtr.Properties.TopicAliasFlag = true
 			if aliasExists {
-				out.TopicName = ""
+				outPtr.TopicName = ""
 			}
 		}
 	}
 
-	if out.FixedHeader.Qos > 0 {
+	if outPtr.FixedHeader.Qos > 0 {
 		if (cl.Net.Conn == nil || cl.Closed()) && s.hooks.Provides(StoredQueuedMessages) {
-			return out, packets.CodeDisconnect
+			res := *outPtr
+			*outPtr = packets.Packet{}
+			outboundPacketPool.Put(outPtr)
+			return res, packets.CodeDisconnect
 		}
 		if pk.Forward != nil && !s.Options.QueueOfflineReplicas && (cl.Net.Conn == nil || cl.Closed()) {
-			// A PeerLink replica is not backlogged for a session that is offline here: the client
-			// may have received it live on the peer it moved to (plan 12.4, Receive.Queue).
-			return out, nil
+			res := *outPtr
+			*outPtr = packets.Packet{}
+			outboundPacketPool.Put(outPtr)
+			return res, nil
 		}
 
 		if cl.State.Inflight.Len() >= int(s.Options.Capabilities.MaximumInflight) {
-			// add hook?
 			atomic.AddInt64(&s.Info.InflightDropped, 1)
 			s.Log.Warn("client store quota reached", "client", cl.ID, "listener", cl.Net.Listener)
-			return out, packets.ErrQuotaExceeded
+			res := *outPtr
+			*outPtr = packets.Packet{}
+			outboundPacketPool.Put(outPtr)
+			return res, packets.ErrQuotaExceeded
 		}
 
 		i, err := cl.NextPacketID() // [MQTT-4.3.2-1] [MQTT-4.3.3-1]
@@ -1333,43 +1363,59 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 			s.hooks.OnPacketIDExhausted(cl, pk)
 			atomic.AddInt64(&s.Info.InflightDropped, 1)
 			s.Log.Warn("packet ids exhausted", "error", err, "client", cl.ID, "listener", cl.Net.Listener)
-			return out, packets.ErrQuotaExceeded
+			res := *outPtr
+			*outPtr = packets.Packet{}
+			outboundPacketPool.Put(outPtr)
+			return res, packets.ErrQuotaExceeded
 		}
 
-		out.PacketID = uint16(i) // [MQTT-2.2.1-4]
-		added, deferred := cl.State.Inflight.SetOutbound(out)
+		outPtr.PacketID = uint16(i) // [MQTT-2.2.1-4]
+		added, deferred := cl.State.Inflight.SetOutbound(*outPtr)
 		if deferred {
-			out.Expiry = -1
+			outPtr.Expiry = -1
 		}
 		if added { // [MQTT-4.3.2-3] [MQTT-4.3.3-3]
 			atomic.AddInt64(&s.Info.Inflight, 1)
-			s.hooks.OnQosPublish(cl, out, out.Created, 0)
+			s.hooks.OnQosPublish(cl, *outPtr, outPtr.Created, 0)
 		}
 		if deferred {
-			return out, nil
+			res := *outPtr
+			*outPtr = packets.Packet{}
+			outboundPacketPool.Put(outPtr)
+			return res, nil
 		}
 	}
 
 	if cl.Net.Conn == nil || cl.Closed() {
-		return out, packets.CodeDisconnect
+		res := *outPtr
+		*outPtr = packets.Packet{}
+		outboundPacketPool.Put(outPtr)
+		return res, packets.CodeDisconnect
 	}
 
+	res := *outPtr
 	select {
-	case cl.State.outbound <- &out:
+	case cl.State.outbound <- outPtr:
 		atomic.AddInt32(&cl.State.outboundQty, 1)
 	default:
+		*outPtr = packets.Packet{}
+		outboundPacketPool.Put(outPtr)
 		atomic.AddInt64(&s.Info.MessagesDropped, 1)
+		cl.State.droppedInOverload.Add(1)
+		if cl.State.writeOverloaded.CompareAndSwap(false, true) {
+			s.Log.Warn("client outbound write queue overloaded; dropping packets", "client", cl.ID, "topic", pk.TopicName)
+		}
 		cl.ops.hooks.OnPublishDropped(cl, pk)
-		if out.FixedHeader.Qos > 0 {
-			if cl.State.Inflight.Delete(out.PacketID) { // packet was dropped due to irregular circumstances, so rollback inflight.
+		if res.FixedHeader.Qos > 0 {
+			if cl.State.Inflight.Delete(res.PacketID) { // packet was dropped due to irregular circumstances, so rollback inflight.
 				atomic.AddInt64(&s.Info.Inflight, -1)
 			}
 			cl.State.Inflight.IncreaseSendQuota()
 		}
-		return out, packets.ErrPendingClientWritesExceeded
+		return res, packets.ErrPendingClientWritesExceeded
 	}
 
-	return out, nil
+	return res, nil
 }
 
 func (s *Server) publishRetainedToClient(cl *Client, sub packets.Subscription, existed bool) {

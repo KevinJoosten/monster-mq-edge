@@ -904,9 +904,10 @@ func (s *Service) deleteTopic(ctx context.Context, sysDP string, wait bool) (Ver
 const maxWriteBatchItems = 1000
 
 type waitWriteReq struct {
-	names []string
-	vals  []oahost.Value
-	done  chan error
+	names      []string
+	vals       []oahost.Value
+	enqueuedAt time.Time
+	done       chan error
 }
 
 // enqueueWrite queues names and vals into the write collector when
@@ -959,7 +960,7 @@ func (s *Service) enqueueWrite(names []string, vals []oahost.Value, wait bool) f
 		noWaitNames, noWaitVals = s.noWaitNames, s.noWaitVals
 		s.noWaitNames, s.noWaitVals = nil, nil
 	}
-	s.waitReqs = append(s.waitReqs, waitWriteReq{names: names, vals: vals, done: ch})
+	s.waitReqs = append(s.waitReqs, waitWriteReq{names: names, vals: vals, enqueuedAt: time.Now(), done: ch})
 	s.waitItemCount += len(names)
 	if s.waitItemCount >= maxWriteBatchItems {
 		if s.waitTimer != nil {
@@ -980,12 +981,7 @@ func (s *Service) enqueueWrite(names []string, vals []oahost.Value, wait bool) f
 		s.sendWaitBatch(flushReqs)
 	}
 	return func(ctx context.Context) error {
-		select {
-		case err := <-ch:
-			return err
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+		return <-ch
 	}
 }
 
@@ -1063,6 +1059,13 @@ func (s *Service) sendNoWaitBatch(names []string, vals []oahost.Value) {
 }
 
 func (s *Service) sendWaitBatch(reqs []waitWriteReq) {
+	rem := s.opts.WriteTimeout - time.Since(reqs[0].enqueuedAt)
+	if rem <= 0 {
+		for _, r := range reqs {
+			r.done <- oahost.ErrTimeout
+		}
+		return
+	}
 	total := 0
 	for _, r := range reqs {
 		total += len(r.names)
@@ -1073,9 +1076,9 @@ func (s *Service) sendWaitBatch(reqs []waitWriteReq) {
 		names = append(names, r.names...)
 		vals = append(vals, r.vals...)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), s.opts.WriteTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), rem)
 	defer cancel()
-	err := s.api.DpSet(ctx, names, vals, s.opts.WriteTimeout)
+	err := s.api.DpSet(ctx, names, vals, rem)
 	if errors.Is(err, oahost.ErrNotFound) {
 		s.mu.Lock()
 		for _, n := range names {

@@ -3,6 +3,7 @@ package mqtt
 import (
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"monstermq.io/edge/internal/mqtt/packets"
 )
@@ -11,6 +12,7 @@ import (
 type Inflight struct {
 	sync.RWMutex
 	internal            map[uint16]packets.Packet // internal contains the inflight packets
+	deferredCount       atomic.Int32              // number of entries with Expiry < 0
 	quotaMu             sync.Mutex                // protects quota fields
 	receiveQuota        int32                     // remaining inbound qos quota for flow control
 	sendQuota           int32                     // remaining outbound qos quota for flow control
@@ -30,7 +32,13 @@ func (i *Inflight) Set(m packets.Packet) bool {
 	i.Lock()
 	defer i.Unlock()
 
-	_, ok := i.internal[m.PacketID]
+	prev, ok := i.internal[m.PacketID]
+	if ok && prev.Expiry < 0 {
+		i.deferredCount.Add(-1)
+	}
+	if m.Expiry < 0 {
+		i.deferredCount.Add(1)
+	}
 	i.internal[m.PacketID] = m
 	return !ok
 }
@@ -62,6 +70,9 @@ func (i *Inflight) Clone() *Inflight {
 	defer i.RUnlock()
 	for k, v := range i.internal {
 		c.internal[k] = v
+		if v.Expiry < 0 {
+			c.deferredCount.Add(1)
+		}
 	}
 	return c
 }
@@ -118,7 +129,13 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 		}
 	}
 
-	_, existed := i.internal[m.PacketID]
+	prev, existed := i.internal[m.PacketID]
+	if existed && prev.Expiry < 0 {
+		i.deferredCount.Add(-1)
+	}
+	if m.Expiry < 0 {
+		i.deferredCount.Add(1)
+	}
 	i.internal[m.PacketID] = m
 	return !existed, deferred
 }
@@ -127,6 +144,10 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 // reserves one unit of send quota, restores the packet's normal expiry using expiryFn,
 // updates it in-place in the inflight map, and returns it.
 func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (packets.Packet, bool) {
+	if i.deferredCount.Load() == 0 {
+		return packets.Packet{}, false
+	}
+
 	i.Lock()
 	defer i.Unlock()
 	i.quotaMu.Lock()
@@ -154,6 +175,7 @@ func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (pack
 	if i.maximumSendQuota > 0 {
 		i.sendQuota--
 	}
+	i.deferredCount.Add(-1)
 	next.Expiry = 0
 	if expiryFn != nil {
 		if exp := expiryFn(next); exp > 0 {
@@ -169,7 +191,10 @@ func (i *Inflight) Delete(id uint16) bool {
 	i.Lock()
 	defer i.Unlock()
 
-	_, ok := i.internal[id]
+	prev, ok := i.internal[id]
+	if ok && prev.Expiry < 0 {
+		i.deferredCount.Add(-1)
+	}
 	delete(i.internal, id)
 
 	return ok

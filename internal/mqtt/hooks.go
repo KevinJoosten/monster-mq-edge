@@ -124,13 +124,16 @@ type HookOptions struct {
 	Capabilities *Capabilities
 }
 
+type hookEventTable [64][]Hook
+
 // Hooks is a slice of Hook interfaces to be called in sequence.
 type Hooks struct {
-	Log        *slog.Logger   // a logger for the hook (from the server)
-	internal   atomic.Value   // a slice of []Hook
-	wg         sync.WaitGroup // a waitgroup for syncing hook shutdown
-	qty        int64          // the number of hooks in use
-	sync.Mutex                // a mutex for locking when adding hooks
+	Log        *slog.Logger                   // a logger for the hook (from the server)
+	internal   atomic.Value                   // a slice of []Hook
+	byEvent    atomic.Pointer[hookEventTable] // pre-indexed hooks per event byte
+	wg         sync.WaitGroup                 // a waitgroup for syncing hook shutdown
+	qty        int64                          // the number of hooks in use
+	sync.Mutex                                // a mutex for locking when adding hooks
 }
 
 // Len returns the number of hooks added.
@@ -138,8 +141,23 @@ func (h *Hooks) Len() int64 {
 	return atomic.LoadInt64(&h.qty)
 }
 
+func (h *Hooks) getFor(b byte) []Hook {
+	if tbl := h.byEvent.Load(); tbl != nil && int(b) < len(tbl) {
+		return tbl[b]
+	}
+	return nil
+}
+
 // Provides returns true if any one hook provides any of the requested hook methods.
 func (h *Hooks) Provides(b ...byte) bool {
+	if tbl := h.byEvent.Load(); tbl != nil {
+		for _, hb := range b {
+			if int(hb) < len(tbl) && len(tbl[hb]) > 0 {
+				return true
+			}
+		}
+		return false
+	}
 	for _, hook := range h.GetAll() {
 		for _, hb := range b {
 			if hook.Provides(hb) {
@@ -168,6 +186,17 @@ func (h *Hooks) Add(hook Hook, config any) error {
 
 	i = append(i, hook)
 	h.internal.Store(i)
+
+	tbl := new(hookEventTable)
+	for ev := byte(0); int(ev) < len(tbl); ev++ {
+		for _, hk := range i {
+			if hk.Provides(ev) {
+				tbl[ev] = append(tbl[ev], hk)
+			}
+		}
+	}
+	h.byEvent.Store(tbl)
+
 	atomic.AddInt64(&h.qty, 1)
 	h.wg.Add(1)
 
@@ -271,18 +300,16 @@ func (h *Hooks) OnDisconnect(cl *Client, err error, expire bool) {
 // OnPacketRead is called when a packet is received from a client.
 func (h *Hooks) OnPacketRead(cl *Client, pk packets.Packet) (pkx packets.Packet, err error) {
 	pkx = pk
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPacketRead) {
-			npk, err := hook.OnPacketRead(cl, pkx)
-			if err != nil && errors.Is(err, packets.ErrRejectPacket) {
-				h.Log.Debug("packet rejected", "hook", hook.ID(), "packet", pkx)
-				return pk, err
-			} else if err != nil {
-				continue
-			}
-
-			pkx = npk
+	for _, hook := range h.getFor(OnPacketRead) {
+		npk, err := hook.OnPacketRead(cl, pkx)
+		if err != nil && errors.Is(err, packets.ErrRejectPacket) {
+			h.Log.Debug("packet rejected", "hook", hook.ID(), "packet", pkx)
+			return pk, err
+		} else if err != nil {
+			continue
 		}
+
+		pkx = npk
 	}
 
 	return
@@ -308,10 +335,8 @@ func (h *Hooks) OnAuthPacket(cl *Client, pk packets.Packet) (pkx packets.Packet,
 
 // OnPacketEncode is called immediately before a packet is encoded to be sent to a client.
 func (h *Hooks) OnPacketEncode(cl *Client, pk packets.Packet) packets.Packet {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPacketEncode) {
-			pk = hook.OnPacketEncode(cl, pk)
-		}
+	for _, hook := range h.getFor(OnPacketEncode) {
+		pk = hook.OnPacketEncode(cl, pk)
 	}
 
 	return pk
@@ -319,20 +344,16 @@ func (h *Hooks) OnPacketEncode(cl *Client, pk packets.Packet) packets.Packet {
 
 // OnPacketProcessed is called when a packet has been received and successfully handled by the broker.
 func (h *Hooks) OnPacketProcessed(cl *Client, pk packets.Packet, err error) {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPacketProcessed) {
-			hook.OnPacketProcessed(cl, pk, err)
-		}
+	for _, hook := range h.getFor(OnPacketProcessed) {
+		hook.OnPacketProcessed(cl, pk, err)
 	}
 }
 
 // OnPacketSent is called when a packet has been sent to a client. It takes a bytes parameter
 // containing the bytes sent.
 func (h *Hooks) OnPacketSent(cl *Client, pk packets.Packet, b []byte) {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPacketSent) {
-			hook.OnPacketSent(cl, pk, b)
-		}
+	for _, hook := range h.getFor(OnPacketSent) {
+		hook.OnPacketSent(cl, pk, b)
 	}
 }
 
@@ -377,10 +398,8 @@ func (h *Hooks) OnSubscribeValidate(cl *Client, sub packets.Subscription) packet
 // remove or add clients to a publish to subscribers process, or to select the subscriber for a shared
 // group in a custom manner (such as based on client id, ip, etc).
 func (h *Hooks) OnSelectSubscribers(subs *Subscribers, pk packets.Packet) *Subscribers {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnSelectSubscribers) {
-			subs = hook.OnSelectSubscribers(subs, pk)
-		}
+	for _, hook := range h.getFor(OnSelectSubscribers) {
+		subs = hook.OnSelectSubscribers(subs, pk)
 	}
 	return subs
 }
@@ -412,8 +431,8 @@ func (h *Hooks) OnUnsubscribed(cl *Client, pk packets.Packet, reasonCodes []byte
 // The return values of the hook methods are passed-through in the order the hooks were attached.
 func (h *Hooks) OnPublish(cl *Client, pk packets.Packet) (pkx packets.Packet, err error) {
 	pkx = pk
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPublish) {
+	for _, hook := range h.getFor(OnPublish) {
+		{
 			npk, err := hook.OnPublish(cl, pkx)
 			if err != nil {
 				if errors.Is(err, packets.ErrRejectPacket) {
@@ -447,20 +466,16 @@ func (h *Hooks) OnPublish(cl *Client, pk packets.Packet) (pkx packets.Packet, er
 
 // OnPublished is called when a client has published a message to subscribers.
 func (h *Hooks) OnPublished(cl *Client, pk packets.Packet) {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPublished) {
-			hook.OnPublished(cl, pk)
-		}
+	for _, hook := range h.getFor(OnPublished) {
+		hook.OnPublished(cl, pk)
 	}
 }
 
 // OnPublishDropped is called when a message to a client was dropped instead of delivered
 // such as when a client is too slow to respond.
 func (h *Hooks) OnPublishDropped(cl *Client, pk packets.Packet) {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnPublishDropped) {
-			hook.OnPublishDropped(cl, pk)
-		}
+	for _, hook := range h.getFor(OnPublishDropped) {
+		hook.OnPublishDropped(cl, pk)
 	}
 }
 
@@ -713,11 +728,9 @@ func (h *Hooks) OnConnectAuthenticate(cl *Client, pk packets.Packet) bool {
 // (see hooks/auth/allow_all or basic). It can be used in custom hooks to
 // check publishing and subscribing users against an existing permissions or roles database.
 func (h *Hooks) OnACLCheck(cl *Client, topic string, write bool) bool {
-	for _, hook := range h.GetAll() {
-		if hook.Provides(OnACLCheck) {
-			if ok := hook.OnACLCheck(cl, topic, write); ok {
-				return true
-			}
+	for _, hook := range h.getFor(OnACLCheck) {
+		if ok := hook.OnACLCheck(cl, topic, write); ok {
+			return true
 		}
 	}
 

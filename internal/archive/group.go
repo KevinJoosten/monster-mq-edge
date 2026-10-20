@@ -17,9 +17,16 @@ import (
 // are buffered and flushed on a tick to amortize disk I/O. If configured with a
 // QueueType ("MEMORY" or "DISK"), store-and-forward is used so messages are not lost
 // if the target archive store is temporarily unavailable.
+type fastSingleMessageStore interface {
+	PutOne(m stores.BrokerMessage)
+	DelOne(topic string)
+}
+
 type Group struct {
-	cfg      stores.ArchiveGroupConfig
-	lastVal  stores.MessageStore
+	cfg         stores.ArchiveGroupConfig
+	trimFilters []string
+	lastVal     stores.MessageStore
+	fastLastVal fastSingleMessageStore
 	archive  stores.MessageArchive
 	queue    queue.MessageQueue
 	logger   *slog.Logger
@@ -44,16 +51,23 @@ type MetricsSnapshot struct {
 }
 
 func NewGroup(cfg stores.ArchiveGroupConfig, lastVal stores.MessageStore, archive stores.MessageArchive, logger *slog.Logger, closers ...func() error) *Group {
+	trimFilters := make([]string, len(cfg.TopicFilters))
+	for i, f := range cfg.TopicFilters {
+		trimFilters[i] = strings.TrimSpace(f)
+	}
+	fastLV, _ := lastVal.(fastSingleMessageStore)
 	g := &Group{
-		cfg:      cfg,
-		lastVal:  lastVal,
-		archive:  archive,
-		logger:   logger,
-		flushCh:  make(chan struct{}, 1),
-		stopCh:   make(chan struct{}),
-		doneCh:   make(chan struct{}),
-		flushDur: 250 * time.Millisecond,
-		closers:  closers,
+		cfg:         cfg,
+		trimFilters: trimFilters,
+		lastVal:     lastVal,
+		fastLastVal: fastLV,
+		archive:     archive,
+		logger:      logger,
+		flushCh:     make(chan struct{}, 1),
+		stopCh:      make(chan struct{}),
+		doneCh:      make(chan struct{}),
+		flushDur:    250 * time.Millisecond,
+		closers:     closers,
 	}
 
 	qType := strings.ToUpper(strings.TrimSpace(cfg.QueueType))
@@ -145,11 +159,11 @@ func (g *Group) Matches(topic string, retain bool) bool {
 // MatchesFilter reports whether topic matches the group's topic filters.
 // Unlike Matches it ignores the read-only and retained-only flags.
 func (g *Group) MatchesFilter(topic string) bool {
-	if len(g.cfg.TopicFilters) == 0 {
+	if len(g.trimFilters) == 0 {
 		return true
 	}
-	for _, f := range g.cfg.TopicFilters {
-		if matchTopic(strings.TrimSpace(f), topic) {
+	for _, f := range g.trimFilters {
+		if matchTopic(f, topic) {
 			return true
 		}
 	}
@@ -159,17 +173,25 @@ func (g *Group) MatchesFilter(topic string) bool {
 func (g *Group) Submit(msg stores.BrokerMessage) {
 	g.outCount.Add(1)
 	if g.lastVal != nil && !g.cfg.LastValReadOnly {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if len(msg.Payload) == 0 {
-			if err := g.lastVal.DelAll(ctx, []string{msg.TopicName}); err != nil && g.logger != nil {
-				g.logger.Warn("archive lastval delete failed", "group", g.cfg.Name, "err", err)
+		if g.fastLastVal != nil {
+			if len(msg.Payload) == 0 {
+				g.fastLastVal.DelOne(msg.TopicName)
+			} else {
+				g.fastLastVal.PutOne(msg)
 			}
 		} else {
-			if err := g.lastVal.AddAll(ctx, []stores.BrokerMessage{msg}); err != nil && g.logger != nil {
-				g.logger.Warn("archive lastval write failed", "group", g.cfg.Name, "err", err)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			if len(msg.Payload) == 0 {
+				if err := g.lastVal.DelAll(ctx, []string{msg.TopicName}); err != nil && g.logger != nil {
+					g.logger.Warn("archive lastval delete failed", "group", g.cfg.Name, "err", err)
+				}
+			} else {
+				if err := g.lastVal.AddAll(ctx, []stores.BrokerMessage{msg}); err != nil && g.logger != nil {
+					g.logger.Warn("archive lastval write failed", "group", g.cfg.Name, "err", err)
+				}
 			}
+			cancel()
 		}
-		cancel()
 	}
 	if g.archive == nil || g.cfg.ArchiveReadOnly {
 		return
@@ -291,21 +313,36 @@ func (g *Group) flushQueue() {
 }
 
 func matchTopic(pattern, topic string) bool {
-	pp := strings.Split(pattern, "/")
-	tt := strings.Split(topic, "/")
-	for i, p := range pp {
-		if p == "#" {
+	if pattern == "#" {
+		return true
+	}
+	for {
+		var pSeg string
+		pSlash := strings.IndexByte(pattern, '/')
+		if pSlash >= 0 {
+			pSeg = pattern[:pSlash]
+		} else {
+			pSeg = pattern
+		}
+		if pSeg == "#" {
 			return true
 		}
-		if i >= len(tt) {
+
+		var tSeg string
+		tSlash := strings.IndexByte(topic, '/')
+		if tSlash >= 0 {
+			tSeg = topic[:tSlash]
+		} else {
+			tSeg = topic
+		}
+
+		if pSeg != "+" && pSeg != tSeg {
 			return false
 		}
-		if p == "+" {
-			continue
+		if pSlash < 0 || tSlash < 0 {
+			return pSlash < 0 && tSlash < 0
 		}
-		if p != tt[i] {
-			return false
-		}
+		pattern = pattern[pSlash+1:]
+		topic = topic[tSlash+1:]
 	}
-	return len(pp) == len(tt)
 }

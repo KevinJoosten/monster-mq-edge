@@ -11,10 +11,16 @@ import (
 // Bus is an in-process pub/sub used by GraphQL subscriptions to deliver
 // MQTT-style topic events. Subscribers can express MQTT-style topic filters
 // (with + and # wildcards).
+type busSnapshot struct {
+	exact    map[string][]*sub
+	wildcard []*sub
+}
+
 type Bus struct {
 	mu       sync.RWMutex
 	next     int
 	subs     map[int]*sub
+	snap     atomic.Pointer[busSnapshot]
 	count    atomic.Int32
 	observer Observer
 	interest InterestHook
@@ -40,8 +46,22 @@ type sub struct {
 	filters  []string
 	local    bool
 	ch       chan stores.BrokerMessage
+	fn       func(stores.BrokerMessage)
 	overflow chan struct{}
 	once     sync.Once
+}
+
+func (s *sub) deliver(msg stores.BrokerMessage) {
+	if s.fn != nil {
+		s.fn(msg)
+		return
+	}
+	select {
+	case s.ch <- msg:
+	default:
+		// drop on slow subscriber to keep the broker hot path nonblocking
+		s.once.Do(func() { close(s.overflow) })
+	}
 }
 
 func NewBus() *Bus { return &Bus{subs: map[int]*sub{}} }
@@ -63,6 +83,45 @@ func (b *Bus) SubscribeLocal(filters []string, buffer int) (id int, ch <-chan st
 	return id, ch
 }
 
+func (b *Bus) SubscribeFunc(filters []string, fn func(stores.BrokerMessage)) int {
+	b.mu.Lock()
+	b.next++
+	id := b.next
+	s := &sub{filters: filters, fn: fn}
+	b.subs[id] = s
+	b.rebuildSnapshotLocked()
+	o := b.observer
+	ih := b.interest
+	b.mu.Unlock()
+	if o != nil && len(filters) > 0 {
+		o.FiltersAdded(filters)
+	}
+	if ih != nil && len(filters) > 0 {
+		ih.Subscribed(id, filters)
+	}
+	return id
+}
+
+func (b *Bus) rebuildSnapshotLocked() {
+	b.count.Store(int32(len(b.subs)))
+	if len(b.subs) == 0 {
+		b.snap.Store(nil)
+		return
+	}
+	snap := &busSnapshot{
+		exact: make(map[string][]*sub),
+	}
+	for _, s := range b.subs {
+		if len(s.filters) == 1 && !strings.ContainsAny(s.filters[0], "+#") {
+			f := s.filters[0]
+			snap.exact[f] = append(snap.exact[f], s)
+		} else {
+			snap.wildcard = append(snap.wildcard, s)
+		}
+	}
+	b.snap.Store(snap)
+}
+
 func (b *Bus) subscribe(filters []string, buffer int, local bool) (id int, ch <-chan stores.BrokerMessage, overflow <-chan struct{}) {
 	if buffer <= 0 {
 		buffer = 16
@@ -73,7 +132,7 @@ func (b *Bus) subscribe(filters []string, buffer int, local bool) (id int, ch <-
 	id = b.next
 	s := &sub{filters: filters, local: local, ch: c, overflow: make(chan struct{})}
 	b.subs[id] = s
-	b.count.Store(int32(len(b.subs)))
+	b.rebuildSnapshotLocked()
 	o := b.observer
 	ih := b.interest
 	b.mu.Unlock()
@@ -109,16 +168,12 @@ func (b *Bus) Validate(filters []string) error {
 // subscribe time. It reports false when the subscriber is gone.
 func (b *Bus) Deliver(id int, msg stores.BrokerMessage) bool {
 	b.mu.RLock()
-	defer b.mu.RUnlock()
 	s, ok := b.subs[id]
+	b.mu.RUnlock()
 	if !ok {
 		return false
 	}
-	select {
-	case s.ch <- msg:
-	default:
-		s.once.Do(func() { close(s.overflow) })
-	}
+	s.deliver(msg)
 	return true
 }
 
@@ -155,9 +210,11 @@ func (b *Bus) Unsubscribe(id int) {
 	b.mu.Lock()
 	s, ok := b.subs[id]
 	if ok {
-		close(s.ch)
+		if s.ch != nil {
+			close(s.ch)
+		}
 		delete(b.subs, id)
-		b.count.Store(int32(len(b.subs)))
+		b.rebuildSnapshotLocked()
 	}
 	o := b.observer
 	ih := b.interest
@@ -171,16 +228,18 @@ func (b *Bus) Unsubscribe(id int) {
 }
 
 func (b *Bus) Publish(msg stores.BrokerMessage) {
-	b.mu.RLock()
-	defer b.mu.RUnlock()
-	for _, s := range b.subs {
+	snap := b.snap.Load()
+	if snap == nil {
+		return
+	}
+	if subs := snap.exact[msg.TopicName]; len(subs) > 0 {
+		for _, s := range subs {
+			s.deliver(msg)
+		}
+	}
+	for _, s := range snap.wildcard {
 		if anyMatch(s.filters, msg.TopicName) {
-			select {
-			case s.ch <- msg:
-			default:
-				// drop on slow subscriber to keep the broker hot path nonblocking
-				s.once.Do(func() { close(s.overflow) })
-			}
+			s.deliver(msg)
 		}
 	}
 }
@@ -195,21 +254,33 @@ func anyMatch(filters []string, topic string) bool {
 }
 
 func matchTopic(pattern, topic string) bool {
-	pp := strings.Split(pattern, "/")
-	tt := strings.Split(topic, "/")
-	for i, p := range pp {
-		if p == "#" {
+	if pattern == "#" || pattern == topic {
+		return true
+	}
+	pi, ti := 0, 0
+	plen, tlen := len(pattern), len(topic)
+	for pi <= plen {
+		ps := pi
+		for pi < plen && pattern[pi] != '/' {
+			pi++
+		}
+		pseg := pattern[ps:pi]
+		if pseg == "#" {
 			return true
 		}
-		if i >= len(tt) {
+		if ti > tlen {
 			return false
 		}
-		if p == "+" {
-			continue
+		ts := ti
+		for ti < tlen && topic[ti] != '/' {
+			ti++
 		}
-		if p != tt[i] {
+		tseg := topic[ts:ti]
+		if pseg != "+" && pseg != tseg {
 			return false
 		}
+		pi++
+		ti++
 	}
-	return len(pp) == len(tt)
+	return ti > tlen
 }

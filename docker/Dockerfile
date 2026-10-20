@@ -9,6 +9,9 @@ ARG VERSION
 WORKDIR /src
 RUN apk add --no-cache ca-certificates
 
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
 RUN mkdir -p /out/cfg-data && \
     case "${TARGETARCH}${TARGETVARIANT}" in \
@@ -34,6 +37,7 @@ COPY --from=build /out/cfg-data /cfg-data
 COPY --from=build /out/monstermq-edge /monstermq-edge
 COPY docker/config.yaml /etc/monstermq/config.yaml
 COPY docker/entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 
 EXPOSE 1883 1884 8080
 

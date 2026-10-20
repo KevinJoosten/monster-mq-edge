@@ -20,6 +20,13 @@ type subKey struct {
 	name      string
 }
 
+type pubSubDelivery struct {
+	holder    *subscriptionHolder
+	isPattern bool
+	pattern   string
+	msg       stores.BrokerMessage
+}
+
 type Conn struct {
 	server            *Server
 	id                int64
@@ -36,6 +43,12 @@ type Conn struct {
 	sessionRegistered bool
 	subs              map[subKey]*subscriptionHolder
 	subsMu            sync.Mutex
+	subCh             chan pubSubDelivery
+	subWriterOnce     sync.Once
+	subStopCh         chan struct{}
+	subOverloaded     atomic.Bool
+	subDropped        atomic.Int64
+	lastWriteDeadline int64
 	subSeq            atomic.Int64
 	closed            atomic.Bool
 	closeOnce         sync.Once
@@ -43,6 +56,7 @@ type Conn struct {
 
 type subscriptionHolder struct {
 	id     uint64
+	active atomic.Bool
 	cancel func()
 }
 
@@ -57,6 +71,7 @@ func newConn(server *Server, id int64, rwc net.Conn) *Conn {
 		writer:      bufio.NewWriterSize(rwc, 65536),
 		selectedDb:  server.deps.Cfg.RedisServer.DefaultDb,
 		subs:        make(map[subKey]*subscriptionHolder),
+		subStopCh:   make(chan struct{}),
 	}
 
 	requireAuth := server.deps.Cfg.RedisServer.EffectiveRequireAuth()
@@ -320,6 +335,7 @@ func (c *Conn) updateSessionInfo() {
 func (c *Conn) Close() {
 	c.closeOnce.Do(func() {
 		c.closed.Store(true)
+		close(c.subStopCh)
 
 		c.subsMu.Lock()
 		for _, holder := range c.subs {
@@ -348,10 +364,12 @@ func (c *Conn) Close() {
 }
 
 func (c *Conn) flush() error {
-	_ = c.rwc.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	err := c.writer.Flush()
-	_ = c.rwc.SetWriteDeadline(time.Time{})
-	return err
+	now := time.Now().UnixNano()
+	if now-c.lastWriteDeadline >= int64(time.Second) {
+		c.lastWriteDeadline = now
+		_ = c.rwc.SetWriteDeadline(time.Unix(0, now+int64(10*time.Second)))
+	}
+	return c.writer.Flush()
 }
 
 func (c *Conn) flushIfNeeded() {

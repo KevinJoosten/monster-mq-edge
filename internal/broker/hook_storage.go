@@ -128,6 +128,13 @@ func (h *StorageHook) Provides(b byte) bool {
 }
 
 func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
+	if h.metrics != nil && cl != nil {
+		if cc, ok := h.metrics.(interface {
+			ClientCounters(string) (*atomic.Int64, *atomic.Int64)
+		}); ok {
+			cl.State.MetricClientIn, cl.State.MetricClientOut = cc.ClientCounters(cl.ID)
+		}
+	}
 	ctx := context.Background()
 	if cl.Properties.Clean {
 		if err := h.store.Sessions.DelClient(ctx, cl.ID); err != nil {
@@ -250,6 +257,10 @@ func (h *StorageHook) StoredClientByID(id string, username []byte) (string, []st
 
 func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
 	if h.metrics != nil {
+		if cl != nil {
+			cl.State.MetricClientIn = nil
+			cl.State.MetricClientOut = nil
+		}
 		h.metrics.ForgetClient(cl.ID)
 	}
 	if expire {
@@ -332,7 +343,33 @@ func (h *StorageHook) OnPacketSent(cl *mqtt.Client, pk packets.Packet, _ []byte)
 	if h.metrics != nil && pk.FixedHeader.Type == packets.Publish {
 		h.metrics.IncOut()
 		if cl != nil {
-			h.metrics.IncClientOut(cl.ID)
+			if cl.State.MetricClientOut != nil {
+				cl.State.MetricClientOut.Add(1)
+			} else {
+				h.metrics.IncClientOut(cl.ID)
+			}
+		}
+	}
+}
+
+func (h *StorageHook) OnPublishBatchSent(cl *mqtt.Client, count int64) {
+	if h.metrics == nil || count <= 0 {
+		return
+	}
+	if ba, ok := h.metrics.(interface{ AddOut(int64) }); ok {
+		ba.AddOut(count)
+	} else {
+		for i := int64(0); i < count; i++ {
+			h.metrics.IncOut()
+		}
+	}
+	if cl != nil {
+		if cl.State.MetricClientOut != nil {
+			cl.State.MetricClientOut.Add(count)
+		} else {
+			for i := int64(0); i < count; i++ {
+				h.metrics.IncClientOut(cl.ID)
+			}
 		}
 	}
 }
@@ -347,7 +384,11 @@ func (h *StorageHook) OnPublished(cl *mqtt.Client, pk packets.Packet) {
 			h.metrics.IncIn()
 		}
 		if !cl.Net.Inline {
-			h.metrics.IncClientIn(cl.ID)
+			if cl.State.MetricClientIn != nil {
+				cl.State.MetricClientIn.Add(1)
+			} else {
+				h.metrics.IncClientIn(cl.ID)
+			}
 		}
 	}
 	if pk.Ignore && h.replicated != nil && h.replicated(pk.TopicName) {

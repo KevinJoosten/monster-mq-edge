@@ -48,7 +48,16 @@ func decodeString(buf []byte, offset int) (string, int, error) {
 
 // validUTF8 checks if the byte array contains valid UTF-8 characters.
 func validUTF8(b []byte) bool {
-	return utf8.Valid(b) && bytes.IndexByte(b, 0x00) == -1 // [MQTT-1.5.4-1] [MQTT-1.5.4-2]
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if c == 0 {
+			return false // [MQTT-1.5.4-2]
+		}
+		if c >= utf8.RuneSelf {
+			return utf8.Valid(b[i:]) && bytes.IndexByte(b[i:], 0x00) == -1 // [MQTT-1.5.4-1] [MQTT-1.5.4-2]
+		}
+	}
+	return true
 }
 
 // decodeBytes extracts a byte array from a byte array, beginning at an offset. Used primarily for message payloads.

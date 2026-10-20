@@ -68,6 +68,7 @@ func New(store stores.MetricsStore, nodeID string, interval time.Duration, logge
 
 func (c *Collector) IncIn()              { c.in.Add(1) }
 func (c *Collector) IncOut()             { c.out.Add(1) }
+func (c *Collector) AddOut(n int64)      { c.out.Add(n) }
 func (c *Collector) IncBridgeIn(n int)   { c.mqttBridgeIn.Add(int64(n)) }
 func (c *Collector) IncBridgeOut(n int)  { c.mqttBridgeOut.Add(int64(n)) }
 func (c *Collector) IncKafkaIn(n int)    { c.kafkaIn.Add(int64(n)) }
@@ -95,6 +96,13 @@ func (c *Collector) client(id string) *clientCounter {
 	}
 	v, _ := c.clients.LoadOrStore(id, &clientCounter{})
 	return v.(*clientCounter)
+}
+
+// ClientCounters returns the raw atomic in/out counters for a client so callers
+// on the hot path can cache them on the client state without sync.Map lookups.
+func (c *Collector) ClientCounters(id string) (in, out *atomic.Int64) {
+	cc := c.client(id)
+	return &cc.in, &cc.out
 }
 
 // IncClientIn counts one message published by a client.

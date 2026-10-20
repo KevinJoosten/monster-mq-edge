@@ -119,12 +119,23 @@ type Hook interface {
 	StoredClientByID(id string, username []byte) (string, []storage.Subscription, []storage.Message, error)
 }
 
+// PublishBatchSentHook is an optional interface for hooks that only need the
+// count of outbound PUBLISH packets sent in a batch, avoiding per-packet
+// OnPacketSent struct copies and raw slice views in writeOutboundBatch.
+type PublishBatchSentHook interface {
+	OnPublishBatchSent(cl *Client, count int64)
+}
+
 // HookOptions contains values which are inherited from the server on initialisation.
 type HookOptions struct {
 	Capabilities *Capabilities
 }
 
-type hookEventTable [64][]Hook
+type hookEventTable struct {
+	events         [64][]Hook
+	rawPacketSent  []Hook
+	batchPublish   []PublishBatchSentHook
+}
 
 // Hooks is a slice of Hook interfaces to be called in sequence.
 type Hooks struct {
@@ -142,17 +153,25 @@ func (h *Hooks) Len() int64 {
 }
 
 func (h *Hooks) getFor(b byte) []Hook {
-	if tbl := h.byEvent.Load(); tbl != nil && int(b) < len(tbl) {
-		return tbl[b]
+	if tbl := h.byEvent.Load(); tbl != nil && int(b) < len(tbl.events) {
+		return tbl.events[b]
 	}
 	return nil
+}
+
+// HasRawPacketSent reports whether any hook provides OnPacketSent without implementing PublishBatchSentHook.
+func (h *Hooks) HasRawPacketSent() bool {
+	if tbl := h.byEvent.Load(); tbl != nil {
+		return len(tbl.rawPacketSent) > 0
+	}
+	return false
 }
 
 // Provides returns true if any one hook provides any of the requested hook methods.
 func (h *Hooks) Provides(b ...byte) bool {
 	if tbl := h.byEvent.Load(); tbl != nil {
 		for _, hb := range b {
-			if int(hb) < len(tbl) && len(tbl[hb]) > 0 {
+			if int(hb) < len(tbl.events) && len(tbl.events[hb]) > 0 {
 				return true
 			}
 		}
@@ -188,11 +207,18 @@ func (h *Hooks) Add(hook Hook, config any) error {
 	h.internal.Store(i)
 
 	tbl := new(hookEventTable)
-	for ev := byte(0); int(ev) < len(tbl); ev++ {
+	for ev := byte(0); int(ev) < len(tbl.events); ev++ {
 		for _, hk := range i {
 			if hk.Provides(ev) {
-				tbl[ev] = append(tbl[ev], hk)
+				tbl.events[ev] = append(tbl.events[ev], hk)
 			}
+		}
+	}
+	for _, hk := range tbl.events[OnPacketSent] {
+		if bh, ok := hk.(PublishBatchSentHook); ok {
+			tbl.batchPublish = append(tbl.batchPublish, bh)
+		} else {
+			tbl.rawPacketSent = append(tbl.rawPacketSent, hk)
 		}
 	}
 	h.byEvent.Store(tbl)
@@ -354,6 +380,24 @@ func (h *Hooks) OnPacketProcessed(cl *Client, pk packets.Packet, err error) {
 func (h *Hooks) OnPacketSent(cl *Client, pk packets.Packet, b []byte) {
 	for _, hook := range h.getFor(OnPacketSent) {
 		hook.OnPacketSent(cl, pk, b)
+	}
+}
+
+// OnRawPacketSent calls only hooks that provide OnPacketSent without implementing PublishBatchSentHook.
+func (h *Hooks) OnRawPacketSent(cl *Client, pk packets.Packet, b []byte) {
+	if tbl := h.byEvent.Load(); tbl != nil {
+		for _, hook := range tbl.rawPacketSent {
+			hook.OnPacketSent(cl, pk, b)
+		}
+	}
+}
+
+// OnPublishBatchSent notifies PublishBatchSentHook implementations of the number of PUBLISH packets sent in a batch.
+func (h *Hooks) OnPublishBatchSent(cl *Client, count int64) {
+	if tbl := h.byEvent.Load(); tbl != nil {
+		for _, hook := range tbl.batchPublish {
+			hook.OnPublishBatchSent(cl, count)
+		}
 	}
 }
 

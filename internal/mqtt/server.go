@@ -807,18 +807,20 @@ func (s *Server) processPacket(cl *Client, pk packets.Packet) error {
 		return err
 	}
 
-	if next, ok := cl.State.Inflight.ClaimNextImmediate(func(p packets.Packet) int64 {
-		if expiry := minimum(s.Options.Capabilities.MaximumMessageExpiryInterval,
-			int64(p.Properties.MessageExpiryInterval)); expiry > 0 {
-			base := p.Created
-			if base <= 0 {
-				base = time.Now().Unix()
+	if cl.State.Inflight.HasDeferred() {
+		if next, ok := cl.State.Inflight.ClaimNextImmediate(func(p packets.Packet) int64 {
+			if expiry := minimum(s.Options.Capabilities.MaximumMessageExpiryInterval,
+				int64(p.Properties.MessageExpiryInterval)); expiry > 0 {
+				base := p.Created
+				if base <= 0 {
+					base = time.Now().Unix()
+				}
+				return base + expiry
 			}
-			return base + expiry
+			return 0
+		}); ok {
+			_ = cl.WritePacket(next)
 		}
-		return 0
-	}); ok {
-		_ = cl.WritePacket(next)
 	}
 
 	return nil
@@ -1234,9 +1236,25 @@ func retainStripe(topic string) int {
 	return int(h % 64)
 }
 
+func matchClientWildcards(subs []packets.Subscription, topic string) (packets.Subscription, bool) {
+	var matched packets.Subscription
+	found := false
+	for i := range subs {
+		if matchMQTTTopic(subs[i].Filter, topic) {
+			if !found {
+				matched = subs[i]
+				found = true
+			} else {
+				matched = matched.Merge(subs[i])
+			}
+		}
+	}
+	return matched, found
+}
+
 // publishToSubscribers publishes a publish packet to all subscribers with matching topic filters.
 func (s *Server) publishToSubscribers(pk packets.Packet) {
-	if pk.Ignore {
+	if pk.Ignore || len(pk.TopicName) == 0 {
 		return
 	}
 
@@ -1249,6 +1267,93 @@ func (s *Server) publishToSubscribers(pk packets.Packet) {
 			int64(pk.Properties.MessageExpiryInterval)); expiry > 0 {
 			pk.Expiry = pk.Created + expiry
 		}
+	}
+
+	wSnap := s.Topics.wildcardSnap.Load()
+	if wSnap == nil || len(wSnap.shared) == 0 {
+		entry := s.Topics.getExact(pk.TopicName)
+		if entry != nil {
+			for i := range entry.inline {
+				inl := &entry.inline[i]
+				inl.Handler(s.inlineClient, inl.Subscription, pk)
+			}
+		}
+		if wSnap != nil {
+			for i := range wSnap.inline {
+				inl := &wSnap.inline[i]
+				if matchMQTTTopic(inl.Filter, pk.TopicName) {
+					inl.Handler(s.inlineClient, inl.Subscription, pk)
+				}
+			}
+		}
+
+		clientsSnap := s.Clients.snap.Load()
+		deliver := func(clientID string, sub packets.Subscription) {
+			var cl *Client
+			var exists bool
+			if clientsSnap != nil {
+				cl, exists = (*clientsSnap)[clientID]
+			} else {
+				cl, exists = s.Clients.Get(clientID)
+			}
+			if exists {
+				err := s.publishToClientFast(cl, sub, &pk)
+				if err != nil && !errors.Is(err, packets.ErrPendingClientWritesExceeded) {
+					s.Log.Debug("failed publishing packet", "error", err, "client", cl.ID, "topic", pk.TopicName)
+				}
+			}
+		}
+
+		hasExact := entry != nil && len(entry.subs) > 0
+		hasWild := wSnap != nil && len(wSnap.clients) > 0
+
+		if hasExact && !hasWild {
+			for i := range entry.subs {
+				deliver(entry.subs[i].client, entry.subs[i].sub)
+			}
+			return
+		}
+		if !hasExact && hasWild {
+			for i := range wSnap.clients {
+				wc := &wSnap.clients[i]
+				if sub, ok := matchClientWildcards(wc.subs, pk.TopicName); ok {
+					deliver(wc.client, sub)
+				}
+			}
+			return
+		}
+		if hasExact && hasWild {
+			for i := range entry.subs {
+				cs := &entry.subs[i]
+				sub := cs.sub
+				for j := range wSnap.clients {
+					if wSnap.clients[j].client == cs.client {
+						if wsub, ok := matchClientWildcards(wSnap.clients[j].subs, pk.TopicName); ok {
+							sub = sub.Merge(wsub)
+						}
+						break
+					}
+				}
+				deliver(cs.client, sub)
+			}
+			for i := range wSnap.clients {
+				wc := &wSnap.clients[i]
+				inExact := false
+				for j := range entry.subs {
+					if entry.subs[j].client == wc.client {
+						inExact = true
+						break
+					}
+				}
+				if !inExact {
+					if sub, ok := matchClientWildcards(wc.subs, pk.TopicName); ok {
+						deliver(wc.client, sub)
+					}
+				}
+			}
+			return
+		}
+		return
 	}
 
 	subscribers := s.Topics.Subscribers(pk.TopicName)
@@ -1266,7 +1371,7 @@ func (s *Server) publishToSubscribers(pk packets.Packet) {
 
 	for id, subs := range subscribers.Subscriptions {
 		if cl, ok := s.Clients.Get(id); ok {
-			_, err := s.publishToClient(cl, subs, pk)
+			err := s.publishToClientFast(cl, subs, &pk)
 			if err != nil && !errors.Is(err, packets.ErrPendingClientWritesExceeded) {
 				s.Log.Debug("failed publishing packet", "error", err, "client", cl.ID, "topic", pk.TopicName)
 			}
@@ -1274,10 +1379,37 @@ func (s *Server) publishToSubscribers(pk packets.Packet) {
 	}
 }
 
+func resetOutboundPacket(pk *packets.Packet) {
+	if pk.Properties.HasPublishProperties() {
+		pk.Properties = packets.Properties{}
+	}
+	pk.TopicName = ""
+	pk.Payload = nil
+	pk.Origin = ""
+	pk.Forward = nil
+	pk.Source = nil
+	pk.Filters = nil
+	pk.ReasonCodes = nil
+	outboundPacketPool.Put(pk)
+}
+
+// publishToClientFast delivers a published message to a single subscriber client without returning a Packet copy by value.
+func (s *Server) publishToClientFast(cl *Client, sub packets.Subscription, pk *packets.Packet) error {
+	_, err := s.publishToClientPtr(cl, sub, pk, false)
+	return err
+}
+
 // publishToClient delivers a published message to a single subscriber client.
 func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packets.Packet) (packets.Packet, error) {
+	return s.publishToClientPtr(cl, sub, &pk, true)
+}
+
+func (s *Server) publishToClientPtr(cl *Client, sub packets.Subscription, pk *packets.Packet, wantReturnCopy bool) (packets.Packet, error) {
 	if sub.NoLocal && pk.Origin == cl.ID {
-		return pk, nil // [MQTT-3.8.3-3]
+		if wantReturnCopy {
+			return *pk, nil
+		}
+		return packets.Packet{}, nil // [MQTT-3.8.3-3]
 	}
 
 	if !s.hooks.OnACLCheck(cl, pk.TopicName, false) {
@@ -1285,35 +1417,40 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 	}
 
 	outPtr := outboundPacketPool.Get().(*packets.Packet)
-	*outPtr = packets.Packet{
-		FixedHeader: packets.FixedHeader{
-			Remaining: pk.FixedHeader.Remaining,
-			Type:      pk.FixedHeader.Type,
-			Retain:    pk.FixedHeader.Retain,
-			Dup:       false, // [MQTT-4.3.1-1] [MQTT-4.3.2-2]
-			Qos:       pk.FixedHeader.Qos,
-		},
-		Mods: packets.Mods{
-			MaxSize: pk.Mods.MaxSize,
-		},
-		ReservedBit:     pk.ReservedBit,
-		ProtocolVersion: pk.ProtocolVersion,
-		TopicName:       pk.TopicName,
-		Payload:         pk.Payload,
-		Properties:      pk.Properties.Copy(false),
-		SessionPresent:  pk.SessionPresent,
-		ReasonCode:      pk.ReasonCode,
-		Created:         pk.Created,
-		Expiry:          pk.Expiry,
-		Origin:          pk.Origin,
+	outPtr.FixedHeader = packets.FixedHeader{
+		Remaining: pk.FixedHeader.Remaining,
+		Type:      pk.FixedHeader.Type,
+		Retain:    pk.FixedHeader.Retain,
+		Dup:       false, // [MQTT-4.3.1-1] [MQTT-4.3.2-2]
+		Qos:       pk.FixedHeader.Qos,
 	}
+	outPtr.Mods = packets.Mods{
+		MaxSize: pk.Mods.MaxSize,
+	}
+	outPtr.ReservedBit = pk.ReservedBit
+	outPtr.ProtocolVersion = pk.ProtocolVersion
+	outPtr.TopicName = pk.TopicName
+	outPtr.Payload = pk.Payload
+	if pk.Properties.HasPublishProperties() {
+		outPtr.Properties = pk.Properties.Copy(false)
+	} else {
+		outPtr.Properties = packets.Properties{}
+	}
+	outPtr.PacketID = 0
+	outPtr.SessionPresent = pk.SessionPresent
+	outPtr.ReasonCode = pk.ReasonCode
+	outPtr.Created = pk.Created
+	outPtr.Expiry = pk.Expiry
+	outPtr.Origin = pk.Origin
 
 	if !sub.FwdRetainedFlag && ((cl.Properties.ProtocolVersion == 5 && !sub.RetainAsPublished) || cl.Properties.ProtocolVersion < 5) { // ![MQTT-3.3.1-13] [v3 MQTT-3.3.1-9]
 		outPtr.FixedHeader.Retain = false // [MQTT-3.3.1-12]
 	}
 
-	if ids := sub.SubscriptionIdentifiers(); len(ids) > 0 { // [MQTT-3.3.4-3]
-		outPtr.Properties.SubscriptionIdentifier = ids // [MQTT-3.3.4-4] ![MQTT-3.3.4-5]
+	if len(sub.Identifiers) > 0 || sub.Identifier > 0 {
+		if ids := sub.SubscriptionIdentifiers(); len(ids) > 0 { // [MQTT-3.3.4-3]
+			outPtr.Properties.SubscriptionIdentifier = ids // [MQTT-3.3.4-4] ![MQTT-3.3.4-5]
+		}
 	}
 
 	if outPtr.FixedHeader.Qos > sub.Qos {
@@ -1337,35 +1474,43 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 
 	if outPtr.FixedHeader.Qos > 0 {
 		if (cl.Net.Conn == nil || cl.Closed()) && s.hooks.Provides(StoredQueuedMessages) {
-			res := *outPtr
-			*outPtr = packets.Packet{}
-			outboundPacketPool.Put(outPtr)
+			var res packets.Packet
+			if wantReturnCopy {
+				res = *outPtr
+			}
+			resetOutboundPacket(outPtr)
 			return res, packets.CodeDisconnect
 		}
 		if pk.Forward != nil && !s.Options.QueueOfflineReplicas && (cl.Net.Conn == nil || cl.Closed()) {
-			res := *outPtr
-			*outPtr = packets.Packet{}
-			outboundPacketPool.Put(outPtr)
+			var res packets.Packet
+			if wantReturnCopy {
+				res = *outPtr
+			}
+			resetOutboundPacket(outPtr)
 			return res, nil
 		}
 
 		if cl.State.Inflight.Len() >= int(s.Options.Capabilities.MaximumInflight) {
 			atomic.AddInt64(&s.Info.InflightDropped, 1)
 			s.Log.Warn("client store quota reached", "client", cl.ID, "listener", cl.Net.Listener)
-			res := *outPtr
-			*outPtr = packets.Packet{}
-			outboundPacketPool.Put(outPtr)
+			var res packets.Packet
+			if wantReturnCopy {
+				res = *outPtr
+			}
+			resetOutboundPacket(outPtr)
 			return res, packets.ErrQuotaExceeded
 		}
 
 		i, err := cl.NextPacketID() // [MQTT-4.3.2-1] [MQTT-4.3.3-1]
 		if err != nil {
-			s.hooks.OnPacketIDExhausted(cl, pk)
+			s.hooks.OnPacketIDExhausted(cl, *pk)
 			atomic.AddInt64(&s.Info.InflightDropped, 1)
 			s.Log.Warn("packet ids exhausted", "error", err, "client", cl.ID, "listener", cl.Net.Listener)
-			res := *outPtr
-			*outPtr = packets.Packet{}
-			outboundPacketPool.Put(outPtr)
+			var res packets.Packet
+			if wantReturnCopy {
+				res = *outPtr
+			}
+			resetOutboundPacket(outPtr)
 			return res, packets.ErrQuotaExceeded
 		}
 
@@ -1379,33 +1524,39 @@ func (s *Server) publishToClient(cl *Client, sub packets.Subscription, pk packet
 			s.hooks.OnQosPublish(cl, *outPtr, outPtr.Created, 0)
 		}
 		if deferred {
-			res := *outPtr
-			*outPtr = packets.Packet{}
-			outboundPacketPool.Put(outPtr)
+			var res packets.Packet
+			if wantReturnCopy {
+				res = *outPtr
+			}
+			resetOutboundPacket(outPtr)
 			return res, nil
 		}
 	}
 
 	if cl.Net.Conn == nil || cl.Closed() {
-		res := *outPtr
-		*outPtr = packets.Packet{}
-		outboundPacketPool.Put(outPtr)
+		var res packets.Packet
+		if wantReturnCopy {
+			res = *outPtr
+		}
+		resetOutboundPacket(outPtr)
 		return res, packets.CodeDisconnect
 	}
 
-	res := *outPtr
+	var res packets.Packet
+	if wantReturnCopy || outPtr.FixedHeader.Qos > 0 {
+		res = *outPtr
+	}
 	select {
 	case cl.State.outbound <- outPtr:
 		atomic.AddInt32(&cl.State.outboundQty, 1)
 	default:
-		*outPtr = packets.Packet{}
-		outboundPacketPool.Put(outPtr)
+		resetOutboundPacket(outPtr)
 		atomic.AddInt64(&s.Info.MessagesDropped, 1)
 		cl.State.droppedInOverload.Add(1)
 		if cl.State.writeOverloaded.CompareAndSwap(false, true) {
 			s.Log.Warn("client outbound write queue overloaded; dropping packets", "client", cl.ID, "topic", pk.TopicName)
 		}
-		cl.ops.hooks.OnPublishDropped(cl, pk)
+		cl.ops.hooks.OnPublishDropped(cl, *pk)
 		if res.FixedHeader.Qos > 0 {
 			if cl.State.Inflight.Delete(res.PacketID) { // packet was dropped due to irregular circumstances, so rollback inflight.
 				atomic.AddInt64(&s.Info.Inflight, -1)

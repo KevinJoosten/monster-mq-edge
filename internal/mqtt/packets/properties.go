@@ -186,6 +186,22 @@ func (p *Properties) Copy(allowTransfer bool) Properties {
 	return pr
 }
 
+// HasPublishProperties reports whether any MQTT v5 property valid on a PUBLISH
+// packet is populated.
+func (p *Properties) HasPublishProperties() bool {
+	if p == nil {
+		return false
+	}
+	return p.PayloadFormatFlag ||
+		p.MessageExpiryInterval > 0 ||
+		p.ContentType != "" ||
+		p.ResponseTopic != "" ||
+		len(p.CorrelationData) > 0 ||
+		len(p.SubscriptionIdentifier) > 0 ||
+		(p.TopicAliasFlag && p.TopicAlias > 0) ||
+		len(p.User) > 0
+}
+
 // canEncode returns true if the property type is valid for the packet type.
 func (p *Properties) canEncode(pkt byte, k byte) bool {
 	return validPacketProperties[k][pkt] == 1

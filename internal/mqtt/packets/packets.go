@@ -225,7 +225,21 @@ func (pk *Packet) Copy(allowTransfer bool) Packet {
 		},
 		ReservedBit:     pk.ReservedBit,
 		ProtocolVersion: pk.ProtocolVersion,
-		Connect: ConnectParams{
+		TopicName:       strings.Clone(pk.TopicName),
+		SessionPresent:  pk.SessionPresent,
+		ReasonCode:      pk.ReasonCode,
+		Filters:         pk.Filters,
+		Created:         pk.Created,
+		Expiry:          pk.Expiry,
+		Origin:          pk.Origin,
+	}
+
+	if pk.FixedHeader.Type != Publish || pk.Properties.HasPublishProperties() {
+		p.Properties = pk.Properties.Copy(allowTransfer)
+	}
+
+	if pk.FixedHeader.Type != Publish {
+		p.Connect = ConnectParams{
 			ClientIdentifier: pk.Connect.ClientIdentifier,
 			Keepalive:        pk.Connect.Keepalive,
 			WillQos:          pk.Connect.WillQos,
@@ -234,37 +248,25 @@ func (pk *Packet) Copy(allowTransfer bool) Packet {
 			WillRetain:       pk.Connect.WillRetain,
 			WillProperties:   pk.Connect.WillProperties.Copy(allowTransfer),
 			Clean:            pk.Connect.Clean,
-		},
-		TopicName:      pk.TopicName,
-		Properties:     pk.Properties.Copy(allowTransfer),
-		SessionPresent: pk.SessionPresent,
-		ReasonCode:     pk.ReasonCode,
-		Filters:        pk.Filters,
-		Created:        pk.Created,
-		Expiry:         pk.Expiry,
-		Origin:         pk.Origin,
+		}
+		if len(pk.Connect.ProtocolName) > 0 {
+			p.Connect.ProtocolName = append([]byte{}, pk.Connect.ProtocolName...)
+		}
+		if len(pk.Connect.Password) > 0 {
+			p.Connect.PasswordFlag = true
+			p.Connect.Password = append([]byte{}, pk.Connect.Password...)
+		}
+		if len(pk.Connect.Username) > 0 {
+			p.Connect.UsernameFlag = true
+			p.Connect.Username = append([]byte{}, pk.Connect.Username...)
+		}
+		if len(pk.Connect.WillPayload) > 0 {
+			p.Connect.WillPayload = append([]byte{}, pk.Connect.WillPayload...)
+		}
 	}
 
 	if allowTransfer {
 		p.PacketID = pk.PacketID
-	}
-
-	if len(pk.Connect.ProtocolName) > 0 {
-		p.Connect.ProtocolName = append([]byte{}, pk.Connect.ProtocolName...)
-	}
-
-	if len(pk.Connect.Password) > 0 {
-		p.Connect.PasswordFlag = true
-		p.Connect.Password = append([]byte{}, pk.Connect.Password...)
-	}
-
-	if len(pk.Connect.Username) > 0 {
-		p.Connect.UsernameFlag = true
-		p.Connect.Username = append([]byte{}, pk.Connect.Username...)
-	}
-
-	if len(pk.Connect.WillPayload) > 0 {
-		p.Connect.WillPayload = append([]byte{}, pk.Connect.WillPayload...)
 	}
 
 	if len(pk.Payload) > 0 {
@@ -300,14 +302,20 @@ func (s Subscription) SubscriptionIdentifiers() []int {
 // Merge merges a new subscription with a base subscription, preserving the highest
 // qos value, matched identifiers and any special properties.
 func (s Subscription) Merge(n Subscription) Subscription {
-	if s.Identifiers == nil {
-		s.Identifiers = map[string]int{
-			s.Filter: s.Identifier,
+	if s.Identifier > 0 || n.Identifier > 0 || len(s.Identifiers) > 0 || len(n.Identifiers) > 0 {
+		if s.Identifiers == nil {
+			s.Identifiers = map[string]int{
+				s.Filter: s.Identifier,
+			}
 		}
-	}
-
-	if n.Identifier > 0 {
-		s.Identifiers[n.Filter] = n.Identifier
+		if n.Identifier > 0 {
+			s.Identifiers[n.Filter] = n.Identifier
+		}
+		for k, v := range n.Identifiers {
+			if v > 0 {
+				s.Identifiers[k] = v
+			}
+		}
 	}
 
 	if n.Qos > s.Qos {
@@ -662,10 +670,13 @@ func (pk *Packet) PublishEncode(buf *bytes.Buffer) error {
 	}
 
 	topicLen := len(pk.TopicName)
-	if pk.ProtocolVersion != 5 {
+	if pk.ProtocolVersion != 5 || !pk.Properties.HasPublishProperties() {
 		rem := 2 + topicLen + len(pk.Payload)
 		if pk.FixedHeader.Qos > 0 {
 			rem += 2
+		}
+		if pk.ProtocolVersion == 5 {
+			rem++ // 1 byte for 0-length properties
 		}
 		pk.FixedHeader.Remaining = rem
 		pk.FixedHeader.Encode(buf)
@@ -675,6 +686,9 @@ func (pk *Packet) PublishEncode(buf *bytes.Buffer) error {
 		if pk.FixedHeader.Qos > 0 {
 			buf.WriteByte(byte(pk.PacketID >> 8))
 			buf.WriteByte(byte(pk.PacketID))
+		}
+		if pk.ProtocolVersion == 5 {
+			buf.WriteByte(0)
 		}
 		buf.Write(pk.Payload)
 		return nil
@@ -723,12 +737,16 @@ func (pk *Packet) PublishDecode(buf []byte) error {
 	}
 
 	if pk.ProtocolVersion == 5 {
-		n, err := pk.Properties.Decode(pk.FixedHeader.Type, bytes.NewBuffer(buf[offset:]))
-		if err != nil {
-			return fmt.Errorf("%s: %w", err, ErrMalformedProperties)
-		}
+		if offset < len(buf) && buf[offset] == 0 {
+			offset++
+		} else {
+			n, err := pk.Properties.Decode(pk.FixedHeader.Type, bytes.NewBuffer(buf[offset:]))
+			if err != nil {
+				return fmt.Errorf("%s: %w", err, ErrMalformedProperties)
+			}
 
-		offset += n
+			offset += n
+		}
 	}
 
 	pk.Payload = buf[offset:]
@@ -746,7 +764,7 @@ func (pk *Packet) PublishValidate(topicAliasMaximum uint16) Code {
 		return ErrProtocolViolationSurplusPacketID // [MQTT-2.2.1-2]
 	}
 
-	if strings.ContainsAny(pk.TopicName, "+#") {
+	if strings.IndexByte(pk.TopicName, '+') >= 0 || strings.IndexByte(pk.TopicName, '#') >= 0 {
 		return ErrProtocolViolationSurplusWildcard // [MQTT-3.3.2-2]
 	}
 
@@ -771,9 +789,18 @@ func (pk *Packet) PublishValidate(topicAliasMaximum uint16) Code {
 
 // encodePubAckRelRecComp encodes a Puback, Pubrel, Pubrec, or Pubcomp packet.
 func (pk *Packet) encodePubAckRelRecComp(buf *bytes.Buffer) error {
+	if pk.ProtocolVersion != 5 || (pk.ReasonCode < ErrUnspecifiedError.Code && pk.Properties.ReasonString == "" && len(pk.Properties.User) == 0) {
+		pk.FixedHeader.Remaining = 2
+		pk.FixedHeader.Encode(buf)
+		buf.WriteByte(byte(pk.PacketID >> 8))
+		buf.WriteByte(byte(pk.PacketID))
+		return nil
+	}
+
 	nb := mempool.GetBuffer()
 	defer mempool.PutBuffer(nb)
-	nb.Write(encodeUint16(pk.PacketID))
+	nb.WriteByte(byte(pk.PacketID >> 8))
+	nb.WriteByte(byte(pk.PacketID))
 
 	if pk.ProtocolVersion == 5 {
 		pb := mempool.GetBuffer()
@@ -810,6 +837,9 @@ func (pk *Packet) decodePubAckRelRecComp(buf []byte) error {
 		}
 
 		if pk.FixedHeader.Remaining > 3 {
+			if offset < len(buf) && buf[offset] == 0 {
+				return nil
+			}
 			_, err = pk.Properties.Decode(pk.FixedHeader.Type, bytes.NewBuffer(buf[offset:]))
 			if err != nil {
 				return fmt.Errorf("%s: %w", err, ErrMalformedProperties)

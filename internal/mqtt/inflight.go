@@ -140,6 +140,11 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 	return !existed, deferred
 }
 
+// HasDeferred reports whether any inflight packet is currently deferred waiting on send quota.
+func (i *Inflight) HasDeferred() bool {
+	return i.deferredCount.Load() > 0
+}
+
 // ClaimNextImmediate atomically finds the next deferred inflight packet (Expiry < 0),
 // reserves one unit of send quota, restores the packet's normal expiry using expiryFn,
 // updates it in-place in the inflight map, and returns it.

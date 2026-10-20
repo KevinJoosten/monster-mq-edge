@@ -123,6 +123,24 @@
       "minimum": 0,
       "default": 1048576
     },
+    "ClientWriteQueueSize": {
+      "type": "integer",
+      "description": "Live publishes queued per MQTT client before new ones are dropped. The queue grows on demand (8 bytes per entry) and is released once drained, so the limit costs memory only while a client is backlogged. 0 = engine default (65536).",
+      "minimum": 0,
+      "default": 0
+    },
+    "ClientReadBufferSize": {
+      "type": "integer",
+      "description": "Read buffer per MQTT connection in bytes. 0 = engine default (16384).",
+      "minimum": 0,
+      "default": 0
+    },
+    "ClientWriteBufferSize": {
+      "type": "integer",
+      "description": "Write buffer per MQTT connection in bytes; packets are written in batches of about this size. 0 = engine default (16384).",
+      "minimum": 0,
+      "default": 0
+    },
     "DefaultStoreType":  { "type": "string", "enum": ["SQLITE", "POSTGRES", "MONGODB", "WINCCOA"], "description": "Backend used by every store unless overridden below. WINCCOA (WinCC OA manager only): configs, sessions, retained messages and users in WinCC OA datapoints, queue and metrics in memory, no database file." },
     "UserStoreType":     { "type": "string", "enum": ["SQLITE", "POSTGRES", "MONGODB", "WINCCOA"], "description": "Store of MQTT users and ACL rules; falls back to DefaultStoreType. Only WINCCOA (MMQUsers datapoints, WinCC OA manager only) may differ from DefaultStoreType." },
     "SessionStoreType":  { "type": "string", "enum": ["SQLITE", "POSTGRES", "MONGODB", "MEMORY", "WINCCOA"], "description": "Override for the session/subscription store; falls back to DefaultStoreType. MEMORY uses an in-memory SQLite database. WINCCOA keeps them in MMQSessions datapoints (WinCC OA manager only)." },

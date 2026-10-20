@@ -1,7 +1,7 @@
 # MQTT hot-path fixes after the perf commits
 
 Created: 2026-10-20. Rewritten the same day after checking every claim against the code.
-Status: Proposed
+Status: Implemented on branch `fix/mqtt-hot-path-fixes` (see "Implementation notes" at the end)
 
 Follow-up to `22c871e` (*perf(pubsub,redis,nats,mqtt): optimize pubsub routing, batched
 writers, and overload state logging*) and `685188a` (*perf(mqtt): replace mochi topic trie
@@ -384,3 +384,61 @@ Each test below must fail on the current code.
   leak (4) and CONNACK ordering (7).
 - The old "more than 256 packets are flushed" test would already pass on the current code,
   so it was dropped.
+
+## Implementation notes
+
+Implemented on `fix/mqtt-hot-path-fixes`. Where the code differs from the plan above:
+
+- **Outbound queue (item 1).** Smaller fixed defaults were not good enough: an 8,192-entry
+  channel dropped about 47% of a flat-out 4×4 QoS 0 burst that 65,536 entries absorbed. The
+  channel is replaced by `outboundQueue` (`outbound_queue.go`), a ring that grows on demand
+  up to `MaximumClientWritesPending` and is released once drained. The default stays 65,536.
+- **Defaults (item 1).** Read and write buffers are 16 KiB; 64 KiB gave no measurable gain.
+  The new config keys are `ClientWriteQueueSize`, `ClientReadBufferSize` and
+  `ClientWriteBufferSize`.
+- **Shared read buffer (item 2).** It is 16 KiB instead of 64 KiB, and only PUBLISH bodies
+  of up to 8 KiB come from it.
+- **Batching (item 3).** The writer flushes at the end of every batch (at most 256
+  packets) instead of carrying a partial buffer into the next one. A test showed that the
+  carry-over held back a PUBACK indefinitely while a stream of oversize publishes kept the
+  queue busy.
+- **Waiting for writes (item 3).** A refused CONNACK, a DISCONNECT sent by the broker, and
+  a client's own DISCONNECT wait (at most 1 s) until queued packets are on the wire, because
+  writes are now asynchronous.
+- **Closing after a DISCONNECT (item 3).** After writing a DISCONNECT or a refused CONNACK,
+  the writer stops the client itself, so nothing follows it on the wire ([MQTT-3.14.4-1]).
+  On shutdown, clients are disconnected in parallel.
+- **SUBACK before retained messages (item 3).** A control packet queued before a live
+  publish was pushed is always written first. After taking a live publish, the writer checks
+  the control queue again; if a control packet arrived in the meantime, the publish goes back
+  to the front of its queue.
+- **Oversize packets other than PUBLISH (item 4).** Only application messages are
+  discarded. An oversize CONNACK or ack closes the connection, as before.
+- **Oversize messages (item 4).** The broker calls `OnQosComplete` rather than
+  `OnQosDropped`, matching "behave as if it had completed sending": the queue hook then
+  acknowledges a replayed message instead of replaying it on every reconnect. The writer
+  also sends the next deferred message in place of the dropped one; otherwise it would wait
+  for the client's next packet.
+- **Last-value store (item 2).** `PutOne` also detaches content type, response topic and
+  user properties, which can point into the read buffer too.
+- **Known follow-ups (not changed):**
+  - The queue hook acknowledges a replayed QoS 0 message once it is queued for the writer,
+    not once it is on the wire.
+  - A writer that is in the middle of a batch can still call hooks after `Server.Close`.
+- **Ownership audit (item 8).** All remaining in-process callers were checked: MQTT client
+  bridge (both paho libraries allocate a payload per packet), WinCC Unified, UNS modeler,
+  PeerLink inject, scripting, GraphQL, REST, MCP, HMI, Redfish, host info and RTSP camera.
+  None reuses a payload buffer after publishing.
+
+Measured in a 2-core container. The benchmark is in `internal/mqtt/bench_test.go`, and its
+clients run in the same process.
+
+| | Before | After |
+|---|---|---|
+| Heap per idle connection (500 clients) | 734 KB | 33 KB |
+| QoS 0, 1 publisher × 1 subscriber | ~780k msgs/s | ~900k msgs/s |
+| QoS 0, 4 × 4 | ~1.1M msgs/s | ~1.65M msgs/s |
+| QoS 0, 1 × 16 | ~1.72M msgs/s | ~1.80M msgs/s |
+| QoS 1, 1 × 1 | ~120k msgs/s | ~180k msgs/s |
+| QoS 1, 4 × 4 | ~260k msgs/s | ~257k msgs/s |
+

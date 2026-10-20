@@ -295,10 +295,15 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if cfg.MaxMessageSize > 0 {
 		caps.MaximumPacketSize = uint32(cfg.MaxMessageSize)
 	}
+	if cfg.ClientWriteQueueSize > 0 {
+		caps.MaximumClientWritesPending = int32(min(cfg.ClientWriteQueueSize, math.MaxInt32))
+	}
 	server := mqtt.New(&mqtt.Options{
-		InlineClient: true,
-		Logger:       logger,
-		Capabilities: caps,
+		InlineClient:             true,
+		Logger:                   logger,
+		Capabilities:             caps,
+		ClientNetReadBufferSize:  cfg.ClientReadBufferSize,
+		ClientNetWriteBufferSize: cfg.ClientWriteBufferSize,
 	})
 	server.Info.Version = version.Version
 	*undo = append(*undo, func() { _ = server.Close() })

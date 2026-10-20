@@ -3,6 +3,7 @@
 package memory
 
 import (
+	"bytes"
 	"context"
 	"sort"
 	"strings"
@@ -57,10 +58,30 @@ func (s *MessageStore) Get(_ context.Context, topic string) (*stores.BrokerMessa
 	return nil, nil
 }
 
-// PutOne inserts or updates a single message without slice or context allocations.
+// PutOne inserts or updates a single message. The store keeps the message long
+// after the publish, while the caller's topic, payload and MQTT 5 properties may
+// point into a connection read buffer shared with other packets. They are
+// detached here so one stored value doesn't keep that buffer alive.
 func (s *MessageStore) PutOne(m stores.BrokerMessage) {
 	sh := &s.shards[shardFor(m.TopicName)]
+	m.Payload = bytes.Clone(m.Payload)
+	m.ContentType = strings.Clone(m.ContentType)
+	m.ResponseTopic = strings.Clone(m.ResponseTopic)
+	if len(m.UserProperties) > 0 {
+		props := make([]stores.UserProperty, len(m.UserProperties))
+		for i, p := range m.UserProperties {
+			props[i] = stores.UserProperty{Key: strings.Clone(p.Key), Value: strings.Clone(p.Value)}
+		}
+		m.UserProperties = props
+	}
 	sh.mu.Lock()
+	// Go replaces a string map key on every assignment, so the key must be
+	// detached as well: reuse the stored key, or clone a new one.
+	if existing, ok := sh.data[m.TopicName]; ok {
+		m.TopicName = existing.TopicName
+	} else {
+		m.TopicName = strings.Clone(m.TopicName)
+	}
 	sh.data[m.TopicName] = m
 	sh.mu.Unlock()
 }

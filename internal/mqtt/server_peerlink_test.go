@@ -143,12 +143,11 @@ func addSubscriber(t *testing.T, s *Server, id string, subs ...packets.Subscript
 func outbound(cl *Client) []packets.Packet {
 	var out []packets.Packet
 	for {
-		select {
-		case pk := <-cl.State.outbound:
-			out = append(out, *pk)
-		default:
+		pk, ok := cl.State.outbound.pop()
+		if !ok {
 			return out
 		}
+		out = append(out, *pk)
 	}
 }
 

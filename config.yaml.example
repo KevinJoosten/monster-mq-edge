@@ -18,6 +18,13 @@ NATS: 0  # NATS protocol port, e.g. 4222 (0 = disabled)
 
 MaxMessageSize: 1048576
 
+# Per-connection MQTT buffers (0 = engine default). Every connected client
+# allocates the read and write buffers; the write queue grows only while the
+# client is backlogged.
+#ClientWriteQueueSize: 65536    # live publishes queued per client before new ones are dropped
+#ClientReadBufferSize: 16384    # bytes
+#ClientWriteBufferSize: 16384   # bytes, packets are written in batches of about this size
+
 DefaultStoreType: SQLITE
 
 ConfigStoreType: SQLITE

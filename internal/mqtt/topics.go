@@ -13,17 +13,16 @@ var (
 	SysPrefix   = "$SYS"   // the prefix indicating a system info topic
 )
 
-// TopicAliases contains inbound and outbound topic alias registrations.
+// TopicAliases contains the topic aliases registered by the client. Aliases the
+// broker sends are owned by the connection's writer (see connWriter.applyAlias).
 type TopicAliases struct {
-	Inbound  *InboundTopicAliases
-	Outbound *OutboundTopicAliases
+	Inbound *InboundTopicAliases
 }
 
 // NewTopicAliases returns an instance of TopicAliases.
 func NewTopicAliases(topicAliasMaximum uint16) TopicAliases {
 	return TopicAliases{
-		Inbound:  NewInboundTopicAliases(topicAliasMaximum),
-		Outbound: NewOutboundTopicAliases(topicAliasMaximum),
+		Inbound: NewInboundTopicAliases(topicAliasMaximum),
 	}
 }
 
@@ -55,48 +54,8 @@ func (a *InboundTopicAliases) Set(id uint16, topic string) string {
 		return a.internal[id] // empty when the alias is unknown; never store an empty mapping
 	}
 
-	a.internal[id] = topic
+	a.internal[id] = strings.Clone(topic) // the mapping outlives the packet's read buffer
 	return topic
-}
-
-// OutboundTopicAliases contains a map of topic aliases sent from the broker to the client.
-type OutboundTopicAliases struct {
-	internal map[string]uint16
-	sync.RWMutex
-	cursor  uint32
-	maximum uint16
-}
-
-// NewOutboundTopicAliases returns a pointer to OutboundTopicAliases.
-func NewOutboundTopicAliases(topicAliasMaximum uint16) *OutboundTopicAliases {
-	return &OutboundTopicAliases{
-		maximum:  topicAliasMaximum,
-		internal: map[string]uint16{},
-	}
-}
-
-// Set sets a new topic alias for a topic and returns the alias value, and a boolean
-// indicating if the alias already existed.
-func (a *OutboundTopicAliases) Set(topic string) (uint16, bool) {
-	a.Lock()
-	defer a.Unlock()
-
-	if a.maximum == 0 {
-		return 0, false
-	}
-
-	if i, ok := a.internal[topic]; ok {
-		return i, true
-	}
-
-	i := atomic.LoadUint32(&a.cursor)
-	if i+1 > uint32(a.maximum) {
-		return 0, false
-	}
-
-	a.internal[topic] = uint16(i) + 1
-	atomic.StoreUint32(&a.cursor, i+1)
-	return uint16(i) + 1, false
 }
 
 // InlineSubFn is the signature for a callback function which will be called

@@ -179,7 +179,7 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
-		TopicName:   pk.TopicName,
+		TopicName:   strings.Clone(pk.TopicName), // may point into a connection read buffer
 		Payload:     append([]byte(nil), pk.Payload...),
 		QoS:         pk.FixedHeader.Qos,
 		IsRetain:    pk.FixedHeader.Retain,

@@ -30,6 +30,10 @@ func NewInlinePublisher(srv *mqtt.Server) *InlinePublisher {
 
 // Publish injects msg as if clientID had published it. Inline clients bypass
 // the ACL, as the engine's default inline client does.
+//
+// The broker keeps references to the topic and payload of msg after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 func (p *InlinePublisher) Publish(clientID string, msg stores.BrokerMessage) error {
 	return p.srv.InjectPacket(p.client(clientID), packets.Packet{
 		FixedHeader: packets.FixedHeader{Type: packets.Publish, Qos: msg.QoS, Retain: msg.IsRetain},
@@ -43,6 +47,10 @@ func (p *InlinePublisher) Publish(clientID string, msg stores.BrokerMessage) err
 // PublishMessage injects msg as clientID and keeps its identity (UUID, time,
 // message id, DUP and queued flags) for archives and bus subscribers, as Core
 // republishes a message from a Kafka envelope.
+//
+// The broker keeps references to the topic and payload of msg after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 func (p *InlinePublisher) PublishMessage(clientID string, msg stores.BrokerMessage) error {
 	src := &packets.Source{MessageUUID: msg.MessageUUID, Time: msg.Time, MessageID: msg.MessageID, Dup: msg.IsDup, Queued: msg.IsQueued}
 	return p.srv.InjectPacket(p.client(clientID), packets.Packet{

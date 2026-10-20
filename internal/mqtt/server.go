@@ -27,8 +27,15 @@ const (
 	Version                       = "2.7.9"          // the current server version.
 	defaultSysTopicInterval int64 = 1                // the interval between $SYS topic publishes
 	defaultConnectTimeout         = 10 * time.Second // time a new connection has to send CONNECT
-	LocalListener                 = "local"
-	InlineClientId                = "inline"
+
+	// Per-connection defaults. Every connected client allocates the read buffer up
+	// front and the write buffer on its first packet. The outbound queue grows on
+	// demand up to defaultClientWritesPending entries (8 bytes each), so its
+	// limit costs memory only while a client is backlogged.
+	defaultClientWritesPending = 64 * 1024
+	defaultClientNetBufferSize = 16 * 1024
+	LocalListener              = "local"
+	InlineClientId             = "inline"
 )
 
 var (
@@ -65,11 +72,11 @@ type Capabilities struct {
 // NewDefaultServerCapabilities defines the default features and capabilities provided by the server.
 func NewDefaultServerCapabilities() *Capabilities {
 	return &Capabilities{
-		MaximumClients:               math.MaxInt64,  // maximum number of connected clients
-		MaximumMessageExpiryInterval: 60 * 60 * 24,   // maximum message expiry if message expiry is 0 or over
-		MaximumClientWritesPending:   1024 * 64,      // maximum number of pending message writes for a client
-		MaximumSessionExpiryInterval: math.MaxUint32, // maximum number of seconds to keep disconnected sessions
-		MaximumPacketSize:            0,              // no maximum packet size
+		MaximumClients:               math.MaxInt64,              // maximum number of connected clients
+		MaximumMessageExpiryInterval: 60 * 60 * 24,               // maximum message expiry if message expiry is 0 or over
+		MaximumClientWritesPending:   defaultClientWritesPending, // maximum number of pending message writes for a client
+		MaximumSessionExpiryInterval: math.MaxUint32,             // maximum number of seconds to keep disconnected sessions
+		MaximumPacketSize:            0,                          // no maximum packet size
 		maximumPacketID:              math.MaxUint16,
 		ReceiveMaximum:               1024,           // maximum number of concurrent qos messages per client
 		MaximumInflight:              1024 * 8,       // maximum number of qos > 0 messages can be stored
@@ -242,12 +249,16 @@ func (o *Options) ensureDefaults() {
 		o.ConnectTimeout = defaultConnectTimeout
 	}
 
+	if o.Capabilities.MaximumClientWritesPending <= 0 {
+		o.Capabilities.MaximumClientWritesPending = defaultClientWritesPending
+	}
+
 	if o.ClientNetWriteBufferSize == 0 {
-		o.ClientNetWriteBufferSize = 1024 * 64
+		o.ClientNetWriteBufferSize = defaultClientNetBufferSize
 	}
 
 	if o.ClientNetReadBufferSize == 0 {
-		o.ClientNetReadBufferSize = 1024 * 64
+		o.ClientNetReadBufferSize = defaultClientNetBufferSize
 	}
 
 	if o.Logger == nil {
@@ -453,6 +464,7 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 	defer atomic.AddInt64(&s.Info.ClientsConnected, -1)
 
 	go cl.WriteLoop()
+	defer cl.releaseReadBuffers()
 
 	if cl.Net.Conn != nil {
 		_ = cl.Net.Conn.SetDeadline(time.Now().Add(s.Options.ConnectTimeout)) // replaced by the keepalive deadline after CONNECT
@@ -724,7 +736,8 @@ func (s *Server) SendConnack(cl *Client, reason packets.Code, present bool, prop
 			ReasonCode:     reason.Code, // [MQTT-3.2.2-8]
 			Properties:     *properties,
 		}
-		return cl.WritePacket(ack)
+		// The connection is closed right after a refused CONNACK, so wait until it is written.
+		return cl.writeAndWait(&ack, reason, disconnectFlushTimeout)
 	}
 
 	if s.Options.Capabilities.MaximumQos < 2 {
@@ -807,20 +820,8 @@ func (s *Server) processPacket(cl *Client, pk packets.Packet) error {
 		return err
 	}
 
-	if cl.State.Inflight.HasDeferred() {
-		if next, ok := cl.State.Inflight.ClaimNextImmediate(func(p packets.Packet) int64 {
-			if expiry := minimum(s.Options.Capabilities.MaximumMessageExpiryInterval,
-				int64(p.Properties.MessageExpiryInterval)); expiry > 0 {
-				base := p.Created
-				if base <= 0 {
-					base = time.Now().Unix()
-				}
-				return base + expiry
-			}
-			return 0
-		}); ok {
-			_ = cl.WritePacket(next)
-		}
+	if next, ok := cl.claimDeferred(); ok {
+		_ = cl.WritePacket(next)
 	}
 
 	return nil
@@ -846,6 +847,10 @@ func (s *Server) processPingreq(cl *Client, _ packets.Packet) error {
 // This is a convenience function which wraps InjectPacket. As such, this method can publish packets
 // to any topic (including $SYS) and bypass ACL checks. The qos byte is used for limiting the
 // outbound qos (mqtt v5) rather than issuing to the broker (we assume qos 2 complete).
+//
+// The broker keeps references to the topic and payload after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 func (s *Server) Publish(topic string, payload []byte, retain bool, qos byte) error {
 	if !s.Options.InlineClient {
 		return ErrInlineClientNotEnabled
@@ -865,6 +870,10 @@ func (s *Server) Publish(topic string, payload []byte, retain bool, qos byte) er
 
 // PublishPacket publishes a packet through the inline client, keeping its
 // properties (e.g. MQTT 5 correlation data on a command reply).
+//
+// The broker keeps references to the topic and payload after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 func (s *Server) PublishPacket(pk packets.Packet) error {
 	if !s.Options.InlineClient {
 		return ErrInlineClientNotEnabled
@@ -974,6 +983,10 @@ func (s *Server) Unsubscribe(filter string, subscriptionId int) error {
 
 // InjectPacket injects a packet into the broker as if it were sent from the specified client.
 // InlineClients using this method can publish packets to any topic (including $SYS) and bypass ACL checks.
+//
+// The broker keeps references to the topic and payload after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 func (s *Server) InjectPacket(cl *Client, pk packets.Packet) error {
 	pk.ProtocolVersion = cl.Properties.ProtocolVersion
 
@@ -1461,17 +1474,6 @@ func (s *Server) publishToClientPtr(cl *Client, sub packets.Subscription, pk *pa
 		outPtr.FixedHeader.Qos = s.Options.Capabilities.MaximumQos // [MQTT-3.2.2-9]
 	}
 
-	if cl.Properties.Props.TopicAliasMaximum > 0 {
-		var aliasExists bool
-		outPtr.Properties.TopicAlias, aliasExists = cl.State.TopicAliases.Outbound.Set(pk.TopicName)
-		if outPtr.Properties.TopicAlias > 0 {
-			outPtr.Properties.TopicAliasFlag = true
-			if aliasExists {
-				outPtr.TopicName = ""
-			}
-		}
-	}
-
 	if outPtr.FixedHeader.Qos > 0 {
 		if (cl.Net.Conn == nil || cl.Closed()) && s.hooks.Provides(StoredQueuedMessages) {
 			var res packets.Packet
@@ -1546,10 +1548,7 @@ func (s *Server) publishToClientPtr(cl *Client, sub packets.Subscription, pk *pa
 	if wantReturnCopy || outPtr.FixedHeader.Qos > 0 {
 		res = *outPtr
 	}
-	select {
-	case cl.State.outbound <- outPtr:
-		atomic.AddInt32(&cl.State.outboundQty, 1)
-	default:
+	if !cl.State.outbound.push(outPtr) {
 		resetOutboundPacket(outPtr)
 		atomic.AddInt64(&s.Info.MessagesDropped, 1)
 		cl.State.droppedInOverload.Add(1)
@@ -1885,8 +1884,9 @@ func (s *Server) processDisconnect(cl *Client, pk packets.Packet) error {
 		return packets.CodeDisconnectWillMessage
 	}
 
-	s.loop.willDelayed.Delete(cl.ID) // [MQTT-3.1.3-9] [MQTT-3.1.2-8]
-	cl.Stop(packets.CodeDisconnect)  // [MQTT-3.14.4-2]
+	s.loop.willDelayed.Delete(cl.ID)                      // [MQTT-3.1.3-9] [MQTT-3.1.2-8]
+	_ = cl.writeAndWait(nil, nil, disconnectFlushTimeout) // let acks queued before the DISCONNECT reach the client
+	cl.Stop(packets.CodeDisconnect)                       // [MQTT-3.14.4-2]
 
 	return nil
 }
@@ -1905,14 +1905,17 @@ func (s *Server) DisconnectClient(cl *Client, code packets.Code) error {
 		out.Properties.ReasonString = code.Reason //  // [MQTT-3.14.2-1]
 	}
 
+	if s.Options.Capabilities.Compatibilities.PassiveClientDisconnect {
+		return cl.WritePacket(out)
+	}
+
 	// We already have a code we are using to disconnect the client, so we are not
-	// interested if the write packet fails due to a closed connection (as we are closing it).
-	err := cl.WritePacket(out)
-	if !s.Options.Capabilities.Compatibilities.PassiveClientDisconnect {
-		cl.Stop(code)
-		if code.Code >= packets.ErrUnspecifiedError.Code {
-			return code
-		}
+	// interested if the write fails due to a closed connection (as we are closing it).
+	// The wait is bounded, so a client whose socket is stuck cannot hold up a takeover.
+	err := cl.writeAndWait(&out, code, disconnectFlushTimeout)
+	cl.Stop(code)
+	if code.Code >= packets.ErrUnspecifiedError.Code {
+		return code
 	}
 
 	return err
@@ -2028,9 +2031,13 @@ func (s *Server) CloseListeners() {
 // closeListenerClients closes all clients on the specified listener.
 func (s *Server) closeListenerClients(listener string) {
 	clients := s.Clients.GetByListener(listener)
+	var wg sync.WaitGroup
 	for _, cl := range clients {
-		_ = s.DisconnectClient(cl, packets.ErrServerShuttingDown)
+		wg.Go(func() { // in parallel: each waits up to disconnectFlushTimeout for its DISCONNECT
+			_ = s.DisconnectClient(cl, packets.ErrServerShuttingDown)
+		})
 	}
+	wg.Wait()
 }
 
 // sendLWT issues an LWT message to a topic when a client disconnects.

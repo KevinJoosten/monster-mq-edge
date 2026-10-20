@@ -2,7 +2,6 @@ package mqtt
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/rs/xid"
 
-	"monstermq.io/edge/internal/mqtt/mempool"
 	"monstermq.io/edge/internal/mqtt/packets"
 )
 
@@ -22,6 +20,8 @@ const (
 	defaultKeepalive             uint16 = 10 // the default connection keepalive value in seconds.
 	defaultClientProtocolVersion byte   = 4  // the default mqtt protocol version of connecting clients (if somehow unspecified).
 	minimumKeepalive             uint16 = 5  // the minimum recommended keepalive - values under with display a warning.
+
+	readSlabSize = 16 * 1024 // PUBLISH bodies up to half of this are cut from a shared per-connection slab
 )
 
 var (
@@ -132,9 +132,7 @@ type Client struct {
 type ClientConnection struct {
 	Conn     net.Conn      // the net.Conn used to establish the connection
 	bconn    *bufio.Reader // a buffered net.Conn for reading packets
-	outbuf   *bytes.Buffer // a buffer for writing packets
-	batchBuf *bytes.Buffer // buffer owned exclusively by WriteLoop for lock-free batch encoding
-	readSlab []byte        // slab buffer for slicing inbound packet payloads with fewer heap allocations
+	readSlab []byte        // slab for PUBLISH bodies, see allocReadBuf
 	Remote   string        // the remote address of the client
 	Listener string        // listener id of the client
 	Inline   bool          // if true, the client is the built-in 'inline' embedded client
@@ -162,26 +160,26 @@ type Will struct {
 
 // ClientState tracks the state of the client.
 type ClientState struct {
-	TopicAliases      TopicAliases         // a map of topic aliases
-	stopCause         atomic.Value         // reason for stopping
-	Inflight          *Inflight            // a map of in-flight qos messages
-	Subscriptions     *Subscriptions       // a map of the subscription filters a client maintains
-	disconnected      int64                // the time the client disconnected in unix time, for calculating expiry
-	outbound          chan *packets.Packet // queue for pending outbound packets
-	endOnce           sync.Once            // only end once
-	isTakenOver       atomic.Bool          // used to identify orphaned clients
-	packetIDMu        sync.Mutex           // guards NextPacketID without contending with network write lock
-	packetID          uint32               // the current highest packetID
-	open              context.Context      // indicate that the client is open for packet exchange
-	cancelOpen        context.CancelFunc   // cancel function for open context
-	outboundQty       int32                // number of messages currently in the outbound queue
-	writeOverloaded   atomic.Bool          // true while outbound queue is dropping packets
-	droppedInOverload atomic.Int64         // packets dropped during current overload window
-	MetricClientIn    *atomic.Int64        // cached metrics collector counter for inbound messages
-	MetricClientOut   *atomic.Int64        // cached metrics collector counter for outbound messages
-	lastDeadline      int64                // last unix second and keepalive applied via SetDeadline
-	Keepalive         uint16               // the number of seconds the connection can wait
-	ServerKeepalive   bool                 // keepalive was set by the server
+	TopicAliases      TopicAliases       // a map of topic aliases
+	stopCause         atomic.Value       // reason for stopping
+	Inflight          *Inflight          // a map of in-flight qos messages
+	Subscriptions     *Subscriptions     // a map of the subscription filters a client maintains
+	disconnected      int64              // the time the client disconnected in unix time, for calculating expiry
+	outbound          *outboundQueue     // live publishes for the writer; dropped when full
+	control           chan writeItem     // every other packet for the writer; never dropped
+	endOnce           sync.Once          // only end once
+	isTakenOver       atomic.Bool        // used to identify orphaned clients
+	packetIDMu        sync.Mutex         // guards NextPacketID without contending with network write lock
+	packetID          uint32             // the current highest packetID
+	open              context.Context    // indicate that the client is open for packet exchange
+	cancelOpen        context.CancelFunc // cancel function for open context
+	writeOverloaded   atomic.Bool        // true while outbound queue is dropping packets
+	droppedInOverload atomic.Int64       // packets dropped during current overload window
+	MetricClientIn    *atomic.Int64      // cached metrics collector counter for inbound messages
+	MetricClientOut   *atomic.Int64      // cached metrics collector counter for outbound messages
+	lastDeadline      int64              // last unix second and keepalive applied via SetDeadline
+	Keepalive         uint16             // the number of seconds the connection can wait
+	ServerKeepalive   bool               // keepalive was set by the server
 }
 
 // newClient returns a new instance of Client. This is almost exclusively used by Server
@@ -196,7 +194,6 @@ func newClient(c net.Conn, o *ops) *Client {
 			open:          ctx,
 			cancelOpen:    cancel,
 			Keepalive:     defaultKeepalive,
-			outbound:      make(chan *packets.Packet, o.options.Capabilities.MaximumClientWritesPending),
 		},
 		Properties: ClientProperties{
 			ProtocolVersion: defaultClientProtocolVersion, // default protocol version
@@ -204,207 +201,19 @@ func newClient(c net.Conn, o *ops) *Client {
 		ops: o,
 	}
 
+	// Clients without a connection (inline clients, sessions restored from
+	// storage) never run a writer, so they get no queues.
 	if c != nil {
 		cl.Net = ClientConnection{
 			Conn:   c,
 			bconn:  bufio.NewReaderSize(c, o.options.ClientNetReadBufferSize),
 			Remote: c.RemoteAddr().String(),
 		}
+		cl.State.outbound = newOutboundQueue(int(o.options.Capabilities.MaximumClientWritesPending))
+		cl.State.control = make(chan writeItem, controlQueueSize)
 	}
 
 	return cl
-}
-
-var outboundPacketPool = sync.Pool{
-	New: func() any {
-		return new(packets.Packet)
-	},
-}
-
-// WriteLoop ranges over pending outbound messages and writes them to the client connection.
-func (cl *Client) WriteLoop() {
-	overloadRecoveryThreshold := cap(cl.State.outbound) / 4
-	for {
-		select {
-		case pk := <-cl.State.outbound:
-			cl.writeOutboundBatch(pk)
-			if cl.State.writeOverloaded.Load() && len(cl.State.outbound) <= overloadRecoveryThreshold {
-				if cl.State.writeOverloaded.CompareAndSwap(true, false) {
-					dropped := cl.State.droppedInOverload.Swap(0)
-					cl.ops.log.Info("client outbound write queue overload cleared", "client", cl.ID, "dropped", dropped)
-				}
-			}
-		case <-cl.State.open.Done():
-			return
-		}
-	}
-}
-
-// writeOutboundBatch encodes first and any immediately queued packets into
-// cl.Net.batchBuf without holding cl.Lock(), then flushes under cl.Lock().
-func (cl *Client) writeOutboundBatch(first *packets.Packet) {
-	if cl.Closed() || cl.Net.Conn == nil {
-		resetOutboundPacket(first)
-		atomic.AddInt32(&cl.State.outboundQty, -1)
-		return
-	}
-
-	hasEncodeHook := cl.ops.hooks.Provides(OnPacketEncode)
-	hasRawSentHook := cl.ops.hooks.HasRawPacketSent()
-	maxBuf := cl.ops.options.ClientNetWriteBufferSize
-	if maxBuf <= 0 {
-		maxBuf = 65536
-	}
-
-	if cl.Net.batchBuf == nil {
-		cl.Net.batchBuf = bytes.NewBuffer(make([]byte, 0, maxBuf))
-	}
-	batchBuf := cl.Net.batchBuf
-
-	var (
-		totalBytes   int64
-		totalPackets int64
-		totalPublish int64
-		dequeued     int32
-		nowUnix      int64
-	)
-
-	protoVer := cl.Properties.ProtocolVersion
-	maxPktSize := cl.Properties.Props.MaximumPacketSize
-	disallowProb := cl.Properties.Props.RequestProblemInfoFlag && cl.Properties.Props.RequestProblemInfo == 0x0
-	alwaysRespInfo := cl.Properties.Props.RequestResponseInfo == 0x1 || cl.ops.options.Capabilities.Compatibilities.AlwaysReturnResponseInfo
-
-	pk := first
-	for {
-		dequeued++
-		if pk.Expiry > 0 {
-			if nowUnix == 0 {
-				nowUnix = time.Now().Unix()
-			}
-			expiry := pk.Expiry - nowUnix
-			if expiry < 1 {
-				expiry = 1
-			}
-			pk.Properties.MessageExpiryInterval = uint32(expiry)
-		}
-		pk.ProtocolVersion = protoVer
-		if pk.Mods.MaxSize == 0 {
-			pk.Mods.MaxSize = maxPktSize
-		}
-		if disallowProb {
-			pk.Mods.DisallowProblemInfo = true
-		}
-		if pk.FixedHeader.Type != packets.Connack || alwaysRespInfo {
-			pk.Mods.AllowResponseInfo = true
-		}
-		if hasEncodeHook {
-			*pk = cl.ops.hooks.OnPacketEncode(cl, *pk)
-		}
-
-		startLen := batchBuf.Len()
-		var err error
-		if pk.FixedHeader.Type == packets.Publish {
-			err = pk.PublishEncode(batchBuf)
-		} else {
-			err = encodeOtherPacket(pk, batchBuf)
-		}
-		if err == nil {
-			pktLen := batchBuf.Len() - startLen
-			if pk.Mods.MaxSize > 0 && uint32(pktLen) > pk.Mods.MaxSize {
-				batchBuf.Truncate(startLen)
-			} else {
-				totalBytes += int64(pktLen)
-				totalPackets++
-				if pk.FixedHeader.Type == packets.Publish {
-					totalPublish++
-				}
-				if hasRawSentHook {
-					raw := batchBuf.Bytes()[startLen:]
-					cl.ops.hooks.OnRawPacketSent(cl, *pk, raw)
-				}
-			}
-		}
-
-		resetOutboundPacket(pk)
-
-		if batchBuf.Len() >= maxBuf {
-			cl.Lock()
-			_ = cl.flushOutbuf()
-			_, _ = batchBuf.WriteTo(cl.Net.Conn)
-			batchBuf.Reset()
-			cl.Unlock()
-		}
-
-		if dequeued >= 256 {
-			break
-		}
-		select {
-		case next := <-cl.State.outbound:
-			pk = next
-		default:
-			pk = nil
-		}
-		if pk == nil {
-			break
-		}
-	}
-
-	if batchBuf.Len() > 0 && (len(cl.State.outbound) == 0 || batchBuf.Len() >= maxBuf) {
-		cl.Lock()
-		_ = cl.flushOutbuf()
-		_, _ = batchBuf.WriteTo(cl.Net.Conn)
-		batchBuf.Reset()
-		cl.Unlock()
-	}
-
-	atomic.AddInt32(&cl.State.outboundQty, -dequeued)
-	if totalBytes > 0 {
-		atomic.AddInt64(&cl.ops.info.BytesSent, totalBytes)
-	}
-	if totalPackets > 0 {
-		atomic.AddInt64(&cl.ops.info.PacketsSent, totalPackets)
-	}
-	if totalPublish > 0 {
-		atomic.AddInt64(&cl.ops.info.MessagesSent, totalPublish)
-		cl.ops.hooks.OnPublishBatchSent(cl, totalPublish)
-	}
-}
-
-func encodeOtherPacket(pk *packets.Packet, buf *bytes.Buffer) error {
-	switch pk.FixedHeader.Type {
-	case packets.Connect:
-		return pk.ConnectEncode(buf)
-	case packets.Connack:
-		return pk.ConnackEncode(buf)
-	case packets.Publish:
-		return pk.PublishEncode(buf)
-	case packets.Puback:
-		return pk.PubackEncode(buf)
-	case packets.Pubrec:
-		return pk.PubrecEncode(buf)
-	case packets.Pubrel:
-		return pk.PubrelEncode(buf)
-	case packets.Pubcomp:
-		return pk.PubcompEncode(buf)
-	case packets.Subscribe:
-		return pk.SubscribeEncode(buf)
-	case packets.Suback:
-		return pk.SubackEncode(buf)
-	case packets.Unsubscribe:
-		return pk.UnsubscribeEncode(buf)
-	case packets.Unsuback:
-		return pk.UnsubackEncode(buf)
-	case packets.Pingreq:
-		return pk.PingreqEncode(buf)
-	case packets.Pingresp:
-		return pk.PingrespEncode(buf)
-	case packets.Disconnect:
-		return pk.DisconnectEncode(buf)
-	case packets.Auth:
-		return pk.AuthEncode(buf)
-	default:
-		return fmt.Errorf("%w: %v", packets.ErrNoValidPacketAvailable, pk.FixedHeader.Type)
-	}
 }
 
 // ParseConnect parses the connect parameters and properties for a client.
@@ -432,7 +241,6 @@ func (cl *Client) ParseConnect(lid string, pk packets.Packet) {
 	cl.State.Keepalive = pk.Connect.Keepalive                                              // [MQTT-3.2.2-22]
 	cl.State.Inflight.ResetReceiveQuota(int32(cl.ops.options.Capabilities.ReceiveMaximum)) // server receive max per client
 	cl.State.Inflight.ResetSendQuota(int32(cl.Properties.Props.ReceiveMaximum))            // client receive max
-	cl.State.TopicAliases.Outbound = NewOutboundTopicAliases(cl.Properties.Props.TopicAliasMaximum)
 
 	cl.ID = pk.Connect.ClientIdentifier
 	if cl.ID == "" {
@@ -543,6 +351,25 @@ func (cl *Client) ResendInflightMessages(force bool) error {
 	}
 
 	return nil
+}
+
+// claimDeferred takes the oldest QoS 1/2 message that was deferred because the
+// client's send quota was exhausted, if quota is available again.
+func (cl *Client) claimDeferred() (packets.Packet, bool) {
+	if !cl.State.Inflight.HasDeferred() {
+		return packets.Packet{}, false
+	}
+	return cl.State.Inflight.ClaimNextImmediate(func(p packets.Packet) int64 {
+		if expiry := minimum(cl.ops.options.Capabilities.MaximumMessageExpiryInterval,
+			int64(p.Properties.MessageExpiryInterval)); expiry > 0 {
+			base := p.Created
+			if base <= 0 {
+				base = time.Now().Unix()
+			}
+			return base + expiry
+		}
+		return 0
+	})
 }
 
 // ClearInflights deletes all inflight messages for the client, e.g. for a disconnected user with a clean session.
@@ -688,20 +515,34 @@ func (cl *Client) ReadFixedHeader(fh *packets.FixedHeader) error {
 	return nil
 }
 
-func (cl *Client) allocReadBuf(n int) []byte {
+// allocReadBuf returns a buffer for the body of the next packet. PUBLISH bodies
+// are cut from a per-connection slab; decoded topics and payloads point into it,
+// so anything that keeps them long-term must copy them. A region of the slab is
+// never rewritten (a new slab is allocated instead), which is what makes the
+// zero-copy decode safe. Every other packet type
+// gets its own buffer: subscription filters, client IDs, usernames and wills
+// live as long as the session and would otherwise keep a whole slab alive.
+func (cl *Client) allocReadBuf(packetType byte, n int) []byte {
 	if n == 0 {
 		return nil
 	}
-	const slabSize = 65536
-	if n > slabSize/2 {
+	if packetType != packets.Publish || n > readSlabSize/2 {
 		return make([]byte, n)
 	}
 	if len(cl.Net.readSlab) < n {
-		cl.Net.readSlab = make([]byte, slabSize)
+		cl.Net.readSlab = make([]byte, readSlabSize)
 	}
 	b := cl.Net.readSlab[:n:n]
 	cl.Net.readSlab = cl.Net.readSlab[n:]
 	return b
+}
+
+// releaseReadBuffers drops the read buffer and slab once the connection has
+// ended. A client with a persistent session stays in Server.Clients until the
+// session expires, and must not keep them that long.
+func (cl *Client) releaseReadBuffers() {
+	cl.Net.bconn = nil
+	cl.Net.readSlab = nil
 }
 
 // ReadPacket reads the remaining buffer into an MQTT packet.
@@ -710,7 +551,7 @@ func (cl *Client) ReadPacket(fh *packets.FixedHeader) (pk packets.Packet, err er
 
 	pk.ProtocolVersion = cl.Properties.ProtocolVersion // inherit client protocol version for decoding
 	pk.FixedHeader = *fh
-	p := cl.allocReadBuf(pk.FixedHeader.Remaining)
+	p := cl.allocReadBuf(pk.FixedHeader.Type, pk.FixedHeader.Remaining)
 	if len(p) > 0 {
 		n, err := io.ReadFull(cl.Net.bconn, p)
 		if err != nil {
@@ -763,142 +604,5 @@ func (cl *Client) ReadPacket(fh *packets.FixedHeader) (pk packets.Packet, err er
 	}
 
 	pk, err = cl.ops.hooks.OnPacketRead(cl, pk)
-	return
-}
-
-// WritePacket encodes and writes a packet to the client.
-func (cl *Client) WritePacket(pk packets.Packet) error {
-	if cl.Closed() {
-		return ErrConnectionClosed
-	}
-
-	if cl.Net.Conn == nil {
-		return nil
-	}
-
-	if pk.Expiry > 0 {
-		expiry := pk.Expiry - time.Now().Unix()
-		if expiry < 1 {
-			expiry = 1
-		}
-		pk.Properties.MessageExpiryInterval = uint32(expiry) // [MQTT-3.3.2-6]
-	}
-
-	pk.ProtocolVersion = cl.Properties.ProtocolVersion
-	if pk.Mods.MaxSize == 0 { // NB we use this statement to embed client packet sizes in tests
-		pk.Mods.MaxSize = cl.Properties.Props.MaximumPacketSize
-	}
-
-	if cl.Properties.Props.RequestProblemInfoFlag && cl.Properties.Props.RequestProblemInfo == 0x0 {
-		pk.Mods.DisallowProblemInfo = true // [MQTT-3.1.2-29] strict, no problem info on any packet if set
-	}
-
-	if pk.FixedHeader.Type != packets.Connack || cl.Properties.Props.RequestResponseInfo == 0x1 || cl.ops.options.Capabilities.Compatibilities.AlwaysReturnResponseInfo {
-		pk.Mods.AllowResponseInfo = true // [MQTT-3.1.2-28] we need to know which properties we can encode
-	}
-
-	pk = cl.ops.hooks.OnPacketEncode(cl, pk)
-
-	var err error
-	buf := mempool.GetBuffer()
-	defer mempool.PutBuffer(buf)
-	switch pk.FixedHeader.Type {
-	case packets.Connect:
-		err = pk.ConnectEncode(buf)
-	case packets.Connack:
-		err = pk.ConnackEncode(buf)
-	case packets.Publish:
-		err = pk.PublishEncode(buf)
-	case packets.Puback:
-		err = pk.PubackEncode(buf)
-	case packets.Pubrec:
-		err = pk.PubrecEncode(buf)
-	case packets.Pubrel:
-		err = pk.PubrelEncode(buf)
-	case packets.Pubcomp:
-		err = pk.PubcompEncode(buf)
-	case packets.Subscribe:
-		err = pk.SubscribeEncode(buf)
-	case packets.Suback:
-		err = pk.SubackEncode(buf)
-	case packets.Unsubscribe:
-		err = pk.UnsubscribeEncode(buf)
-	case packets.Unsuback:
-		err = pk.UnsubackEncode(buf)
-	case packets.Pingreq:
-		err = pk.PingreqEncode(buf)
-	case packets.Pingresp:
-		err = pk.PingrespEncode(buf)
-	case packets.Disconnect:
-		err = pk.DisconnectEncode(buf)
-	case packets.Auth:
-		err = pk.AuthEncode(buf)
-	default:
-		err = fmt.Errorf("%w: %v", packets.ErrNoValidPacketAvailable, pk.FixedHeader.Type)
-	}
-	if err != nil {
-		return err
-	}
-
-	if pk.Mods.MaxSize > 0 && uint32(buf.Len()) > pk.Mods.MaxSize {
-		return packets.ErrPacketTooLarge // [MQTT-3.1.2-24] [MQTT-3.1.2-25]
-	}
-
-	n, err := func() (int64, error) {
-		cl.Lock()
-		defer cl.Unlock()
-		if len(cl.State.outbound) == 0 {
-			if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
-				return buf.WriteTo(cl.Net.Conn)
-			}
-
-			// first write to buffer, then flush buffer
-			n, _ := cl.Net.outbuf.Write(buf.Bytes()) // will always be successful
-			err = cl.flushOutbuf()
-			return int64(n), err
-		}
-
-		// there are more writes in the queue
-		if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
-			if buf.Len() >= cl.ops.options.ClientNetWriteBufferSize {
-				return buf.WriteTo(cl.Net.Conn)
-			}
-			if cl.Net.outbuf == nil {
-				cl.Net.outbuf = bytes.NewBuffer(make([]byte, 0, cl.ops.options.ClientNetWriteBufferSize))
-			}
-		}
-
-		n, _ := cl.Net.outbuf.Write(buf.Bytes()) // will always be successful
-		if cl.Net.outbuf.Len() < cl.ops.options.ClientNetWriteBufferSize {
-			return int64(n), nil
-		}
-
-		err = cl.flushOutbuf()
-		return int64(n), err
-	}()
-	if err != nil {
-		return err
-	}
-
-	atomic.AddInt64(&cl.ops.info.BytesSent, n)
-	atomic.AddInt64(&cl.ops.info.PacketsSent, 1)
-	if pk.FixedHeader.Type == packets.Publish {
-		atomic.AddInt64(&cl.ops.info.MessagesSent, 1)
-	}
-
-	cl.ops.hooks.OnPacketSent(cl, pk, buf.Bytes())
-
-	return err
-}
-
-func (cl *Client) flushOutbuf() (err error) {
-	if cl.Net.outbuf == nil || cl.Net.outbuf.Len() == 0 {
-		return
-	}
-
-	_, err = cl.Net.outbuf.WriteTo(cl.Net.Conn)
-	if err == nil {
-		cl.Net.outbuf.Reset()
-	}
 	return
 }

@@ -505,6 +505,13 @@ type Config struct {
 	SSL            SSLConfig `yaml:"SSL"`
 	MaxMessageSize int       `yaml:"MaxMessageSize"`
 
+	// Per-connection MQTT buffers; 0 keeps the engine default. Each connected
+	// client allocates the two buffers; the write queue grows only while the
+	// client is backlogged.
+	ClientWriteQueueSize  int `yaml:"ClientWriteQueueSize"`  // live publishes queued per client before new ones are dropped
+	ClientReadBufferSize  int `yaml:"ClientReadBufferSize"`  // bytes
+	ClientWriteBufferSize int `yaml:"ClientWriteBufferSize"` // bytes; packets are written in batches of about this size
+
 	DefaultStoreType  StoreType `yaml:"DefaultStoreType"`
 	SessionStoreType  StoreType `yaml:"SessionStoreType"`
 	RetainedStoreType StoreType `yaml:"RetainedStoreType"`
@@ -729,6 +736,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxMessageSize < 0 {
 		return fmt.Errorf("MaxMessageSize must be non-negative")
+	}
+	if c.ClientWriteQueueSize < 0 || c.ClientReadBufferSize < 0 || c.ClientWriteBufferSize < 0 {
+		return fmt.Errorf("ClientWriteQueueSize, ClientReadBufferSize and ClientWriteBufferSize must be non-negative")
 	}
 	if c.NATS < 0 || c.NATS > 65535 {
 		return fmt.Errorf("NATS port must be between 0 and 65535")

@@ -247,3 +247,15 @@ func TestDefaultStoreWinCCOA(t *testing.T) {
 		t.Errorf("UserStoreType WINCCOA: %v", err)
 	}
 }
+
+func TestValidateClientBufferSizes(t *testing.T) {
+	cfg := Default()
+	cfg.ClientWriteQueueSize, cfg.ClientReadBufferSize, cfg.ClientWriteBufferSize = 1024, 8192, 8192
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	cfg.ClientReadBufferSize = -1
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ClientReadBufferSize") {
+		t.Fatalf("negative ClientReadBufferSize: err = %v", err)
+	}
+}

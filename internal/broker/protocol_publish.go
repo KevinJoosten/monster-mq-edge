@@ -7,6 +7,10 @@ import (
 
 // ProtocolPublish publishes msg on behalf of a protocol session. The caller
 // has already checked the ACL (inline clients bypass it) and sets msg.Time.
+//
+// The broker keeps references to the topic and payload of msg after the call returns
+// (subscriber queues, inflight messages, the last-value store), so the caller
+// must not modify them afterwards.
 type ProtocolPublish func(clientID string, msg stores.BrokerMessage) error
 
 // NewProtocolPublish builds the protocol publish path over the UNS Modeler

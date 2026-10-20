@@ -2297,6 +2297,8 @@ func (r *archiveGroupMutationsResolver) Update(ctx context.Context, _ *generated
 			return &generated.ArchiveGroupResult{Success: false, Message: ptr(err.Error())}, nil
 		}
 		existing.DatabaseConnectionName = dbConnName
+	} else if len(archive.RequiredDatabaseConnectionTypes(existing.LastValType, existing.ArchiveType)) == 0 {
+		existing.DatabaseConnectionName = ""
 	} else if existing.DatabaseConnectionName != "" {
 		dbConnName, err := r.validateDatabaseConnectionSelection(ctx, existing.DatabaseConnectionName, existing.LastValType, existing.ArchiveType)
 		if err != nil {

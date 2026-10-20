@@ -566,7 +566,7 @@ func TestRedisPatternsAndScan(t *testing.T) {
 }
 
 func TestRedisPubSub(t *testing.T) {
-	_, _, port := startBrokerWithRedis(t)
+	srv, _, port := startBrokerWithRedis(t)
 	rdbSub := redis.NewClient(&redis.Options{
 		Addr: fmt.Sprintf("127.0.0.1:%d", port),
 	})
@@ -623,6 +623,58 @@ func TestRedisPubSub(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for pmessage")
+	}
+
+	// Disable Default archive group: PUBLISH + SUBSCRIBE still works, SET fails
+	defCfg, err := srv.Storage().ArchiveConfig.Get(ctx, "Default")
+	if err != nil || defCfg == nil {
+		t.Fatalf("get Default archive group: %v", err)
+	}
+	defCfg.Enabled = false
+	if err := srv.Storage().ArchiveConfig.Save(ctx, *defCfg); err != nil {
+		t.Fatalf("save disabled Default archive group: %v", err)
+	}
+	if err := srv.Archives().Reload(ctx); err != nil {
+		t.Fatalf("reload archives: %v", err)
+	}
+
+	if err := rdbPub.Publish(ctx, "chat/room1", "no-archive-group").Err(); err != nil {
+		t.Fatalf("PUBLISH with disabled archive group should succeed: %v", err)
+	}
+	select {
+	case msg := <-msgCh:
+		if msg.Payload != "no-archive-group" || msg.Channel != "chat/room1" {
+			t.Fatalf("received message mismatch with disabled archive group: %v", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pubsub message with disabled archive group")
+	}
+
+	if err := rdbPub.Set(ctx, "chat/room1", "should-fail", 0).Err(); err == nil || !strings.Contains(err.Error(), "ERR selected DB is not mapped to an archive group") {
+		t.Fatalf("expected unmapped DB error for SET with disabled archive group, got: %v", err)
+	}
+
+	// Enable Default archive group with LastValType=NONE and ArchiveType=SQLITE: SET + SUBSCRIBE works
+	defCfg.Enabled = true
+	defCfg.LastValType = stores.MessageStoreNone
+	defCfg.ArchiveType = stores.ArchiveSQLite
+	if err := srv.Storage().ArchiveConfig.Save(ctx, *defCfg); err != nil {
+		t.Fatalf("save Default archive group with LastValType=NONE: %v", err)
+	}
+	if err := srv.Archives().Reload(ctx); err != nil {
+		t.Fatalf("reload archives: %v", err)
+	}
+
+	if err := rdbPub.Set(ctx, "chat/room1", "set-without-memory-store", 0).Err(); err != nil {
+		t.Fatalf("SET with LastValType=NONE and ArchiveType=SQLITE should succeed: %v", err)
+	}
+	select {
+	case msg := <-msgCh:
+		if msg.Payload != "set-without-memory-store" || msg.Channel != "chat/room1" {
+			t.Fatalf("received message mismatch on SET with LastValType=NONE: %v", msg)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for pubsub message from SET with LastValType=NONE")
 	}
 }
 

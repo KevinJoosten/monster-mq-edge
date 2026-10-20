@@ -111,22 +111,24 @@ func (c *Conn) validateWrite(cmd, topic string, isPublish bool) (*validatedWrite
 	}
 
 	// Step 3: DB group
-	if c.server.deps.Archives == nil {
-		return nil, errors.New("ERR selected DB is not mapped to an archive group")
+	var group *archive.Group
+	if c.server.deps.Archives != nil {
+		group = c.server.deps.Archives.ByRedisDB(c.selectedDb)
 	}
-	group := c.server.deps.Archives.ByRedisDB(c.selectedDb)
 	if group == nil {
-		return nil, errors.New("ERR selected DB is not mapped to an archive group")
-	}
+		if !isPublish {
+			return nil, errors.New("ERR selected DB is not mapped to an archive group")
+		}
+	} else {
+		// Step 4: Topic filter
+		if !group.MatchesFilter(topic) {
+			return nil, errors.New("ERR topic is outside selected archive group topic filter")
+		}
 
-	// Step 4: Topic filter
-	if !group.MatchesFilter(topic) {
-		return nil, errors.New("ERR topic is outside selected archive group topic filter")
-	}
-
-	// Step 5: Read-only check (F7; skipped for PUBLISH)
-	if !isPublish && isGroupReadOnly(group) {
-		return nil, fmt.Errorf("ERR last value store of archive group [%s] is read-only", group.Name())
+		// Step 5: Read-only check (F7; skipped for PUBLISH)
+		if !isPublish && isGroupReadOnly(group) {
+			return nil, fmt.Errorf("ERR last value store of archive group [%s] is read-only", group.Name())
+		}
 	}
 
 	// Step 6: Publish ACL

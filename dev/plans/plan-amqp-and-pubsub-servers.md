@@ -129,120 +129,17 @@ The AMQP swap is the only lossy-looking one; it is a bijection, so round trips a
 
 This makes request/reply work across protocols (an AMQP RPC client can call a NATS or MQTT responder).
 
-## Phase 1: AMQP 0-9-1 server (`internal/amqp/`)
+## Per-protocol plans
 
-**Goal:** stock clients (`rabbitmq/amqp091-go`, `pika`, `amqplib`, Spring AMQP, .NET `RabbitMQ.Client`)
-publish and consume against edge; messages flow both ways with MQTT, NATS, Redis.
+| Phase | Plan | Depends on |
+|---|---|---|
+| 1 | [plan-amqp091-server.md](plan-amqp091-server.md) | P1, P2, P3, P4 (lands them) |
+| 2 | [plan-stomp-server.md](plan-stomp-server.md) | P1-P4 |
+| 3 | [plan-mqttsn-gateway.md](plan-mqttsn-gateway.md) | P1 (UDP) |
+| 4 | [plan-amqp10-server.md](plan-amqp10-server.md) | P1-P4, AMQP 0-9-1 listener if the port is shared |
+| 5 | [plan-coap-server.md](plan-coap-server.md) | P1 (UDP), P3, P4 |
 
-**Wire and connection**
-- Hand-rolled codec, no protocol library in the broker (as Kafka plan rule 5). Frames: method, header,
-  body, heartbeat; field tables; `frame-max` negotiation (default 128 KiB), `channel-max` 2047.
-- `AMQP` protocol header 0-9-1 only; anything else gets the 0-9-1 header back and close.
-- SASL `PLAIN` and `AMQPLAIN`; `EXTERNAL` when the TLS listener has client certs (mTLS via `tlsutil`).
-- Heartbeats both ways; missed heartbeats close the connection.
-- vhost `/` only by default. Decision A2: other vhosts either rejected or used as a topic prefix.
-- Plain port 5672 and TLS port 5671 (`amqps`), each optional.
-
-**Model**
-- Exchanges: `amq.topic` (and `""` default exchange for direct-to-queue) are built in.
-  `exchange.declare` type `topic` with any name is accepted and aliases the same MQTT topic space
-  (decision A1: or maps the exchange name to a topic prefix). `direct`/`fanout`/`headers` exchanges
-  return `503 command-invalid` in phase 1.
-- Queues: `queue.declare` (incl. server-named `amq.gen-*`, `passive`, `exclusive`, `auto-delete`,
-  `durable`), `queue.bind`/`unbind` with routing-key patterns via P3, `queue.purge`, `queue.delete`.
-  Durable -> P2; otherwise in-memory bus subscription per queue (S3 rules: validate, overflow closes,
-  1024 buffer, unsubscribe on close).
-- Consumers: `basic.consume`/`cancel` with round-robin over a queue's consumers, `basic.qos`
-  prefetch (count; size ignored), `basic.ack`/`nack`/`reject` (incl. `multiple`, `requeue`),
-  `basic.recover`, `basic.get`.
-- Publishing: `basic.publish` -> S1 with client ID `amqp-<uuid>`; `mandatory` returns via
-  `basic.return` when no binding matches (decision A3, needs a cheap "has subscribers" check);
-  `immediate` rejected as in RabbitMQ.
-- Publisher confirms (`confirm.select`): `basic.ack` after `ProtocolPublish` returns, `basic.nack` on
-  hook error.
-- `tx.*`: `tx.select` accepted, `tx.commit` publishes the buffered batch (no rollback of side effects
-  beyond discarding unsent messages).
-- WinCC OA native writes: a publish to a native value topic goes through S2, as Redis `SET` does
-  (decision A4).
-
-**Not in phase 1:** dead-lettering, alternate exchanges, priority queues, queue TTL/length arguments other
-than `x-max-length` (maps to `MaxQueueMessages`), exchange-to-exchange bindings, streams, federation,
-management HTTP API.
-
-**Sessions and ACL:** session per connection (`amqp-<uuid>`, `ProtocolVersion` `"AMQP"`), S5 counters,
-publish ACL on the MQTT topic, subscribe ACL at `queue.bind` on the filter, S7 recheck at delivery.
-
-**Config** (`AmqpServer:` block, Features flag `AmqpServer`, default off):
-
-```yaml
-Features:
-  AmqpServer: false
-AmqpServer:
-  Enabled: true
-  Host: 0.0.0.0
-  Port: 5672          # 0 = off
-  TlsPort: 0          # 5671 for amqps; uses the broker's TLS key pair
-  RequireAuth: true   # only effective with user management on
-  DefaultQos: 0       # QoS for delivery-mode 1; delivery-mode 2 is always QoS 1
-  FrameMax: 131072
-  Heartbeat: 60
-```
-
-Checklist: `config.go`, `yaml-json-schema.json`, `config.yaml.example` (and `scripts/deb/config.yaml` only
-if enabled by default, which it is not).
-
-**Tests** (`test/integration/amqp_*_test.go`, `amqp091-go` test-only): handshake and auth matrix;
-topic mapping round trip; AMQP->MQTT and MQTT->AMQP; NATS/Redis interop; durable queue survives consumer
-absence and broker restart (all three stores); prefetch and redelivery on nack/close; publisher confirms;
-RPC via `reply-to` with an MQTT 5 responder; ACL deny on publish, bind and delivery; dashboard session
-removal; overflow closes the connection.
-
-**Docs:** README feature line, `doc/amqp.md`, AGENTS.md (subsystem list, repository layout).
-
-## Phase 2: STOMP 1.2 (`internal/stomp/`)
-
-- TCP port (default 61613) and STOMP over WebSocket on the existing HTTP server at `/stomp`
-  (subprotocols `v12.stomp`, `v11.stomp`), so browsers can use `@stomp/stompjs` without extra ports.
-- Frames `CONNECT/STOMP`, `SEND`, `SUBSCRIBE`, `UNSUBSCRIBE`, `ACK`, `NACK`, `BEGIN/COMMIT/ABORT`,
-  `DISCONNECT` with `receipt`, heart-beating, `content-length`, header escaping.
-- `/topic/<t>` -> bus subscription; `/queue/<q>` -> P2 virtual session (`stomp-q-<q>`), shared with
-  nothing else (AMQP queues keep their own prefix).
-- `ack: auto | client | client-individual`.
-- Session ID `stomp-<uuid>`.
-- Tests with `go-stomp/stomp` (test-only) and a WebSocket case.
-
-## Phase 3: MQTT-SN 1.2 gateway (`internal/mqttsn/`)
-
-- UDP listener (default 1884), optional multicast `ADVERTISE`/`SEARCHGW`/`GWINFO`.
-- Transparent model: each MQTT-SN client gets an engine session with client ID `mqttsn-<clientId>`, so
-  `clean=false`, will messages, retained messages and QoS 1/2 come from the MQTT core unchanged.
-- Topic IDs: `REGISTER`/`REGACK` per session, short (2-char) topics, predefined topic IDs from config.
-- QoS -1 (publish without connection) to predefined/short topics, gated by a config flag and the
-  anonymous user's ACL.
-- Sleeping clients (`DISCONNECT` with duration, `PINGREQ` with client ID) buffer messages in the session.
-- No DTLS in this phase. Tests use a small hand-written MQTT-SN client in `test/integration/`
-  (no maintained Go client exists).
-
-## Phase 4: AMQP 1.0 (`internal/amqp10/`)
-
-- Hand-rolled AMQP 1.0 type system codec, SASL (`ANONYMOUS`, `PLAIN`), sessions, links, flow control,
-  settlement modes. Can share listener port 5672 with phase 1 by sniffing the protocol header
-  (`AMQP\x00` 0-9-1 vs `AMQP\x00\x01\x00\x00` 1.0, plus SASL header `AMQP\x03`); decision A5.
-- Sender link target address -> MQTT topic; receiver link source address -> MQTT filter (P3).
-  Durable terminus (`durable=2`, `expiry-policy=never`) -> P2 with client ID `amqp10-q-<container>-<link>`.
-- `rcv-settle-mode first` only; at-most-once (pre-settled) = QoS 0, at-least-once = QoS 1.
-- Targets OPC UA PubSub over AMQP (JSON encoding) and Azure SDK clients pointed at edge for local testing.
-- Tests with `Azure/go-amqp` (test-only).
-
-## Phase 5: CoAP pub/sub (`internal/coap/`)
-
-- UDP 5683, RFC 7252 messaging (CON/NON/ACK/RST, dedup, block-wise transfer RFC 7959 for payloads > 1 KiB).
-- Broker resource `/ps`: `PUT /ps/<t>` publishes retained, `POST /ps/<t>` publishes non-retained,
-  `GET /ps/<t>` returns the retained/last value from the last-value store, `GET` + Observe subscribes,
-  `DELETE` clears the retained message, `GET /.well-known/core` lists discovery info.
-- Auth: none on plain CoAP (anonymous user ACL applies); DTLS with PSK/certs is a later step and needs
-  `pion/dtls` (pure Go) as a new dependency, decision A6.
-- Tests with `plgd-dev/go-coap` (test-only).
+Each plan has its own config block, tasks, tests, acceptance criteria and decisions.
 
 ## Cross-cutting
 
@@ -270,14 +167,9 @@ CoAP (phase 5) needs P1 + P3 only.
 
 ## Decisions needed
 
+Protocol-specific decisions are in each plan. Shared ones:
+
 - [ ] Sign-off per protocol (AGENTS.md off-limits rule): AMQP 0-9-1, STOMP, MQTT-SN, AMQP 1.0, CoAP.
-- [ ] A1. AMQP named topic exchanges: alias the one MQTT topic space (recommended) or map exchange
-      name to a topic prefix.
-- [ ] A2. AMQP vhosts other than `/`: reject (recommended) or treat as topic prefix.
-- [ ] A3. Support `mandatory` + `basic.return` (needs a subscriber-exists check on the publish path).
-- [ ] A4. AMQP/STOMP publishes to WinCC OA native value topics go through S2 like Redis `SET`.
-- [ ] A5. AMQP 1.0 shares port 5672 with 0-9-1 via header sniffing (recommended) or uses its own port.
-- [ ] A6. Accept `pion/dtls` as a dependency for CoAP over DTLS (later step).
 - [ ] P2 virtual persistent sessions: OK to show durable queues as sessions in the dashboard and in
       the session tables (no new tables).
 - [ ] Whether main should get the same servers (one issue each) or they stay edge-only.

@@ -8,58 +8,58 @@ import (
 	"monstermq.io/edge/internal/mqtt/packets"
 )
 
+// inflightEntry is an inflight packet with its arrival sequence in the session,
+// kept in one map entry so the hot path does a single map write per packet.
+type inflightEntry struct {
+	pk    packets.Packet
+	order uint64 // for in-order resend and claims; an updated entry keeps its place
+}
+
 // Inflight is a map of InflightMessage keyed on packet id.
 type Inflight struct {
 	sync.RWMutex
-	internal            map[uint16]packets.Packet // internal contains the inflight packets
-	order               map[uint16]uint64         // insertion sequence of each packet id, for in-order resend and claims
-	nextOrder           uint64                    // last sequence handed out
-	deferredCount       atomic.Int32              // number of entries with Expiry < 0
-	quotaMu             sync.Mutex                // protects quota fields
-	receiveQuota        int32                     // remaining inbound qos quota for flow control
-	sendQuota           int32                     // remaining outbound qos quota for flow control
-	maximumReceiveQuota int32                     // maximum allowed receive quota
-	maximumSendQuota    int32                     // maximum allowed send quota
+	internal            map[uint16]inflightEntry // internal contains the inflight packets
+	nextOrder           uint64                   // last sequence handed out
+	deferredCount       atomic.Int32             // number of entries with Expiry < 0
+	quotaMu             sync.Mutex               // protects quota fields
+	receiveQuota        int32                    // remaining inbound qos quota for flow control
+	sendQuota           int32                    // remaining outbound qos quota for flow control
+	maximumReceiveQuota int32                    // maximum allowed receive quota
+	maximumSendQuota    int32                    // maximum allowed send quota
 }
 
 // NewInflights returns a new instance of an Inflight packets map.
 func NewInflights() *Inflight {
 	return &Inflight{
-		internal: map[uint16]packets.Packet{},
-		order:    map[uint16]uint64{},
+		internal: map[uint16]inflightEntry{},
 	}
 }
 
-// trackLocked records the arrival order of a new packet id. An updated entry
-// (e.g. PUBLISH replaced by PUBREC/PUBREL) keeps its place. Callers hold the lock.
-func (i *Inflight) trackLocked(id uint16, existed bool) {
-	if existed {
-		if _, ok := i.order[id]; ok {
-			return
-		}
+// putLocked stores m, keeping the arrival sequence of an entry it replaces
+// (e.g. PUBLISH replaced by PUBREC/PUBREL), and returns whether one existed.
+// Callers hold the lock.
+func (i *Inflight) putLocked(m packets.Packet) bool {
+	prev, ok := i.internal[m.PacketID]
+	if ok && prev.pk.Expiry < 0 {
+		i.deferredCount.Add(-1)
 	}
-	if i.order == nil {
-		i.order = map[uint16]uint64{}
+	if m.Expiry < 0 {
+		i.deferredCount.Add(1)
 	}
-	i.nextOrder++
-	i.order[id] = i.nextOrder
+	order := prev.order
+	if !ok {
+		i.nextOrder++
+		order = i.nextOrder
+	}
+	i.internal[m.PacketID] = inflightEntry{pk: m, order: order}
+	return ok
 }
 
 // Set adds or updates an inflight packet by packet id.
 func (i *Inflight) Set(m packets.Packet) bool {
 	i.Lock()
 	defer i.Unlock()
-
-	prev, ok := i.internal[m.PacketID]
-	if ok && prev.Expiry < 0 {
-		i.deferredCount.Add(-1)
-	}
-	if m.Expiry < 0 {
-		i.deferredCount.Add(1)
-	}
-	i.internal[m.PacketID] = m
-	i.trackLocked(m.PacketID, ok)
-	return !ok
+	return !i.putLocked(m)
 }
 
 // Get returns an inflight packet by packet id.
@@ -67,8 +67,8 @@ func (i *Inflight) Get(id uint16) (packets.Packet, bool) {
 	i.RLock()
 	defer i.RUnlock()
 
-	if m, ok := i.internal[id]; ok {
-		return m, true
+	if e, ok := i.internal[id]; ok {
+		return e.pk, true
 	}
 
 	return packets.Packet{}, false
@@ -89,12 +89,9 @@ func (i *Inflight) Clone() *Inflight {
 	defer i.RUnlock()
 	for k, v := range i.internal {
 		c.internal[k] = v
-		if v.Expiry < 0 {
+		if v.pk.Expiry < 0 {
 			c.deferredCount.Add(1)
 		}
-	}
-	for k, v := range i.order {
-		c.order[k] = v
 	}
 	c.nextOrder = i.nextOrder
 	return c
@@ -105,19 +102,21 @@ func (i *Inflight) GetAll(immediate bool) []packets.Packet {
 	i.RLock()
 	defer i.RUnlock()
 
-	m := []packets.Packet{}
+	es := make([]inflightEntry, 0, len(i.internal))
 	for _, v := range i.internal {
-		if !immediate || (immediate && v.Expiry < 0) {
-			m = append(m, v)
+		if !immediate || (immediate && v.pk.Expiry < 0) {
+			es = append(es, v)
 		}
 	}
 
 	// Oldest first, by arrival in the session: resends must keep the original
 	// order of the messages [MQTT-4.6.0-1], also when packet ids wrap around.
-	sort.Slice(m, func(a, b int) bool {
-		return i.order[m[a].PacketID] < i.order[m[b].PacketID]
-	})
+	sort.Slice(es, func(a, b int) bool { return es[a].order < es[b].order })
 
+	m := make([]packets.Packet, len(es))
+	for k := range es {
+		m[k] = es[k].pk
+	}
 	return m
 }
 
@@ -155,16 +154,7 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 		}
 	}
 
-	prev, existed := i.internal[m.PacketID]
-	if existed && prev.Expiry < 0 {
-		i.deferredCount.Add(-1)
-	}
-	if m.Expiry < 0 {
-		i.deferredCount.Add(1)
-	}
-	i.internal[m.PacketID] = m
-	i.trackLocked(m.PacketID, existed)
-	return !existed, deferred
+	return !i.putLocked(m), deferred
 }
 
 // HasDeferred reports whether any inflight packet is currently deferred waiting on send quota.
@@ -189,16 +179,14 @@ func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (pack
 		return packets.Packet{}, false
 	}
 
-	var next packets.Packet
-	var nextOrder uint64
+	var next inflightEntry
 	found := false
 	for _, v := range i.internal {
-		if v.Expiry >= 0 {
+		if v.pk.Expiry >= 0 {
 			continue
 		}
-		if o := i.order[v.PacketID]; !found || o < nextOrder {
+		if !found || v.order < next.order {
 			next = v
-			nextOrder = o
 			found = true
 		}
 	}
@@ -210,14 +198,14 @@ func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (pack
 		i.sendQuota--
 	}
 	i.deferredCount.Add(-1)
-	next.Expiry = 0
+	next.pk.Expiry = 0
 	if expiryFn != nil {
-		if exp := expiryFn(next); exp > 0 {
-			next.Expiry = exp
+		if exp := expiryFn(next.pk); exp > 0 {
+			next.pk.Expiry = exp
 		}
 	}
-	i.internal[next.PacketID] = next
-	return next, true
+	i.internal[next.pk.PacketID] = next
+	return next.pk, true
 }
 
 // Delete removes an in-flight message from the map. Returns true if the message existed.
@@ -226,11 +214,10 @@ func (i *Inflight) Delete(id uint16) bool {
 	defer i.Unlock()
 
 	prev, ok := i.internal[id]
-	if ok && prev.Expiry < 0 {
+	if ok && prev.pk.Expiry < 0 {
 		i.deferredCount.Add(-1)
 	}
 	delete(i.internal, id)
-	delete(i.order, id)
 
 	return ok
 }

@@ -465,6 +465,7 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 
 	go cl.WriteLoop()
 	defer cl.releaseReadBuffers()
+	defer cl.markEstablished() // also when the connection ends before reading packets
 
 	if cl.Net.Conn != nil {
 		_ = cl.Net.Conn.SetDeadline(time.Now().Add(s.Options.ConnectTimeout)) // replaced by the keepalive deadline after CONNECT
@@ -518,8 +519,15 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 		}
 	}
 
-	s.hooks.OnSessionEstablished(cl, pk)
+	// The CONNACK is already out, so a fast client can disconnect and the next
+	// connection with the same client ID can take this one over before this
+	// line runs. Its hooks then already ran for the new connection, and must
+	// not be overridden with the state of this stale one.
+	if !cl.IsTakenOver() {
+		s.hooks.OnSessionEstablished(cl, pk)
+	}
 
+	cl.markEstablished()
 	err = cl.Read(s.receivePacket)
 	if err != nil {
 		if errors.Is(err, packets.ErrKeepAliveTimeout) {
@@ -540,12 +548,17 @@ func (s *Server) attachClient(cl *Client, listener string) error {
 	s.Log.Debug("client disconnected", "error", err, "client", cl.ID, "remote", cl.Net.Remote, "listener", listener)
 
 	expire := (cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryInterval == 0) || (cl.Properties.ProtocolVersion < 5 && cl.Properties.Clean)
-	s.hooks.OnDisconnect(cl, err, expire)
+	// A connection taken over by a new connection with the same client ID no
+	// longer owns the session: its end must not make the hooks, which track
+	// sessions by client ID, drop the state of the new connection.
+	s.hooks.OnDisconnect(cl, err, expire && !cl.IsTakenOver())
+	cl.State.sessionReleased.Store(true)
 
 	if expire && !cl.IsTakenOver() {
+		s.redeliverSharedInflights(cl)
 		cl.ClearInflights()
 		s.UnsubscribeClient(cl)
-		s.Clients.Delete(cl.ID) // [MQTT-4.1.0-2] ![MQTT-3.1.2-23]
+		s.Clients.DeleteIfCurrent(cl) // [MQTT-4.1.0-2] ![MQTT-3.1.2-23]
 	}
 
 	return err
@@ -601,11 +614,15 @@ func (s *Server) validateConnect(cl *Client, pk packets.Packet) packets.Code {
 	}
 
 	if cl.Properties.ProtocolVersion < 5 && !pk.Connect.Clean && pk.Connect.ClientIdentifier == "" {
-		return packets.ErrUnspecifiedError
+		return packets.ErrClientIdentifierNotValid // CONNACK return code 0x02 [MQTT-3.1.3-8]
 	}
 
 	if !cl.Net.Inline && pk.Connect.ClientIdentifier == InlineClientId {
 		return packets.ErrClientIdentifierNotValid // would take over the inline client
+	}
+
+	if cl.Properties.ProtocolVersion == 5 && pk.Properties.AuthenticationMethod != "" && !s.hooks.Provides(OnAuthPacket) {
+		return packets.ErrBadAuthenticationMethod // no enhanced authentication supported [MQTT-4.12.0-1]
 	}
 
 	if cl.Properties.ProtocolVersion < s.Options.Capabilities.MinimumProtocolVersion {
@@ -623,9 +640,21 @@ func (s *Server) validateConnect(cl *Client, pk packets.Packet) packets.Code {
 // connection ID. If clean is true, the state of any previously existing client
 // session is abandoned.
 func (s *Server) inheritClientSession(pk packets.Packet, cl *Client) bool {
+	if existing, ok := s.Clients.Get(cl.ID); ok && existing != cl {
+		existing.settleBeforeTakeover(takeoverSettleTimeout, takeoverSettleGrace)
+	}
 	if existing, ok := s.Clients.Get(cl.ID); ok {
-		_ = s.DisconnectClient(existing, packets.ErrSessionTakenOver)                                   // [MQTT-3.1.4-3]
-		if pk.Connect.Clean || (existing.Properties.Clean && existing.Properties.ProtocolVersion < 5) { // [MQTT-3.1.2-4] [MQTT-3.1.4-4]
+		_ = s.DisconnectClient(existing, packets.ErrSessionTakenOver) // [MQTT-3.1.4-3]
+		// The old session also ends with its network connection when it had no
+		// session expiry: a clean 3.1.1 session, or MQTT 5 with Session Expiry
+		// Interval 0 (also when set to 0 by DISCONNECT) [MQTT-3.1.2-23].
+		// The same holds for a disconnected session whose expiry interval has
+		// passed, even if the periodic cleanup has not removed it yet.
+		existingEnds := (existing.Properties.Clean && existing.Properties.ProtocolVersion < 5) ||
+			(existing.Properties.ProtocolVersion == 5 && existing.Properties.Props.SessionExpiryInterval == 0) ||
+			(existing.Closed() && existing.sessionExpired(time.Now(), s.Options.Capabilities.MaximumSessionExpiryInterval))
+		if pk.Connect.Clean || existingEnds { // [MQTT-3.1.2-4] [MQTT-3.1.4-4]
+			s.redeliverSharedInflights(existing)
 			s.UnsubscribeClient(existing)
 			existing.ClearInflights()
 			existing.State.isTakenOver.Store(true) // only set isTakenOver after unsubscribe has occurred
@@ -702,6 +731,15 @@ func (s *Server) inheritClientSession(pk packets.Packet, cl *Client) bool {
 	return false // [MQTT-3.2.2-2]
 }
 
+const (
+	// takeoverSettleTimeout bounds how long a takeover waits for the previous
+	// connection of the client ID to finish its own CONNECT handling.
+	takeoverSettleTimeout = 2 * time.Second
+	// takeoverSettleGrace is the time the previous connection gets to process
+	// packets its client sent before reconnecting (typically a DISCONNECT).
+	takeoverSettleGrace = 100 * time.Millisecond
+)
+
 // SendConnack returns a Connack packet to a client.
 func (s *Server) SendConnack(cl *Client, reason packets.Code, present bool, properties *packets.Properties) error {
 	if properties == nil {
@@ -743,6 +781,10 @@ func (s *Server) SendConnack(cl *Client, reason packets.Code, present bool, prop
 	if s.Options.Capabilities.MaximumQos < 2 {
 		properties.MaximumQos = s.Options.Capabilities.MaximumQos // [MQTT-3.2.2-9]
 		properties.MaximumQosFlag = true
+	}
+
+	if s.Options.Capabilities.TopicAliasMaximum > 0 {
+		properties.TopicAliasMaximum = s.Options.Capabilities.TopicAliasMaximum // [MQTT-3.2.2-17] announce what PublishValidate enforces
 	}
 
 	if cl.Properties.Props.AssignedClientID != "" {
@@ -806,6 +848,12 @@ func (s *Server) processPacket(cl *Client, pk packets.Packet) error {
 		}
 		err = s.processUnsubscribe(cl, pk)
 	case packets.Auth:
+		if cl.Properties.ProtocolVersion < 5 {
+			return packets.ErrProtocolViolation // AUTH is a reserved packet type before MQTT 5 [MQTT-2.2.1]
+		}
+		if cl.Properties.Props.AuthenticationMethod == "" {
+			return packets.ErrProtocolViolationNoAuthMethod // [MQTT-4.12.0-1]
+		}
 		code := pk.AuthValidate()
 		if code != packets.CodeSuccess {
 			return code
@@ -820,9 +868,7 @@ func (s *Server) processPacket(cl *Client, pk packets.Packet) error {
 		return err
 	}
 
-	if next, ok := cl.claimDeferred(); ok {
-		_ = cl.WritePacket(next)
-	}
+	cl.writeNextDeferred()
 
 	return nil
 }
@@ -1475,7 +1521,11 @@ func (s *Server) publishToClientPtr(cl *Client, sub packets.Subscription, pk *pa
 	}
 
 	if outPtr.FixedHeader.Qos > 0 {
-		if (cl.Net.Conn == nil || cl.Closed()) && s.hooks.Provides(StoredQueuedMessages) {
+		// An offline persistent session gets its messages through the queue hook.
+		// Between the connection closing and its OnDisconnect hooks the queue hook
+		// does not know the client is offline yet; keep such a message in the
+		// session's inflight instead, so a reconnect resends it.
+		if (cl.Net.Conn == nil || (cl.Closed() && cl.State.sessionReleased.Load())) && s.hooks.Provides(StoredQueuedMessages) {
 			var res packets.Packet
 			if wantReturnCopy {
 				res = *outPtr
@@ -1531,6 +1581,11 @@ func (s *Server) publishToClientPtr(cl *Client, sub packets.Subscription, pk *pa
 				res = *outPtr
 			}
 			resetOutboundPacket(outPtr)
+			// The packet may have been deferred only to stay behind older
+			// deferred ones while quota is free: send the oldest now.
+			if cl.Net.Conn != nil && !cl.Closed() {
+				cl.writeNextDeferred()
+			}
 			return res, nil
 		}
 	}
@@ -1859,6 +1914,49 @@ func (s *Server) UnsubscribeClient(cl *Client) {
 	s.hooks.OnUnsubscribed(cl, packets.Packet{FixedHeader: packets.FixedHeader{Type: packets.Unsubscribe}, Filters: filters}, nil)
 }
 
+// redeliverSharedInflights is called when the session of cl ends. QoS 1/2
+// messages it received through a shared subscription and did not acknowledge
+// are sent to another connected member of the same share group, as a session
+// that terminates before its client reconnects should not lose them [MQTT-4.8.2].
+func (s *Server) redeliverSharedInflights(cl *Client) {
+	hasShared := false
+	for _, sub := range cl.State.Subscriptions.GetAll() {
+		if IsSharedFilter(sub.Filter) {
+			hasShared = true
+			break
+		}
+	}
+	if !hasShared {
+		return
+	}
+	for _, pk := range cl.State.Inflight.GetAll(false) {
+		if pk.FixedHeader.Type != packets.Publish || pk.FixedHeader.Qos == 0 {
+			continue // a PUBREL stage QoS 2 message was already delivered
+		}
+		subs := s.Topics.Subscribers(pk.TopicName)
+		for _, members := range subs.Shared {
+			if _, ok := members[cl.ID]; !ok {
+				continue
+			}
+			for id, msub := range members {
+				if id == cl.ID {
+					continue
+				}
+				other, ok := s.Clients.Get(id)
+				if !ok || other.Closed() || other.IsTakenOver() {
+					continue
+				}
+				out := pk.Copy(false)
+				out.PacketID = 0
+				out.FixedHeader.Dup = false
+				if _, err := s.publishToClient(other, msub, out); err == nil {
+					break
+				}
+			}
+		}
+	}
+}
+
 // processAuth processes an Auth packet.
 func (s *Server) processAuth(cl *Client, pk packets.Packet) error {
 	_, err := s.hooks.OnAuthPacket(cl, pk)
@@ -2057,11 +2155,20 @@ func (s *Server) sendLWT(cl *Client) {
 		TopicName: modifiedLWT.TopicName,
 		Payload:   modifiedLWT.Payload,
 		Properties: packets.Properties{
-			User: modifiedLWT.User,
+			User:                  modifiedLWT.User, // [MQTT-3.1.3-10] will properties are sent with the will message
+			ContentType:           modifiedLWT.ContentType,
+			ResponseTopic:         modifiedLWT.ResponseTopic,
+			CorrelationData:       modifiedLWT.CorrelationData,
+			MessageExpiryInterval: modifiedLWT.MessageExpiry,
+			PayloadFormat:         modifiedLWT.PayloadFormat,
+			PayloadFormatFlag:     modifiedLWT.PayloadFormatFlag,
 		},
 		Origin:  cl.ID,
 		Created: time.Now().Unix(),
 		Will:    true,
+	}
+	if modifiedLWT.MessageExpiry > 0 {
+		pk.Expiry = pk.Created + int64(modifiedLWT.MessageExpiry)
 	}
 
 	if cl.Properties.Will.WillDelayInterval > 0 {
@@ -2207,7 +2314,15 @@ func (s *Server) newClientFromStorage(c *storage.Client) *Client {
 		User:                      c.Properties.User,
 		MaximumPacketSize:         c.Properties.MaximumPacketSize,
 	}
-	cl.Properties.Will = Will(c.Will)
+	cl.Properties.Will = Will{
+		Payload:           c.Will.Payload,
+		User:              c.Will.User,
+		TopicName:         c.Will.TopicName,
+		Flag:              c.Will.Flag,
+		WillDelayInterval: c.Will.WillDelayInterval,
+		Qos:               c.Will.Qos,
+		Retain:            c.Will.Retain,
+	}
 	return cl
 }
 
@@ -2230,19 +2345,18 @@ func (s *Server) loadRetained(v []storage.Message) {
 // clearExpiredClients deletes all clients which have been disconnected for longer
 // than their given expiry intervals.
 func (s *Server) clearExpiredClients(dt int64) {
+	now := time.Unix(dt, 0)
+	if dt == time.Now().Unix() {
+		now = time.Now() // sub-second precision for the regular sweep
+	}
 	for id, client := range s.Clients.GetAll() {
-		disconnected := client.StopTime()
-		if disconnected == 0 {
+		if client.StopTime() == 0 {
 			continue
 		}
 
-		expire := s.Options.Capabilities.MaximumSessionExpiryInterval
-		if client.Properties.ProtocolVersion == 5 && client.Properties.Props.SessionExpiryIntervalFlag {
-			expire = client.Properties.Props.SessionExpiryInterval
-		}
-
-		if disconnected+int64(expire) < dt {
+		if client.sessionExpired(now, s.Options.Capabilities.MaximumSessionExpiryInterval) {
 			s.hooks.OnClientExpired(client)
+			s.redeliverSharedInflights(client)
 			client.ClearInflights()
 			s.UnsubscribeClient(client)
 			s.Clients.Delete(id) // [MQTT-4.1.0-2]
@@ -2279,6 +2393,13 @@ func (s *Server) clearExpiredInflights(now int64) {
 func (s *Server) sendDelayedLWT(dt int64) {
 	for id, pk := range s.loop.willDelayed.GetAll() {
 		if dt > pk.Expiry {
+			// pk.Expiry held the will delay deadline; the will message itself
+			// starts its Message Expiry Interval when it is published.
+			pk.Created = dt
+			pk.Expiry = 0
+			if pk.Properties.MessageExpiryInterval > 0 {
+				pk.Expiry = dt + int64(pk.Properties.MessageExpiryInterval)
+			}
 			s.publishToSubscribers(pk) // [MQTT-3.1.2-8]
 			if cl, ok := s.Clients.Get(id); ok {
 				if pk.FixedHeader.Retain {

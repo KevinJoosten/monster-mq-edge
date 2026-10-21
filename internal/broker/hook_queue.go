@@ -176,6 +176,7 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 		return
 	}
 
+	now := time.Now()
 	msg := stores.BrokerMessage{
 		MessageUUID: uuid.NewString(),
 		MessageID:   pk.PacketID,
@@ -183,7 +184,18 @@ func (h *QueueHook) OnPublished(_ *mqtt.Client, pk packets.Packet) {
 		Payload:     append([]byte(nil), pk.Payload...),
 		QoS:         pk.FixedHeader.Qos,
 		IsRetain:    pk.FixedHeader.Retain,
-		Time:        time.Now().UTC(),
+		Time:        now.UTC(),
+	}
+	// Queued messages keep their properties and their expiry: the remaining
+	// lifetime counts from now (the row's creation time) [MQTT-3.3.2-5].
+	setV5Props(&msg, &pk.Properties)
+	if pk.Expiry > 0 {
+		remaining := pk.Expiry - now.Unix()
+		if remaining <= 0 {
+			return // already expired, nothing to queue
+		}
+		v := uint32(remaining)
+		msg.MessageExpiryInterval = &v
 	}
 	result, err := h.store.Queue.EnqueueMultiLimited(ctx, msg, subs, int64(h.maxQueueMessages))
 	if err != nil {
@@ -268,6 +280,12 @@ func (h *QueueHook) collectOfflineSubscribers(ctx context.Context, topicName str
 func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 	persistent := !((cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryInterval == 0) || (cl.Properties.ProtocolVersion < 5 && cl.Properties.Clean))
 	h.mu.Lock()
+	if !isCurrentClient(h.server, cl) {
+		// A newer connection with this client ID took over while the hooks of
+		// this one were still running; its own hook owns the session state.
+		h.mu.Unlock()
+		return
+	}
 	if persistent {
 		h.persistent[cl.ID] = true
 		h.clientUsernames[cl.ID] = string(cl.Properties.Username)
@@ -320,15 +338,34 @@ func (h *QueueHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 				continue
 			}
 
+			// A message whose expiry passed while the client was offline is not
+			// delivered; one still alive carries its remaining lifetime [MQTT-3.3.2-5] [MQTT-3.3.2-6].
+			var remaining int64
+			if m.MessageExpiryInterval != nil && *m.MessageExpiryInterval > 0 {
+				remaining = m.Time.Unix() + int64(*m.MessageExpiryInterval) - time.Now().Unix()
+				if remaining <= 0 {
+					if err := h.store.Queue.Ack(ctx, cl.ID, m.MessageUUID); err != nil {
+						h.logger.Warn("queue hook: ack expired message failed", "client", cl.ID, "uuid", m.MessageUUID, "err", err)
+					}
+					continue
+				}
+			}
+
 			pk := packets.Packet{
 				FixedHeader: packets.FixedHeader{
 					Type:   packets.Publish,
 					Qos:    m.QoS,
 					Retain: false,
 				},
-				TopicName: m.TopicName,
-				Payload:   m.Payload,
-				Origin:    cl.ID,
+				TopicName:  m.TopicName,
+				Payload:    m.Payload,
+				Origin:     cl.ID,
+				Properties: propsToPacket(m),
+			}
+			pk.Properties.MessageExpiryInterval = uint32(remaining)
+			if remaining > 0 {
+				pk.Created = time.Now().Unix()
+				pk.Expiry = pk.Created + remaining
 			}
 			pk.Properties.SubscriptionIdentifier = h.subscriptionIdentifiers(cl, m.TopicName)
 
@@ -459,6 +496,10 @@ func (h *QueueHook) OnQosComplete(cl *mqtt.Client, pk packets.Packet) {
 
 func (h *QueueHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
 	h.mu.Lock()
+	if !isCurrentClient(h.server, cl) {
+		h.mu.Unlock()
+		return // the session lives on in the connection that took over
+	}
 	if expire {
 		delete(h.persistent, cl.ID)
 		delete(h.offline, cl.ID)

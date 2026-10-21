@@ -59,6 +59,7 @@ var (
 	ErrMalformedWillProperties                = Code{Code: 0x81, Reason: "malformed packet: will properties"}
 	ErrMalformedSessionPresent                = Code{Code: 0x81, Reason: "malformed packet: session present"}
 	ErrMalformedReasonCode                    = Code{Code: 0x81, Reason: "malformed packet: reason code"}
+	ErrMalformedSubscriptionOptions           = Code{Code: 0x81, Reason: "malformed packet: subscription options reserved bits or retain handling"}
 	ErrProtocolViolation                      = Code{Code: 0x82, Reason: "protocol violation"}
 	ErrProtocolViolationProtocolName          = Code{Code: 0x82, Reason: "protocol violation: protocol name"}
 	ErrProtocolViolationProtocolVersion       = Code{Code: 0x82, Reason: "protocol violation: protocol version"}
@@ -87,6 +88,9 @@ var (
 	ErrProtocolViolationDupNoQos              = Code{Code: 0x82, Reason: "protocol violation: dup true with no qos"}
 	ErrProtocolViolationUnsupportedProperty   = Code{Code: 0x82, Reason: "protocol violation: unsupported property"}
 	ErrProtocolViolationNoTopic               = Code{Code: 0x82, Reason: "protocol violation: no topic or alias"}
+	ErrProtocolViolationDuplicateProperty     = Code{Code: 0x82, Reason: "protocol violation: property included more than once"}
+	ErrProtocolViolationInvalidPropertyValue  = Code{Code: 0x82, Reason: "protocol violation: invalid property value"}
+	ErrProtocolViolationNoAuthMethod          = Code{Code: 0x82, Reason: "protocol violation: auth packet without authentication method"}
 	ErrImplementationSpecificError            = Code{Code: 0x83, Reason: "implementation specific error"}
 	ErrRejectPacket                           = Code{Code: 0x83, Reason: "packet rejected"}
 	ErrUnsupportedProtocolVersion             = Code{Code: 0x84, Reason: "unsupported protocol version"}

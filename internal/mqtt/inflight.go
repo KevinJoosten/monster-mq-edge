@@ -12,6 +12,8 @@ import (
 type Inflight struct {
 	sync.RWMutex
 	internal            map[uint16]packets.Packet // internal contains the inflight packets
+	order               map[uint16]uint64         // insertion sequence of each packet id, for in-order resend and claims
+	nextOrder           uint64                    // last sequence handed out
 	deferredCount       atomic.Int32              // number of entries with Expiry < 0
 	quotaMu             sync.Mutex                // protects quota fields
 	receiveQuota        int32                     // remaining inbound qos quota for flow control
@@ -24,7 +26,23 @@ type Inflight struct {
 func NewInflights() *Inflight {
 	return &Inflight{
 		internal: map[uint16]packets.Packet{},
+		order:    map[uint16]uint64{},
 	}
+}
+
+// trackLocked records the arrival order of a new packet id. An updated entry
+// (e.g. PUBLISH replaced by PUBREC/PUBREL) keeps its place. Callers hold the lock.
+func (i *Inflight) trackLocked(id uint16, existed bool) {
+	if existed {
+		if _, ok := i.order[id]; ok {
+			return
+		}
+	}
+	if i.order == nil {
+		i.order = map[uint16]uint64{}
+	}
+	i.nextOrder++
+	i.order[id] = i.nextOrder
 }
 
 // Set adds or updates an inflight packet by packet id.
@@ -40,6 +58,7 @@ func (i *Inflight) Set(m packets.Packet) bool {
 		i.deferredCount.Add(1)
 	}
 	i.internal[m.PacketID] = m
+	i.trackLocked(m.PacketID, ok)
 	return !ok
 }
 
@@ -74,6 +93,10 @@ func (i *Inflight) Clone() *Inflight {
 			c.deferredCount.Add(1)
 		}
 	}
+	for k, v := range i.order {
+		c.order[k] = v
+	}
+	c.nextOrder = i.nextOrder
 	return c
 }
 
@@ -89,11 +112,10 @@ func (i *Inflight) GetAll(immediate bool) []packets.Packet {
 		}
 	}
 
-	sort.Slice(m, func(i, j int) bool {
-		if m[i].Created == m[j].Created {
-			return m[i].PacketID < m[j].PacketID
-		}
-		return uint16(m[i].Created) < uint16(m[j].Created)
+	// Oldest first, by arrival in the session: resends must keep the original
+	// order of the messages [MQTT-4.6.0-1], also when packet ids wrap around.
+	sort.Slice(m, func(a, b int) bool {
+		return i.order[m[a].PacketID] < i.order[m[b].PacketID]
 	})
 
 	return m
@@ -121,7 +143,11 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 	defer i.quotaMu.Unlock()
 
 	if i.maximumSendQuota > 0 {
-		if i.sendQuota <= 0 {
+		// While older messages wait for quota, a new one queues behind them even
+		// if quota is free right now: messages must reach the client in the
+		// order they were published [MQTT-4.6.0-6]. The caller claims deferred
+		// packets as quota allows.
+		if i.sendQuota <= 0 || i.deferredCount.Load() > 0 {
 			m.Expiry = -1
 			deferred = true
 		} else {
@@ -137,6 +163,7 @@ func (i *Inflight) SetOutbound(m packets.Packet) (added bool, deferred bool) {
 		i.deferredCount.Add(1)
 	}
 	i.internal[m.PacketID] = m
+	i.trackLocked(m.PacketID, existed)
 	return !existed, deferred
 }
 
@@ -163,13 +190,15 @@ func (i *Inflight) ClaimNextImmediate(expiryFn func(packets.Packet) int64) (pack
 	}
 
 	var next packets.Packet
+	var nextOrder uint64
 	found := false
 	for _, v := range i.internal {
 		if v.Expiry >= 0 {
 			continue
 		}
-		if !found || uint16(v.Created) < uint16(next.Created) || (v.Created == next.Created && v.PacketID < next.PacketID) {
+		if o := i.order[v.PacketID]; !found || o < nextOrder {
 			next = v
+			nextOrder = o
 			found = true
 		}
 	}
@@ -201,6 +230,7 @@ func (i *Inflight) Delete(id uint16) bool {
 		i.deferredCount.Add(-1)
 	}
 	delete(i.internal, id)
+	delete(i.order, id)
 
 	return ok
 }

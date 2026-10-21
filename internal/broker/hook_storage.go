@@ -135,6 +135,9 @@ func (h *StorageHook) OnSessionEstablished(cl *mqtt.Client, _ packets.Packet) {
 			cl.State.MetricClientIn, cl.State.MetricClientOut = cc.ClientCounters(cl.ID)
 		}
 	}
+	if !isCurrentClient(h.server, cl) {
+		return // taken over while connecting: the newer connection owns the session
+	}
 	ctx := context.Background()
 	if cl.Properties.Clean {
 		if err := h.store.Sessions.DelClient(ctx, cl.ID); err != nil {
@@ -256,11 +259,14 @@ func (h *StorageHook) StoredClientByID(id string, username []byte) (string, []st
 }
 
 func (h *StorageHook) OnDisconnect(cl *mqtt.Client, _ error, expire bool) {
+	if h.metrics != nil && cl != nil {
+		cl.State.MetricClientIn = nil
+		cl.State.MetricClientOut = nil
+	}
+	if !isCurrentClient(h.server, cl) {
+		return // the client ID, its counters and its session live on in the connection that took over
+	}
 	if h.metrics != nil {
-		if cl != nil {
-			cl.State.MetricClientIn = nil
-			cl.State.MetricClientOut = nil
-		}
 		h.metrics.ForgetClient(cl.ID)
 	}
 	if expire {
@@ -550,6 +556,7 @@ func retainedMessage(pk *packets.Packet, clientID, username string) stores.Broke
 		v := pk.Properties.MessageExpiryInterval
 		msg.MessageExpiryInterval = &v
 	}
+	setV5Props(&msg, &pk.Properties) // a retained message keeps its properties [MQTT-3.3.1-5]
 	return msg
 }
 
@@ -804,10 +811,12 @@ func (h *StorageHook) OnSelectRetainedMessages(filter string) ([]packets.Packet,
 				Qos:    msg.QoS,
 				Retain: true,
 			},
-			TopicName: msg.TopicName,
-			Payload:   msg.Payload,
-			Origin:    msg.ClientID, // as on the in-memory path: No Local skips a client's own retained message
+			TopicName:  msg.TopicName,
+			Payload:    msg.Payload,
+			Origin:     msg.ClientID, // as on the in-memory path: No Local skips a client's own retained message
+			Properties: propsToPacket(msg),
 		}
+		pk.Properties.MessageExpiryInterval = 0 // set below to the remaining lifetime
 		pk.Created = msg.Time.Unix()
 		if msg.MessageExpiryInterval != nil && *msg.MessageExpiryInterval > 0 {
 			pk.Expiry = pk.Created + int64(*msg.MessageExpiryInterval)
@@ -853,4 +862,18 @@ func (h *StorageHook) StartRetention(ctx context.Context, interval time.Duration
 		}
 	}()
 	return cancel
+}
+
+// isCurrentClient reports whether cl is the connection currently registered
+// for its client ID. A connection that was taken over (or is otherwise no
+// longer registered) must not change session state kept per client ID.
+func isCurrentClient(server *mqtt.Server, cl *mqtt.Client) bool {
+	if cl == nil || cl.IsTakenOver() {
+		return false
+	}
+	if server == nil {
+		return true
+	}
+	cur, ok := server.Clients.Get(cl.ID)
+	return !ok || cur == cl
 }

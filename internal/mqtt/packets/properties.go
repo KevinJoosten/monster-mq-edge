@@ -391,7 +391,12 @@ func (p *Properties) Decode(pkt byte, b *bytes.Buffer) (n int, err error) {
 	}
 
 	bt := b.Bytes()
+	if n > len(bt) {
+		return n + bu, ErrMalformedProperties // property length exceeds the remaining packet
+	}
+	bt = bt[:n] // properties must not be read beyond the declared property length
 	var k byte
+	var seen [256]bool
 	for offset := 0; offset < n; {
 		k, offset, err = decodeByte(bt, offset)
 		if err != nil {
@@ -401,6 +406,14 @@ func (p *Properties) Decode(pkt byte, b *bytes.Buffer) (n int, err error) {
 		if _, ok := validPacketProperties[k][pkt]; !ok {
 			return n + bu, fmt.Errorf("property type %v not valid for packet type %v: %w", k, pkt, ErrProtocolViolationUnsupportedProperty)
 		}
+
+		// Only User Properties (and Subscription Identifiers in a server to client
+		// PUBLISH) may appear more than once; any other repetition is a protocol
+		// error [MQTT-2.2.2-2 / 3.1.2.11 and following].
+		if seen[k] && k != PropUser && !(k == PropSubscriptionIdentifier && pkt == Publish) {
+			return n + bu, fmt.Errorf("property type %v: %w", k, ErrProtocolViolationDuplicateProperty)
+		}
+		seen[k] = true
 
 		switch k {
 		case PropPayloadFormat:
@@ -487,7 +500,37 @@ func (p *Properties) Decode(pkt byte, b *bytes.Buffer) (n int, err error) {
 		if err != nil {
 			return n + bu, err
 		}
+
+		if err := p.validateValue(k); err != nil {
+			return n + bu, err
+		}
 	}
 
 	return n + bu, nil
+}
+
+// validateValue checks the value of a just decoded property against the
+// ranges allowed by the MQTT v5 specification.
+func (p *Properties) validateValue(k byte) error {
+	invalid := false
+	switch k {
+	case PropPayloadFormat:
+		invalid = p.PayloadFormat > 1 // [MQTT-3.3.2.3.2]
+	case PropRequestProblemInfo:
+		invalid = p.RequestProblemInfo > 1 // [MQTT-3.1.2.11.7]
+	case PropRequestResponseInfo:
+		invalid = p.RequestResponseInfo > 1 // [MQTT-3.1.2.11.6]
+	case PropReceiveMaximum:
+		invalid = p.ReceiveMaximum == 0 // [MQTT-3.1.2.11.3]
+	case PropMaximumPacketSize:
+		invalid = p.MaximumPacketSize == 0 // [MQTT-3.1.2.11.4]
+	case PropSubscriptionIdentifier:
+		invalid = len(p.SubscriptionIdentifier) > 0 && p.SubscriptionIdentifier[len(p.SubscriptionIdentifier)-1] == 0 // [MQTT-3.8.2.1.2]
+	case PropResponseTopic:
+		invalid = strings.ContainsAny(p.ResponseTopic, "+#") // [MQTT-3.3.2-14]
+	}
+	if invalid {
+		return fmt.Errorf("property type %v: %w", k, ErrProtocolViolationInvalidPropertyValue)
+	}
+	return nil
 }

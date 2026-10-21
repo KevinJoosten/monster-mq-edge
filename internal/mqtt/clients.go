@@ -105,6 +105,21 @@ func (cl *Clients) Delete(id string) {
 	cl.Unlock()
 }
 
+// DeleteIfCurrent removes the client with the given id only if it is still
+// the registered one, so that a stale connection ending late cannot remove
+// the connection that took over its client ID. It reports whether the
+// entry was removed.
+func (cl *Clients) DeleteIfCurrent(val *Client) bool {
+	cl.Lock()
+	defer cl.Unlock()
+	if cur, ok := cl.internal[val.ID]; !ok || cur != val {
+		return false
+	}
+	delete(cl.internal, val.ID)
+	cl.refreshSnapLocked()
+	return true
+}
+
 // GetByListener returns clients matching a listener id.
 func (cl *Clients) GetByListener(id string) []*Client {
 	cl.RLock()
@@ -151,6 +166,12 @@ type ClientProperties struct {
 type Will struct {
 	Payload           []byte                 // -
 	User              []packets.UserProperty // -
+	ContentType       string                 // MQTT 5 will property, forwarded with the will message
+	ResponseTopic     string                 // MQTT 5 will property, forwarded with the will message
+	CorrelationData   []byte                 // MQTT 5 will property, forwarded with the will message
+	MessageExpiry     uint32                 // MQTT 5 Message Expiry Interval of the will message
+	PayloadFormat     byte                   // MQTT 5 Payload Format Indicator of the will message
+	PayloadFormatFlag bool                   // PayloadFormat was set
 	TopicName         string                 // -
 	Flag              uint32                 // 0,1
 	WillDelayInterval uint32                 // -
@@ -165,10 +186,15 @@ type ClientState struct {
 	Inflight          *Inflight          // a map of in-flight qos messages
 	Subscriptions     *Subscriptions     // a map of the subscription filters a client maintains
 	disconnected      int64              // the time the client disconnected in unix time, for calculating expiry
+	disconnectedNano  int64              // the time the client disconnected in unix nanoseconds
 	outbound          *outboundQueue     // live publishes for the writer; dropped when full
 	control           chan writeItem     // every other packet for the writer; never dropped
 	endOnce           sync.Once          // only end once
 	isTakenOver       atomic.Bool        // used to identify orphaned clients
+	established       chan struct{}      // closed once the connection reads packets after CONNECT handling
+	sessionReleased   atomic.Bool        // set once the OnDisconnect hooks ran for the ended connection
+	claimMu           sync.Mutex         // keeps claiming a deferred packet and queueing it for the writer in order
+	establishedOnce   sync.Once          // closes established once
 	packetIDMu        sync.Mutex         // guards NextPacketID without contending with network write lock
 	packetID          uint32             // the current highest packetID
 	open              context.Context    // indicate that the client is open for packet exchange
@@ -210,6 +236,7 @@ func newClient(c net.Conn, o *ops) *Client {
 			Remote: c.RemoteAddr().String(),
 		}
 		cl.State.outbound = newOutboundQueue(int(o.options.Capabilities.MaximumClientWritesPending))
+		cl.State.established = make(chan struct{})
 		cl.State.control = make(chan writeItem, controlQueueSize)
 	}
 
@@ -256,6 +283,12 @@ func (cl *Client) ParseConnect(lid string, pk packets.Packet) {
 			TopicName:         pk.Connect.WillTopic,
 			WillDelayInterval: pk.Connect.WillProperties.WillDelayInterval,
 			User:              pk.Connect.WillProperties.User,
+			ContentType:       pk.Connect.WillProperties.ContentType,
+			ResponseTopic:     pk.Connect.WillProperties.ResponseTopic,
+			CorrelationData:   pk.Connect.WillProperties.CorrelationData,
+			MessageExpiry:     pk.Connect.WillProperties.MessageExpiryInterval,
+			PayloadFormat:     pk.Connect.WillProperties.PayloadFormat,
+			PayloadFormatFlag: pk.Connect.WillProperties.PayloadFormatFlag,
 		}
 		if pk.Properties.SessionExpiryIntervalFlag &&
 			pk.Properties.SessionExpiryInterval < pk.Connect.WillProperties.WillDelayInterval {
@@ -325,6 +358,12 @@ func (cl *Client) ResendInflightMessages(force bool) error {
 	}
 
 	for _, tk := range cl.State.Inflight.GetAll(false) {
+		if tk.FixedHeader.Type == packets.Pubrec {
+			// Inbound QoS 2 flow waiting for the client's PUBREL: on reconnect only
+			// PUBLISH and PUBREL are re-sent [MQTT-4.4.0-1]; the stored PUBREC is
+			// kept so the PUBREL from the client is answered with PUBCOMP.
+			continue
+		}
 		if tk.FixedHeader.Type == packets.Publish {
 			if !cl.ops.hooks.OnACLCheck(cl, tk.TopicName, false) {
 				if ok := cl.State.Inflight.Delete(tk.PacketID); ok {
@@ -355,6 +394,20 @@ func (cl *Client) ResendInflightMessages(force bool) error {
 
 // claimDeferred takes the oldest QoS 1/2 message that was deferred because the
 // client's send quota was exhausted, if quota is available again.
+// writeNextDeferred claims the oldest packet waiting for send quota, if quota
+// is available, and queues it for the writer. Claim and queueing happen under
+// one lock so that concurrent callers cannot reorder deferred packets.
+func (cl *Client) writeNextDeferred() {
+	if !cl.State.Inflight.HasDeferred() {
+		return
+	}
+	cl.State.claimMu.Lock()
+	defer cl.State.claimMu.Unlock()
+	if next, ok := cl.claimDeferred(); ok {
+		_ = cl.WritePacket(next)
+	}
+}
+
 func (cl *Client) claimDeferred() (packets.Packet, bool) {
 	if !cl.State.Inflight.HasDeferred() {
 		return packets.Packet{}, false
@@ -459,8 +512,29 @@ func (cl *Client) Stop(err error) {
 			cl.State.cancelOpen()
 		}
 
-		atomic.StoreInt64(&cl.State.disconnected, time.Now().Unix())
+		now := time.Now()
+		atomic.StoreInt64(&cl.State.disconnectedNano, now.UnixNano())
+		atomic.StoreInt64(&cl.State.disconnected, now.Unix())
 	})
+}
+
+// sessionExpired reports whether the session of a disconnected client has
+// outlived its Session Expiry Interval (or maxExpiry, the server maximum,
+// for clients without one) at now [MQTT-3.1.2-23].
+func (cl *Client) sessionExpired(now time.Time, maxExpiry uint32) bool {
+	stopped := atomic.LoadInt64(&cl.State.disconnectedNano)
+	if stopped == 0 {
+		if sec := atomic.LoadInt64(&cl.State.disconnected); sec > 0 {
+			stopped = sec * int64(time.Second) // restored from storage: seconds only
+		} else {
+			return false
+		}
+	}
+	expire := maxExpiry
+	if cl.Properties.ProtocolVersion == 5 && cl.Properties.Props.SessionExpiryIntervalFlag {
+		expire = cl.Properties.Props.SessionExpiryInterval
+	}
+	return now.UnixNano()-stopped >= int64(expire)*int64(time.Second)
 }
 
 // StopCause returns the reason the client connection was stopped, if any.
@@ -479,6 +553,47 @@ func (cl *Client) StopTime() int64 {
 // Closed returns true if client connection is closed.
 func (cl *Client) Closed() bool {
 	return cl.State.open == nil || cl.State.open.Err() != nil
+}
+
+// markEstablished records that the connection finished its CONNECT handling
+// (CONNACK, session hooks) and now reads packets, or that it ended before.
+func (cl *Client) markEstablished() {
+	if cl.State.established == nil {
+		return
+	}
+	cl.State.establishedOnce.Do(func() { close(cl.State.established) })
+}
+
+// settleBeforeTakeover is called when a new connection takes over cl. If cl
+// has not finished its CONNECT handling yet, its client may already have sent
+// a DISCONNECT (possibly changing the Session Expiry Interval) that nobody has
+// read: wait until cl reads packets again and give it a short moment to
+// process such a pending DISCONNECT, so the takeover sees the final session
+// state [MQTT-3.14.4-3].
+func (cl *Client) settleBeforeTakeover(establishTimeout, grace time.Duration) {
+	if cl.State.established == nil || cl.State.open == nil {
+		return
+	}
+	select {
+	case <-cl.State.established:
+		return // already reading: anything it sent before was handled in order
+	default:
+	}
+	timer := time.NewTimer(establishTimeout)
+	defer timer.Stop()
+	select {
+	case <-cl.State.established:
+	case <-cl.State.open.Done():
+		return
+	case <-timer.C:
+		return
+	}
+	graceTimer := time.NewTimer(grace)
+	defer graceTimer.Stop()
+	select {
+	case <-cl.State.open.Done():
+	case <-graceTimer.C:
+	}
 }
 
 func (cl *Client) IsTakenOver() bool {

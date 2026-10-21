@@ -49,6 +49,11 @@ func (q *QueueStore) EnsureTable(ctx context.Context) error {
 			return err
 		}
 	}
+	// MQTT 5 properties other than the message expiry, as JSON (added later,
+	// so existing tables get the column on start).
+	if _, err := q.db.Exec(`ALTER TABLE ` + queueTable + ` ADD COLUMN mqtt5_props TEXT`); err != nil && !isDuplicateColumnErr(err) {
+		return err
+	}
 	return nil
 }
 
@@ -66,8 +71,8 @@ func (q *QueueStore) EnqueueMultiLimited(ctx context.Context, msg stores.BrokerM
 		return stores.QueueEnqueueResult{}, nil
 	}
 	insert := fmt.Sprintf(`INSERT INTO %s
-        (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, queueTable)
+        (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval, mqtt5_props)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, queueTable)
 	q.db.Lock()
 	defer q.db.Unlock()
 	tx, err := q.db.Conn().BeginTx(ctx, nil)
@@ -110,7 +115,7 @@ func (q *QueueStore) EnqueueMultiLimited(ctx context.Context, msg stores.BrokerM
 		if msg.MessageExpiryInterval != nil {
 			expiry = sql.NullInt64{Int64: int64(*msg.MessageExpiryInterval), Valid: true}
 		}
-		if _, err := stmt.ExecContext(ctx, msg.MessageUUID, cid, msg.TopicName, msg.Payload, int(msg.QoS), retained, msg.ClientID, msg.Time.UnixMilli(), expiry); err != nil {
+		if _, err := stmt.ExecContext(ctx, msg.MessageUUID, cid, msg.TopicName, msg.Payload, int(msg.QoS), retained, msg.ClientID, msg.Time.UnixMilli(), expiry, stores.EncodeV5Props(msg)); err != nil {
 			_ = tx.Rollback()
 			return stores.QueueEnqueueResult{}, err
 		}
@@ -127,8 +132,8 @@ func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatch
 		return nil
 	}
 	insert := fmt.Sprintf(`INSERT INTO %s
-        (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, queueTable)
+        (message_uuid, client_id, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval, mqtt5_props)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, queueTable)
 	q.db.Lock()
 	defer q.db.Unlock()
 	tx, err := q.db.Conn().BeginTx(ctx, nil)
@@ -150,7 +155,7 @@ func (q *QueueStore) EnqueueBatch(ctx context.Context, batch []stores.QueueBatch
 		if item.Message.MessageExpiryInterval != nil {
 			expiry = sql.NullInt64{Int64: int64(*item.Message.MessageExpiryInterval), Valid: true}
 		}
-		if _, err := stmt.ExecContext(ctx, item.Message.MessageUUID, item.ClientID, item.Message.TopicName, item.Message.Payload, int(item.Message.QoS), retained, item.Message.ClientID, item.Message.Time.UnixMilli(), expiry); err != nil {
+		if _, err := stmt.ExecContext(ctx, item.Message.MessageUUID, item.ClientID, item.Message.TopicName, item.Message.Payload, int(item.Message.QoS), retained, item.Message.ClientID, item.Message.Time.UnixMilli(), expiry, stores.EncodeV5Props(item.Message)); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -172,7 +177,7 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx,
-		fmt.Sprintf(`SELECT msg_id, message_uuid, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval
+		fmt.Sprintf(`SELECT msg_id, message_uuid, topic, payload, qos, retained, publisher_id, creation_time, message_expiry_interval, mqtt5_props
                      FROM %s WHERE client_id = ? AND vt <= ? ORDER BY msg_id LIMIT ?`, queueTable),
 		clientID, now, batchSize)
 	if err != nil {
@@ -191,9 +196,10 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 			pubID    sql.NullString
 			created  int64
 			expiry   sql.NullInt64
+			props    sql.NullString
 			qos      int
 		)
-		if err := rows.Scan(&r.msgID, &r.msg.MessageUUID, &r.msg.TopicName, &r.msg.Payload, &qos, &retained, &pubID, &created, &expiry); err != nil {
+		if err := rows.Scan(&r.msgID, &r.msg.MessageUUID, &r.msg.TopicName, &r.msg.Payload, &qos, &retained, &pubID, &created, &expiry, &props); err != nil {
 			rows.Close()
 			_ = tx.Rollback()
 			return nil, err
@@ -207,6 +213,7 @@ func (q *QueueStore) Dequeue(ctx context.Context, clientID string, batchSize int
 			v := uint32(expiry.Int64)
 			r.msg.MessageExpiryInterval = &v
 		}
+		stores.DecodeV5Props(props.String, &r.msg)
 		recs = append(recs, r)
 	}
 	rows.Close()

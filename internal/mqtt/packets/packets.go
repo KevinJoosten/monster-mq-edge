@@ -504,7 +504,7 @@ func (pk *Packet) ConnectValidate() Code {
 
 	if (bytes.Equal(pk.Connect.ProtocolName, []byte{'M', 'Q', 'I', 's', 'd', 'p'}) && pk.ProtocolVersion != 3) ||
 		(bytes.Equal(pk.Connect.ProtocolName, []byte{'M', 'Q', 'T', 'T'}) && pk.ProtocolVersion != 4 && pk.ProtocolVersion != 5) {
-		return ErrProtocolViolationProtocolVersion // [MQTT-3.1.2-2]
+		return ErrUnsupportedProtocolVersion // [MQTT-3.1.2-2] CONNACK 0x84 (v5) / 0x01 (v3)
 	}
 
 	if pk.ReservedBit != 0 {
@@ -542,6 +542,10 @@ func (pk *Packet) ConnectValidate() Code {
 
 		if pk.Connect.WillQos > 2 {
 			return ErrProtocolViolationQosOutOfRange // [MQTT-3.1.2-12]
+		}
+
+		if strings.ContainsAny(pk.Connect.WillTopic, "+#") {
+			return ErrTopicNameInvalid // the Will Topic is a topic name, wildcards are not allowed [MQTT-3.1.3-11] [MQTT-4.7.3-1]
 		}
 	}
 
@@ -1059,6 +1063,9 @@ func (pk *Packet) SubscribeDecode(buf []byte) error {
 			option, offset, err = decodeByte(buf, offset) // bounds-checked: a truncated packet must not panic
 			if err != nil {
 				return ErrMalformedQos
+			}
+			if option&0xC0 != 0 || (option>>4)&3 == 3 {
+				return ErrMalformedSubscriptionOptions // [MQTT-3.8.3-5] reserved bits, Retain Handling 3
 			}
 			sub.decode(option)
 		} else {

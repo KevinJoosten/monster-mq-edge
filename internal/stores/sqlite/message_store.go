@@ -68,11 +68,16 @@ func (s *MessageStore) EnsureTable(ctx context.Context) error {
 			return fmt.Errorf("create %s: %w", s.tableName, err)
 		}
 	}
+	// MQTT 5 properties other than the message expiry, as JSON (added later,
+	// so existing tables get the column on start).
+	if _, err := s.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN mqtt5_props TEXT", s.tableName)); err != nil && !isDuplicateColumnErr(err) {
+		return fmt.Errorf("add mqtt5_props to %s: %w", s.tableName, err)
+	}
 	return nil
 }
 
 func (s *MessageStore) Get(ctx context.Context, topic string) (*stores.BrokerMessage, error) {
-	q := fmt.Sprintf(`SELECT payload_blob, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval
+	q := fmt.Sprintf(`SELECT payload_blob, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval, mqtt5_props
                       FROM %s WHERE topic = ?`, s.tableName)
 	row := s.db.Conn().QueryRowContext(ctx, q, topic)
 	var (
@@ -83,8 +88,9 @@ func (s *MessageStore) Get(ctx context.Context, topic string) (*stores.BrokerMes
 		messageUUID sql.NullString
 		creation    sql.NullInt64
 		expiry      sql.NullInt64
+		props       sql.NullString
 	)
-	if err := row.Scan(&payload, &qos, &retained, &clientID, &messageUUID, &creation, &expiry); err != nil {
+	if err := row.Scan(&payload, &qos, &retained, &clientID, &messageUUID, &creation, &expiry, &props); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -103,6 +109,7 @@ func (s *MessageStore) Get(ctx context.Context, topic string) (*stores.BrokerMes
 		v := uint32(expiry.Int64)
 		msg.MessageExpiryInterval = &v
 	}
+	stores.DecodeV5Props(props.String, msg)
 	return msg, nil
 }
 
@@ -116,8 +123,8 @@ func (s *MessageStore) AddAll(ctx context.Context, msgs []stores.BrokerMessage) 
 	}
 	placeholders := strings.Repeat("?, ", MaxFixedTopicLevels)
 	placeholders = strings.TrimRight(placeholders, ", ")
-	q := fmt.Sprintf(`INSERT INTO %s (topic, %s, topic_r, topic_l, time, payload_blob, payload_json, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval)
-        VALUES (?, %s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	q := fmt.Sprintf(`INSERT INTO %s (topic, %s, topic_r, topic_l, time, payload_blob, payload_json, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval, mqtt5_props)
+        VALUES (?, %s, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (topic) DO UPDATE SET
             time = excluded.time,
             payload_blob = excluded.payload_blob,
@@ -127,7 +134,8 @@ func (s *MessageStore) AddAll(ctx context.Context, msgs []stores.BrokerMessage) 
             client_id = excluded.client_id,
             message_uuid = excluded.message_uuid,
             creation_time = excluded.creation_time,
-            message_expiry_interval = excluded.message_expiry_interval`,
+            message_expiry_interval = excluded.message_expiry_interval,
+            mqtt5_props = excluded.mqtt5_props`,
 		s.tableName, strings.Join(cols, ", "), placeholders)
 
 	s.db.Lock()
@@ -145,7 +153,7 @@ func (s *MessageStore) AddAll(ctx context.Context, msgs []stores.BrokerMessage) 
 
 	for _, m := range msgs {
 		fixed, restJSON, last := SplitTopic(m.TopicName)
-		args := make([]any, 0, 1+MaxFixedTopicLevels+11)
+		args := make([]any, 0, 1+MaxFixedTopicLevels+12)
 		args = append(args, m.TopicName)
 		for i := 0; i < MaxFixedTopicLevels; i++ {
 			args = append(args, fixed[i])
@@ -162,6 +170,7 @@ func (s *MessageStore) AddAll(ctx context.Context, msgs []stores.BrokerMessage) 
 			m.MessageUUID,
 			m.Time.UnixMilli(),
 			m.MessageExpiryInterval,
+			stores.EncodeV5Props(m),
 		)
 		if _, err := stmt.ExecContext(ctx, args...); err != nil {
 			_ = tx.Rollback()
@@ -201,7 +210,7 @@ func (s *MessageStore) DelAll(ctx context.Context, topics []string) error {
 // We do MQTT-style matching in Go to keep the SQL portable; performance can be tuned
 // later by leveraging the topic_1..topic_9 columns for prefix prefiltering.
 func (s *MessageStore) FindMatchingMessages(ctx context.Context, pattern string, yield func(stores.BrokerMessage) bool) error {
-	q := fmt.Sprintf(`SELECT topic, payload_blob, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval
+	q := fmt.Sprintf(`SELECT topic, payload_blob, qos, retained, client_id, message_uuid, creation_time, message_expiry_interval, mqtt5_props
                       FROM %s`, s.tableName)
 	rows, err := s.db.Conn().QueryContext(ctx, q)
 	if err != nil {
@@ -219,8 +228,9 @@ func (s *MessageStore) FindMatchingMessages(ctx context.Context, pattern string,
 			messageUUID sql.NullString
 			creation    sql.NullInt64
 			expiry      sql.NullInt64
+			props       sql.NullString
 		)
-		if err := rows.Scan(&topic, &payload, &qos, &retained, &clientID, &messageUUID, &creation, &expiry); err != nil {
+		if err := rows.Scan(&topic, &payload, &qos, &retained, &clientID, &messageUUID, &creation, &expiry, &props); err != nil {
 			return err
 		}
 		if !MatchTopic(pattern, topic) {
@@ -246,6 +256,7 @@ func (s *MessageStore) FindMatchingMessages(ctx context.Context, pattern string,
 			v := uint32(expiry.Int64)
 			msg.MessageExpiryInterval = &v
 		}
+		stores.DecodeV5Props(props.String, &msg)
 		if !yield(msg) {
 			return nil
 		}

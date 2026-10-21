@@ -185,7 +185,15 @@ and stays allowed. A git worktree has its own path and asks once more.
 
 - **Test flags.** Pass them in test-binary form, for example `.\test-integration.ps1 -test.run TestPublishSubscribeQoS0
   -test.v`.
-- **Other packages.** Unit tests in the other packages (`go test ./internal/...`) can still use plain `go test`.
+- **Other packages.** Unit tests in the other packages (`go test ./internal/...`) can still use plain `go test`,
+  because they bind only to the loopback interface (see below).
+
+**Bind test listeners to 127.0.0.1.** Every listener a unit test opens binds to `127.0.0.1`: MQTT listeners, GraphQL,
+Prometheus, peer link, `net.Listen`, test HTTP servers. Use port `0` or a free port taken from `127.0.0.1:0`. Never
+bind to `0.0.0.0`, `""` or `:port`. The Windows firewall only asks about listeners on other interfaces, so a
+loopback-only test binary such as `graphql.test.exe` runs without a dialog, even though `go test` puts it on a new
+path every run. Where a server falls back to `0.0.0.0` when its address is unset (for example `GraphQL.Address`),
+set the address to `127.0.0.1` in the test config. `httptest.NewServer` already binds to `127.0.0.1`.
 
 The schema in `yaml-json-schema.json` validates `config.yaml` and
 `config.yaml.example` — keep both as live examples.

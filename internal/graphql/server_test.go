@@ -31,6 +31,7 @@ func TestServer_StartStopConcurrentRace(t *testing.T) {
 		cfg := config.Default()
 		cfg.GraphQL.Enabled = true
 		cfg.GraphQL.Port = port
+		cfg.GraphQL.Address = "127.0.0.1"
 		cfg.UserManagement.Enabled = false
 
 		srv := NewServer(cfg, nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
@@ -59,6 +60,7 @@ func TestServer_StopBeforeStart(t *testing.T) {
 	cfg := config.Default()
 	cfg.GraphQL.Enabled = true
 	cfg.GraphQL.Port = port
+	cfg.GraphQL.Address = "127.0.0.1"
 	cfg.UserManagement.Enabled = false
 
 	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
@@ -88,6 +90,7 @@ func TestServer_StopIdempotent(t *testing.T) {
 	cfg := config.Default()
 	cfg.GraphQL.Enabled = true
 	cfg.GraphQL.Port = port
+	cfg.GraphQL.Address = "127.0.0.1"
 	cfg.UserManagement.Enabled = false
 
 	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))
@@ -108,6 +111,7 @@ func TestServer_StartTwiceFails(t *testing.T) {
 	cfg := config.Default()
 	cfg.GraphQL.Enabled = true
 	cfg.GraphQL.Port = port
+	cfg.GraphQL.Address = "127.0.0.1"
 	cfg.UserManagement.Enabled = false
 
 	srv := NewServer(cfg, nil, nil, nil, nil, nil, nil, slog.New(slog.DiscardHandler))

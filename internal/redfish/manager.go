@@ -3,9 +3,10 @@ package redfish
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -90,7 +91,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// If dedicated standalone port is configured (> 0 and != GraphQL port)
 	if m.cfg.Redfish.Enabled && m.cfg.Redfish.Port > 0 && m.cfg.Redfish.Port != m.cfg.GraphQL.Port {
-		addr := fmt.Sprintf(":%d", m.cfg.Redfish.Port)
+		addr := net.JoinHostPort(m.cfg.Redfish.ListenAddress(), strconv.Itoa(m.cfg.Redfish.Port))
 		m.httpServer = &http.Server{
 			Addr:              addr,
 			Handler:           m.server.Handler(),
@@ -98,7 +99,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		}
 		go func() {
 			if m.logger != nil {
-				m.logger.Info("redfish standalone rest listener starting", "port", m.cfg.Redfish.Port)
+				m.logger.Info("redfish standalone rest listener starting", "addr", addr)
 			}
 			if err := m.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed && m.logger != nil {
 				m.logger.Error("redfish standalone listener failed", "err", err)

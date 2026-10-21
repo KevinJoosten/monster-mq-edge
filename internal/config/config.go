@@ -220,6 +220,7 @@ type HMIConfig struct {
 type RedfishConfig struct {
 	Enabled          bool   `yaml:"Enabled"`
 	Port             int    `yaml:"Port"`
+	Address          string `yaml:"Address,omitempty"` // standalone listener bind address; empty = 0.0.0.0
 	MountPath        string `yaml:"MountPath"`
 	DefaultChassisId string `yaml:"DefaultChassisId"`
 	DefaultSystemId  string `yaml:"DefaultSystemId"`
@@ -438,10 +439,20 @@ type GenAiOpenRouterConfig struct {
 }
 
 type PrometheusConfig struct {
-	Enabled       bool `yaml:"Enabled"`
-	Port          int  `yaml:"Port"`
-	RawQueryLimit int  `yaml:"RawQueryLimit"`
+	Enabled       bool   `yaml:"Enabled"`
+	Port          int    `yaml:"Port"`
+	Address       string `yaml:"Address,omitempty"` // bind address; empty = 0.0.0.0
+	RawQueryLimit int    `yaml:"RawQueryLimit"`
 }
+
+// ListenAddress returns the address to bind, defaulting to 0.0.0.0 when unset.
+func (c PrometheusConfig) ListenAddress() string { return stringOr(c.Address, "0.0.0.0") }
+
+// ListenAddress returns the standalone listener's bind address, defaulting to 0.0.0.0 when unset.
+func (c RedfishConfig) ListenAddress() string { return stringOr(c.Address, "0.0.0.0") }
+
+// NATSListenAddress returns the NATS listener's bind address, defaulting to 0.0.0.0 when unset.
+func (c *Config) NATSListenAddress() string { return stringOr(c.NATSAddress, "0.0.0.0") }
 
 type RedisServerConfig struct {
 	Enabled     bool   `yaml:"Enabled"`
@@ -502,6 +513,7 @@ type Config struct {
 	WS             Listener  `yaml:"WS"`
 	WSS            Listener  `yaml:"WSS"`
 	NATS           int       `yaml:"NATS"`
+	NATSAddress    string    `yaml:"NATSAddress,omitempty"` // NATS bind address; empty = 0.0.0.0
 	SSL            SSLConfig `yaml:"SSL"`
 	MaxMessageSize int       `yaml:"MaxMessageSize"`
 

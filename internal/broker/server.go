@@ -748,6 +748,7 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 		inlinePub := NewInlinePublisher(server)
 		protoPub := NewProtocolPublish(unsHook, nativeHook, inlinePub)
 		deps := nats.Deps{
+			Address:               cfg.NATSListenAddress(),
 			Port:                  cfg.NATS,
 			NodeID:                cfg.NodeID,
 			UserManagementEnabled: cfg.UserManagement.Enabled,

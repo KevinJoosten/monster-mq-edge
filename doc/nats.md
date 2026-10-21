@@ -16,6 +16,14 @@ TCP:
 NATS: 4222
 ```
 
+The listener binds to all interfaces (`0.0.0.0`) by default. Set `NATSAddress` to restrict it, for example to
+loopback only:
+
+```yaml
+NATS: 4222
+NATSAddress: "127.0.0.1"
+```
+
 The port is reported in GraphQL at `brokerConfig.natsPort`.
 
 ---

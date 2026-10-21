@@ -5,9 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/go-chi/chi/v5"
@@ -109,12 +110,21 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(b)
 }
 
-func (s *Server) Start() error {
+// listenAddr returns the host:port to bind, defaulting to 0.0.0.0:3001.
+func (s *Server) listenAddr() string {
 	port := 3001
-	if s.deps.Cfg != nil && s.deps.Cfg.Prometheus.Port > 0 {
-		port = s.deps.Cfg.Prometheus.Port
+	host := "0.0.0.0"
+	if s.deps.Cfg != nil {
+		if s.deps.Cfg.Prometheus.Port > 0 {
+			port = s.deps.Cfg.Prometheus.Port
+		}
+		host = s.deps.Cfg.Prometheus.ListenAddress()
 	}
-	addr := fmt.Sprintf("0.0.0.0:%d", port)
+	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func (s *Server) Start() error {
+	addr := s.listenAddr()
 	srv := &http.Server{
 		Addr:    addr,
 		Handler: s.router,

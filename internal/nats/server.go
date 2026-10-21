@@ -2,9 +2,9 @@ package nats
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -29,6 +29,7 @@ type ClientCounter interface {
 
 // Deps contains the dependencies required to run the NATS server.
 type Deps struct {
+	Address               string // bind address; empty = all interfaces
 	Port                  int
 	NodeID                string
 	UserManagementEnabled bool
@@ -58,7 +59,7 @@ type Server struct {
 // A bind failure returns an error immediately to abort startup (NS:36-39).
 // It also cleans up leftover nats- session records for this node (E9).
 func New(deps Deps) (*Server, error) {
-	addr := fmt.Sprintf(":%d", deps.Port)
+	addr := net.JoinHostPort(deps.Address, strconv.Itoa(deps.Port))
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		if deps.Logger != nil {
@@ -68,7 +69,7 @@ func New(deps Deps) (*Server, error) {
 	}
 
 	if deps.Logger != nil {
-		deps.Logger.Info("NATS Server is listening", "port", ln.Addr().(*net.TCPAddr).Port)
+		deps.Logger.Info("NATS Server is listening", "addr", ln.Addr().String())
 	}
 
 	// E9 [edge-only]: delete leftover nats- session records for this node.

@@ -5,6 +5,7 @@ TCPS: { Enabled: false, Port: 8883, Address: "0.0.0.0", KeyStorePath: "data/keys
 WS:   { Enabled: true,  Port: 1884, Address: "0.0.0.0" }
 WSS:  { Enabled: false, Port: 8884, Address: "0.0.0.0", KeyStorePath: "data/keystore", KeyStorePassword: "" }
 NATS: 0  # NATS protocol port, e.g. 4222 (0 = disabled)
+# NATSAddress: "0.0.0.0"  # NATS bind address, e.g. 127.0.0.1 for loopback only
 
 # SSL:
 #   KeyStoreType: PEM
@@ -100,6 +101,7 @@ MCP:
 Prometheus:
   Enabled: false
   Port: 3001
+  # Address: "0.0.0.0"  # bind address, e.g. 127.0.0.1 for loopback only
   RawQueryLimit: 10000
 
 RedisServer:
@@ -160,6 +162,7 @@ GenAI:
 Redfish:
   Enabled: false
   Port: 8000
+  # Address: "0.0.0.0"  # standalone listener bind address, e.g. 127.0.0.1 for loopback only
   MountPath: "/redfish/v1"
   DefaultChassisId: "EdgeNode"
   DefaultSystemId: "edge-node"

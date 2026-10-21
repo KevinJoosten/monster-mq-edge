@@ -16,7 +16,8 @@ Metrics:
 ```
 
 The default port is 3001, listening on `0.0.0.0:3001` independently of the GraphQL
-HTTP server.
+HTTP server. Set `Prometheus.Address` to bind a single interface, for example
+`127.0.0.1` when Grafana runs on the same host.
 
 Create a Prometheus datasource in Grafana pointing to `http://<broker-host>:3001`.
 Use a hostname reachable from the Grafana server; `localhost` inside a Grafana

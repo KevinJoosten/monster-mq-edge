@@ -70,18 +70,18 @@ for arg in "$@"; do
 done
 
 # Determine version
+if [ -f "${REPO_ROOT}/version.txt" ]; then
+    FULL_VERSION=$(head -n 1 "${REPO_ROOT}/version.txt" | tr -d '\n' | tr -d '\r')
+    VERSION=$(echo "$FULL_VERSION" | cut -d'+' -f1)
+else
+    FULL_VERSION="testing"
+    VERSION="testing"
+fi
+
 if [ "$TESTING" = true ]; then
     VERSION="testing"
     echo -e "${YELLOW}Building Docker image for MonsterMQ Edge (testing)...${NC}"
 else
-    if [ ! -f "${REPO_ROOT}/version.txt" ]; then
-        echo -e "${RED}Error: version.txt not found at ${REPO_ROOT}/version.txt${NC}"
-        exit 1
-    fi
-    # Use the full version (including +sha if present) for the build-time ldflags,
-    # but use the bare semver for the docker tag.
-    FULL_VERSION=$(head -n 1 "${REPO_ROOT}/version.txt" | tr -d '\n' | tr -d '\r')
-    VERSION=$(echo "$FULL_VERSION" | cut -d'+' -f1)
     echo -e "${YELLOW}Building Docker image for MonsterMQ Edge v${VERSION}...${NC}"
 fi
 

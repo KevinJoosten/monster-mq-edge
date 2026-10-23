@@ -233,6 +233,9 @@ func build(cfg *config.Config, logger *slog.Logger, logBus *mlog.Bus, opts Optio
 	if err := ensureDefaultAdmin(ctx, cfg, storage, logger); err != nil {
 		return nil, fmt.Errorf("default admin init: %w", err)
 	}
+	if err := ensureDefaultAnonymous(ctx, cfg, storage, logger); err != nil {
+		return nil, fmt.Errorf("default anonymous init: %w", err)
+	}
 	if err := configureMetricsStore(cfg, storage); err != nil {
 		_ = storage.Close()
 		return nil, err

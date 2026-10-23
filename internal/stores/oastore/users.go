@@ -290,8 +290,17 @@ func (s *UserStore) GetAllUsers(ctx context.Context) ([]stores.User, error) {
 
 func (s *UserStore) ValidateCredentials(ctx context.Context, username, password string) (*stores.User, error) {
 	u, err := s.GetUser(ctx, username)
-	if err != nil || u == nil || !u.Enabled {
+	if err != nil || u == nil {
 		return nil, err
+	}
+	if !u.Enabled {
+		return nil, nil
+	}
+	if u.PasswordHash == "" {
+		if password == "" {
+			return u, nil
+		}
+		return nil, nil
 	}
 	if bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 		return nil, nil

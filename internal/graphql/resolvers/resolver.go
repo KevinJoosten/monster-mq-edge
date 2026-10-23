@@ -589,7 +589,7 @@ func (r *mutationResolver) Login(ctx context.Context, username, password string)
 			}, nil
 		}
 	}
-	if username == "" || password == "" {
+	if username == "" {
 		return &generated.LoginResult{Success: false, Message: ptr("Username and password are required"), IsAdmin: false}, nil
 	}
 	user, ok := r.AuthCache.Authenticate(ctx, username, password)
@@ -795,11 +795,21 @@ func (r *queryResolver) Brokers(ctx context.Context) ([]*generated.Broker, error
 	return []*generated.Broker{r.brokerObj()}, nil
 }
 
+func (r *Resolver) isAnonymousEnabled() bool {
+	if r.Cfg == nil || !r.Cfg.UserManagement.Enabled {
+		return false
+	}
+	if r.AuthCache != nil {
+		return r.AuthCache.IsAnonymousEnabled()
+	}
+	return r.Cfg.UserManagement.AnonymousEnabled
+}
+
 func (r *Resolver) brokerObj() *generated.Broker {
 	return &generated.Broker{
 		NodeID: "local", Version: r.Version,
 		UserManagementEnabled: r.Cfg.UserManagement.Enabled,
-		AnonymousEnabled:      r.Cfg.UserManagement.AnonymousEnabled,
+		AnonymousEnabled:      r.isAnonymousEnabled(),
 		IsLeader:              true, IsCurrent: true,
 		EnabledFeatures: r.enabledFeatures(),
 	}
@@ -893,6 +903,12 @@ func sessionToGraphQL(info stores.SessionInfo) *generated.Session {
 }
 
 func (r *queryResolver) Users(ctx context.Context, username *string) ([]*generated.UserInfo, error) {
+	if r.Cfg != nil && r.Cfg.UserManagement.Enabled {
+		user, ok := auth.Principal(ctx)
+		if !ok || !user.IsAdmin {
+			return nil, fmt.Errorf("administrator access required")
+		}
+	}
 	users, err := r.Storage.Users.GetAllUsers(ctx)
 	if err != nil {
 		return nil, err
@@ -2555,9 +2571,13 @@ func (r *userManagementMutationsResolver) SetPassword(ctx context.Context, _ *ge
 	if err != nil || existing == nil {
 		return &generated.UserManagementResult{Success: false, Message: ptr("not found")}, nil
 	}
-	hash, err := hashPassword(input.Password)
-	if err != nil {
-		return &generated.UserManagementResult{Success: false, Message: ptr(err.Error())}, nil
+	var hash string
+	if input.Password != "" {
+		var err error
+		hash, err = hashPassword(input.Password)
+		if err != nil {
+			return &generated.UserManagementResult{Success: false, Message: ptr(err.Error())}, nil
+		}
 	}
 	existing.PasswordHash = hash
 	if err := r.Storage.Users.UpdateUser(ctx, *existing); err != nil {

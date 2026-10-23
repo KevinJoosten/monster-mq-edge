@@ -11,8 +11,16 @@ import (
 // ValidateCredentials mirrors the real stores: bcrypt against the stored hash.
 func (f *fakeUserStore) ValidateCredentials(_ context.Context, username, password string) (*stores.User, error) {
 	for _, u := range f.users {
-		if u.Username == username && u.Enabled && compareHash([]byte(u.PasswordHash), []byte(password)) == nil {
-			return &u, nil
+		if u.Username == username && u.Enabled {
+			if u.PasswordHash == "" {
+				if password == "" {
+					return &u, nil
+				}
+				continue
+			}
+			if compareHash([]byte(u.PasswordHash), []byte(password)) == nil {
+				return &u, nil
+			}
 		}
 	}
 	return nil, nil

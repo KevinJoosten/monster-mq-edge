@@ -82,3 +82,48 @@ func TestEnsureDefaultAdminLeavesExistingAdminPassword(t *testing.T) {
 		t.Fatal("changed password did not validate")
 	}
 }
+
+func TestEnsureDefaultAnonymousCreatesAnonymousWhenUserManagementEnabled(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Default()
+	cfg.UserManagement.Enabled = true
+	cfg.SQLite.Path = filepath.Join(t.TempDir(), "monstermq.db")
+
+	storage, db, err := storesqlite.Build(ctx, cfg)
+	if err != nil {
+		t.Fatalf("build storage: %v", err)
+	}
+	defer db.Close()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := ensureDefaultAnonymous(ctx, cfg, storage, logger); err != nil {
+		t.Fatalf("ensure default anonymous: %v", err)
+	}
+
+	user, err := storage.Users.GetUser(ctx, defaultAnonymousUsername)
+	if err != nil {
+		t.Fatalf("get default anonymous: %v", err)
+	}
+	if user == nil {
+		t.Fatal("default anonymous user was not created")
+	}
+	if !user.Enabled || user.IsAdmin || user.CanSubscribe || user.CanPublish || user.PasswordHash != "" {
+		t.Fatalf("unexpected default anonymous flags: %+v", user)
+	}
+
+	// Running again leaves it intact
+	user.Enabled = false
+	if err := storage.Users.UpdateUser(ctx, *user); err != nil {
+		t.Fatalf("update default anonymous: %v", err)
+	}
+	if err := ensureDefaultAnonymous(ctx, cfg, storage, logger); err != nil {
+		t.Fatalf("ensure existing default anonymous: %v", err)
+	}
+	reloaded, err := storage.Users.GetUser(ctx, defaultAnonymousUsername)
+	if err != nil {
+		t.Fatalf("get updated anonymous: %v", err)
+	}
+	if reloaded.Enabled {
+		t.Fatal("default anonymous enabled status was overwritten")
+	}
+}

@@ -487,6 +487,10 @@ func (pk *Packet) ConnectDecode(buf []byte) error {
 	}
 
 	if pk.Connect.PasswordFlag {
+		if offset >= len(buf) { // we are at the end of the packet
+			return ErrProtocolViolationFlagNoPassword // [MQTT-3.1.2-19]
+		}
+
 		pk.Connect.Password, _, err = decodeBytes(buf, offset)
 		if err != nil {
 			return ErrMalformedPassword
@@ -521,10 +525,6 @@ func (pk *Packet) ConnectValidate() Code {
 
 	if !pk.Connect.UsernameFlag && len(pk.Connect.Username) > 0 {
 		return ErrProtocolViolationUsernameNoFlag // [MQTT-3.1.2-16]
-	}
-
-	if pk.Connect.PasswordFlag && len(pk.Connect.Password) == 0 {
-		return ErrProtocolViolationFlagNoPassword // [MQTT-3.1.2-19]
 	}
 
 	if !pk.Connect.PasswordFlag && len(pk.Connect.Password) > 0 {

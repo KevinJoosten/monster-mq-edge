@@ -92,8 +92,14 @@ func NewServer(cfg *config.Config, resolver *resolvers.Resolver, hmiMgr *hmi.Man
 		if isPublicOperation(op) {
 			return next(ctx)
 		}
-		if _, ok := auth.Principal(ctx); !ok && !cfg.UserManagement.AnonymousEnabled {
-			return errorOnce(ctx, "authentication required")
+		if _, ok := auth.Principal(ctx); !ok {
+			anonAllowed := cfg.UserManagement.AnonymousEnabled
+			if authCache != nil {
+				anonAllowed = authCache.IsAnonymousEnabled()
+			}
+			if !anonAllowed {
+				return errorOnce(ctx, "authentication required")
+			}
 		}
 		if op.Operation == ast.Mutation {
 			for _, field := range rootFields(op.SelectionSet) {
@@ -156,7 +162,11 @@ func NewServer(cfg *config.Config, resolver *resolvers.Resolver, hmiMgr *hmi.Man
 							authenticated = true
 						}
 					}
-					if !authenticated && !cfg.UserManagement.AnonymousEnabled {
+					anonAllowed := cfg.UserManagement.AnonymousEnabled
+					if resolver.AuthCache != nil {
+						anonAllowed = resolver.AuthCache.IsAnonymousEnabled()
+					}
+					if !authenticated && !anonAllowed {
 						http.Error(w, "Authentication required", http.StatusUnauthorized)
 						return
 					}

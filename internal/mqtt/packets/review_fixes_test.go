@@ -61,3 +61,33 @@ func TestDecodeLengthRejectsFifthByte(t *testing.T) {
 		t.Fatalf("5-byte encoding: err = %v, want ErrMalformedVariableByteInteger", err)
 	}
 }
+
+func TestConnectEmptyPassword(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write([]byte{0x00, 0x04, 'M', 'Q', 'T', 'T', 0x04, 0xC2, 0x00, 0x3C})
+	buf.Write([]byte{0x00, 0x06, 'c', 'l', 'i', 'e', 'n', 't'})
+	buf.Write([]byte{0x00, 0x00}) // username = ""
+	buf.Write([]byte{0x00, 0x00}) // password = ""
+
+	pk := Packet{ProtocolVersion: 4, FixedHeader: FixedHeader{Type: Connect, Remaining: buf.Len()}}
+	if err := pk.ConnectDecode(buf.Bytes()); err != nil {
+		t.Fatalf("ConnectDecode failed: %v", err)
+	}
+	code := pk.ConnectValidate()
+	if code.Code != CodeSuccess.Code {
+		t.Fatalf("ConnectValidate failed: %v (%s)", code.Code, code.Reason)
+	}
+}
+
+func TestConnectPasswordFlagTruncated(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write([]byte{0x00, 0x04, 'M', 'Q', 'T', 'T', 0x04, 0xC2, 0x00, 0x3C})
+	buf.Write([]byte{0x00, 0x06, 'c', 'l', 'i', 'e', 'n', 't'})
+	buf.Write([]byte{0x00, 0x00}) // username = ""
+
+	pk := Packet{ProtocolVersion: 4, FixedHeader: FixedHeader{Type: Connect, Remaining: buf.Len()}}
+	err := pk.ConnectDecode(buf.Bytes())
+	if err == nil {
+		t.Fatal("expected ConnectDecode to fail when password field is missing")
+	}
+}

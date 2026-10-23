@@ -31,7 +31,11 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-			if s.deps.Cfg.UserManagement.AnonymousEnabled {
+			anonAllowed := s.deps.Cfg.UserManagement.AnonymousEnabled
+			if s.deps.Auth != nil {
+				anonAllowed = s.deps.Auth.IsAnonymousEnabled()
+			}
+			if anonAllowed {
 				next.ServeHTTP(w, r)
 				return
 			}

@@ -73,7 +73,7 @@ func NewCache(store stores.UserStore, anonymousAllow bool, aclCheckOnSubscribe b
 
 // Authenticate validates credentials and returns the enabled user.
 func (c *Cache) Authenticate(ctx context.Context, username, password string) (*stores.User, bool) {
-	if username == "" || password == "" {
+	if username == "" {
 		return nil, false
 	}
 	u, err := c.store.ValidateCredentials(ctx, username, password)
@@ -175,21 +175,30 @@ func (c *Cache) StartRefresher(ctx context.Context, every time.Duration) {
 // for unauthenticated clients (same name as in the Kotlin broker).
 const AnonymousUser = "Anonymous"
 
+// IsAnonymousEnabled reports whether anonymous access is allowed.
+// If an Anonymous user record exists in the user cache, its Enabled field decides.
+// Without an Anonymous record, it follows the configured anonymousAllow setting.
+func (c *Cache) IsAnonymousEnabled() bool {
+	if !c.anonymousAllow {
+		return false
+	}
+	if u, ok := c.lookup(AnonymousUser); ok {
+		return u.Enabled
+	}
+	return true
+}
+
 // Validate returns true if (username, password) match an enabled user.
 func (c *Cache) Validate(username, password string) bool {
 	if username == "" {
-		if !c.anonymousAllow {
-			return false
-		}
-		// An existing Anonymous user record decides, as in the Kotlin broker.
-		if u, ok := c.lookup(AnonymousUser); ok {
-			return u.Enabled
-		}
-		return true
+		return c.IsAnonymousEnabled()
 	}
 	u, ok := c.lookup(username)
 	if !ok || !u.Enabled {
 		return false
+	}
+	if u.PasswordHash == "" {
+		return password == ""
 	}
 	// A password that already passed bcrypt against this exact hash skips it.
 	// A changed, deleted or disabled user changes c.users on Refresh, so the
@@ -284,13 +293,14 @@ func (c *Cache) AllowClient(username, clientID, topic string, write bool) bool {
 
 func (c *Cache) allowClient(username, clientID, topic string, write bool) bool {
 	if username == "" {
-		if !c.anonymousAllow {
+		if !c.IsAnonymousEnabled() {
 			return false
 		}
-		if _, ok := c.lookup(AnonymousUser); !ok {
+		if _, ok := c.lookup(AnonymousUser); ok {
+			username = AnonymousUser
+		} else {
 			return true
 		}
-		username = AnonymousUser
 	}
 	u, ok := c.lookup(username)
 	if !ok || !u.Enabled {

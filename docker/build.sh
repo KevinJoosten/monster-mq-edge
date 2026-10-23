@@ -16,7 +16,9 @@ IMAGE_REPO="${IMAGE_REPO:-rocworks/monstermq-edge}"
 PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64,linux/arm/v7}"
 
 # Detect buildx command (standalone on Mac vs subcommand on Linux)
-if command -v docker-buildx > /dev/null 2>&1; then
+if [ "${FORCE_NO_BUILDX:-false}" = true ]; then
+    BUILDX=""
+elif command -v docker-buildx > /dev/null 2>&1; then
     BUILDX="docker-buildx"
 elif docker buildx version > /dev/null 2>&1; then
     BUILDX="docker buildx"
@@ -150,8 +152,16 @@ else
     if [ -n "$BUILDX" ]; then
         DOCKER_BUILD_LOCAL="$BUILDX build --load"
     else
-        echo -e "${YELLOW}buildx not available, using legacy builder${NC}"
-        DOCKER_BUILD_LOCAL="DOCKER_BUILDKIT=0 docker build"
+        echo -e "${YELLOW}buildx not available, falling back to docker build...${NC}"
+        HOST_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        HOST_ARCH=$(uname -m)
+        case "$HOST_ARCH" in
+            x86_64)        NATIVE_ARCH="amd64" ;;
+            aarch64|arm64) NATIVE_ARCH="arm64" ;;
+            armv7l|armhf)  NATIVE_ARCH="arm" ;;
+            *)             NATIVE_ARCH="$HOST_ARCH" ;;
+        esac
+        DOCKER_BUILD_LOCAL="DOCKER_BUILDKIT=1 docker build --build-arg BUILDPLATFORM=${HOST_OS}/${NATIVE_ARCH} --build-arg TARGETOS=${HOST_OS} --build-arg TARGETARCH=${NATIVE_ARCH}"
     fi
 
     echo -e "${YELLOW}Building Docker image (local, native platform only)...${NC}"

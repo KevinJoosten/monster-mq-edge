@@ -1,0 +1,102 @@
+Release v0.1.17
+Built from commit: 8bc518c
+Date: 2026-10-23 17:24:33
+
+Changes since v0.1.17-dev:
+---
+8bc518c Merge branch 'plan/amqp-pubsub-servers'
+4b9f924 Create plan-memory-arrow-archive.md
+69d2174 Split pub/sub protocol plan into one plan per protocol
+4a7bdd0 Add plan for AMQP and other pub/sub protocol servers
+834d7d8 feat(config): bind address for Prometheus, NATS and Redfish listeners
+60ea750 perf(mqtt): keep inflight arrival order in the packet map entry
+a3697c1 test(graphql): bind unit-test listeners to 127.0.0.1
+e7bfbba fix(mqtt): pass the MQTT 3.1.1/5.0 compliance suite
+2a97c4b perf(mqtt): single writer per connection, growable outbound queue and hot-path fixes
+32001a4 Update plan-mqtt-perf-fixes.md
+0dd0011 fix(redis): allow PUBLISH without mapped archive group and clear unused db connection on archive group update
+e1fe12e docs(plans): add plan for MQTT hot-path performance edge case fixes
+685188a perf(mqtt): replace mochi topic trie with sharded exact/wildcard index and optimize hot paths
+22c871e perf(pubsub,redis,nats,mqtt): optimize pubsub routing, batched writers, and overload state logging
+688b07a feat(cabi): support dynamic log level and LevelVar for host logger
+408a87b feat(prometheus,winccoa): add winccoa throughput metrics and default value field fallback
+eb83af8 perf(winccoanative): use dpSet for QoS 0, configure topic DPs once, and batch writes
+1435f35 fix(unsmodeler): batch dpGet reads and seed Direction B flow on start
+f66e89e Replace .bat scripts with PowerShell .ps1 equivalents
+52bdaac fix(winccoabrowse): specify online value attribute for archive group attribute reads
+185b176 feat(cabi): allow dynamic WinCC OA debug flag control for host logging
+e2f13d6 fix(oahost): use non-waiting dpSetTimed instead of dpSetTimedWait
+d732e6f feat(oastore): add WINCCOA last-value store and dpGetPeriod history archive (fixes #40)
+50bd7a5 feat(unsmodeler): add WinCC OA archiving configuration for Direction B (fixes #41)
+5d1e846 feat(nats): port NATS server and JetStream KV facade (#21)
+7861703 feat(redisserver): port Redis RESP2 protocol server with WinCC OA tag topics (#38)
+91fbf09 feat(broker): add shared protocol-server building blocks S1-S7 (fixes #34)
+aa4f719 feat(prometheus): port Prometheus metrics and PromQL HTTP API (fixes #39)
+2c018c4 fix(peerlink): exclude archive groups with both stores read-only from archive interest (fixes #37)
+3cb0abe fix(questdb): align aggregated column names with main and other backends (fixes #35)
+189ca25 docs: add plan-uns-modeler-archive and link issue #41
+a8d8820 fix(archive): count only plain JSON numbers in field "" aggregation
+85c0ad1 test: run integration tests from a fixed binary path
+faf45bd docs(plan): link the plans to their monster-mq-edge issues
+f038ae9 docs(plan): move main-side tasks to monster-mq issues
+830c1ab docs(plan): NATS, Redis, Prometheus servers and WinCC OA archive
+f58d5d2 docs(plan): note push/PR deferred by owner decision for the Kafka client bridge
+7ddbd9c Merge branch 'feature/kafka-client-bridge': Kafka client bridge (KAFKA-Client)
+1e78ff0 docs(plan): Core-generated codec vectors are not needed
+e193cd4 docs(plan): record owner decisions on the remaining Kafka bridge items
+b46d855 test: fix two integration tests that failed on Windows and under load
+3c311e3 test(kafka): cover a cluster that becomes reachable after start
+b0aa369 feat(kafka): add Kafka client bridge (KAFKA-Client) with Core parity
+29a44f0 Update plan-kafka-client-bridge.md
+fa9dfb2 feat(run): auto-link and build dashboard in run.bat on Windows
+ad107ee Create plan-kafka-client-bridge.md
+936fc0b fix(mqtt): fix inflight ack state, QoS 2 validation, atomic quotas and CONNECT client slot (Fixes #23)
+300cc3c Save uncommitted changes
+ce9ec9f fix(bridge): preserve multiple outbound PUBLISH mappings sharing a localTopic
+caf0066 Merge PR #33 (fix(mqtt): log error disconnects once with reason code and client)
+2cd6b60 Merge PR #32 (fix(bridge): review fixes for TLS verification and PKCS12)
+c1e7682 Merge PR #31 (perf(auth): memoize ACL verdicts per user, client id, topic and direction)
+b918e44 Merge PR #29 (fix(auth): skip bcrypt on repeat MQTT CONNECT with verified credentials)
+e835c2e Merge PR #27 (docs(readme): bridge limits found in review)
+ef4616e Merge PR #26 (fix(listeners): keep accepting after transient Accept errors)
+ab64b62 Merge remote-tracking branch 'origin/feat/uns-modeler' into feat/uns-modeler
+3b5130d feat(unsmodeler): publish a datapoint as one JSON topic
+1d8f213 fix(mqtt): log error disconnects once with reason code and client
+bf3274e feat(winccua): support mapping incoming MQTT topics to WinCC Unified tags
+94343c3 feat(unsmodeler): source time for Direction B and live monitor values
+24a0ea2 feat(unsmodeler): use the GenAI assistant provider and accept live topic data
+7355fa9 fix(bridge): review fixes for TLS verification and PKCS12
+f30bc50 docs(readme): MQTT bridge TLS and mTLS
+8fb733d test(bridge): mTLS bridge against an mTLS edge broker
+80be777 feat(graphql): bridge TLS fields as in MonsterMQ Core
+40908bd feat(bridge): use the TLS options at connector start
+a4ffa1a feat(bridge): validate bridge configs with MonsterMQ Core's rules and messages
+617cf0d feat(bridge): TLS client config with CA, client certificate, SNI and ALPN
+c1ec646 docs(plans): #20 retries file errors and re-reads certificates per connection
+a9729ad docs(plans): spec for MQTT client bridge mTLS (#20)
+37cdda8 docs(readme): bridge limits found in review
+a0ab404 test(broker): store-backed retained replay keeps the publisher as origin
+d2758e5 fix(broker): reserve the bridge: client id prefix for bridges
+eeccc7d perf(auth): memoize ACL verdicts per user, client id, topic and direction
+1542e85 fix(peerlink): keep the inline flag on replicas
+475e985 test(bridge): prove the live retain flag and the exact 3.1.1 echo counts
+97e4914 fix(bridge): subscribe per topic over MQTT 5
+d465fde fix(bridge): count buffered time against Message Expiry
+8e50566 fix(bridge): drop publishes the remote refuses instead of retrying forever
+a7a1961 fix(auth): skip bcrypt on repeat MQTT CONNECT with verified credentials
+5ace37c docs(readme): MQTT bridge protocolVersion, MQTT 5 and 3.1.1 behaviour
+b8674ec test(bridge): chained brokers, overlapping topics, shared subscriptions and TLS
+13c541b fix(broker): keep the origin on store-backed retained replay
+c35a8a4 feat(bridge): run the MQTT bridge on MQTT 5 or MQTT 3.1.1 per protocolVersion
+daa38ef feat(bridge): MQTT 5 transport with No Local and Retain As Published
+2f01bdb feat(broker): publish as a named inline client with MQTT 5 properties
+0e59078 feat(broker): carry all MQTT 5 properties and the inline flag on the bus
+6439fb4 fix(listeners): keep accepting after transient Accept errors
+aa00ab4 fix(unsmodeler): lower the node limit to 2000
+4c77254 refactor(unsmodeler): store mapping documents in the device record
+e14a098 feat(unsmodeler): add UNS Modeler device with WinCC OA browse API
+93e2686 feat(unsmodeler): add mapping document JSON Schema and validator
+2558775 feat(rtspcamera): capture local USB cameras via V4L2 on Linux
+f8f78c2 fix(winccoa): give GraphQL subscribe/publish the same native semantics as MQTT
+233b423 feat(release): decouple dev version bump from publish.sh into bump-dev.sh
+cc3cbfd chore(version): prepare next version 0.1.17-dev

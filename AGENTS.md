@@ -168,23 +168,25 @@ make test-race          # go test ./... with -race
 make lint               # go vet ./...
 make gen                # regenerate gqlgen output
 
-./run.sh                # build + run with config.yaml
-./run.sh -b -- -config test/smoke.yaml
+python make.py run                    # run bin/monstermq-edge with config.yaml
+python make.py run -b -- -config test/smoke.yaml   # build, then run
+python make.py build --binary         # same binary as `make build`, works without make
+python make.py test-integration       # integration tests (see below)
+python make.py help                   # all commands: build, docker, publish, winccoa, release, ...
 ```
 
 **Integration tests on Windows.** On Windows, never run `go test ./test/integration` or `go test ./...`. Use:
 
-- `test-integration.ps1` in PowerShell;
-- `bash scripts/test-integration.sh` in Git Bash, which has no `make`.
+- `python make.py test-integration` (PowerShell, cmd, or Git Bash, which has no `make`).
 
-Both build `bin\integration.test.exe` and run it from `test/integration`.
+It builds `bin\integration.test.exe` and runs it from `test/integration`.
 
 Why: the tests listen on all interfaces, and the Windows firewall asks once per program path. `go test` builds into a
 new temp folder on every run, so the owner has to confirm a firewall dialog each time. The fixed path is allowed once
 and stays allowed. A git worktree has its own path and asks once more.
 
-- **Test flags.** Pass them in test-binary form, for example `.\test-integration.ps1 -test.run TestPublishSubscribeQoS0
-  -test.v`.
+- **Test flags.** Pass them in test-binary form, for example `python make.py test-integration -test.run
+  TestPublishSubscribeQoS0 -test.v`.
 - **Other packages.** Unit tests in the other packages (`go test ./internal/...`) can still use plain `go test`,
   because they bind only to the loopback interface (see below).
 

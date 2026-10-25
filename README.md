@@ -35,12 +35,12 @@ cd monster-mq-edge
 
 Then build and run:
 ```bash
-# Linux / macOS
-./run.sh -b
-
-# Windows
-.\run.ps1 -b
+python make.py run -b     # Linux / macOS / Windows (Python 3.9+)
 ```
+
+`python make.py help` lists all developer commands (build, docker, publish, test-integration, winccoa, release).
+
+**Releasing:** `python make.py release` finalizes the version, tags `vX.Y.Z` and pushes (rolling back on failure); `python make.py dev` then advances to the next `-dev` version. Pushing the tag starts the GitHub **Release** workflow (`.github/workflows/release.yml`), which builds the Debian packages (with the dashboard from the dashboard repository's `main` branch), creates the GitHub release and pushes `rocworks/monstermq-edge:<version>` and `:latest` for linux/amd64, arm64 and arm/v7. **Run workflow** on the Actions tab (or `gh workflow run release.yml --ref main`) pushes `rocworks/monstermq-edge:testing` from a branch. The workflow needs the repository secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; `python make.py publish` remains available as a local fallback.
 
 Or use Make directly:
 ```bash
@@ -100,10 +100,10 @@ make build-amd64    # Linux x86_64
 
 ## Docker
 
-To build the Docker image, you can run the build script under `docker/` which automatically tags the image and embeds the version from `version.txt`:
+To build the Docker image, run `make.py docker`, which automatically tags the image and embeds the version from `version.txt`:
 
 ```bash
-./docker/build.sh -n
+python make.py docker -n
 ```
 
 Or you can build manually with `docker buildx` from the repository root:

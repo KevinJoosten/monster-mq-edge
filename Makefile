@@ -59,21 +59,24 @@ deb-amd64:
 
 deb-all: deb-arm64 deb-armv7 deb-amd64
 
+# Release and publish live in make.py (python make.py help).
+PYTHON ?= python3
+
 release:
-	./release.sh
+	$(PYTHON) make.py release
 
 publish:
-	./publish.sh
+	$(PYTHON) make.py publish $(ARGS)
 
 test:
 	go test $$(go list ./... | grep -v /test/integration) -count=1 -timeout 300s
-	bash scripts/test-integration.sh
+	$(PYTHON) make.py test-integration
 
 # The integration tests run from bin/integration.test[.exe], a fixed path, so the
 # Windows firewall keeps its "Allow access" decision. go test builds into a new
 # temp dir on every run. Extra flags: make test-integration ARGS="-test.run X -test.v"
 test-integration:
-	bash scripts/test-integration.sh $(ARGS)
+	$(PYTHON) make.py test-integration $(ARGS)
 
 test-race:
 	go test ./... -race -count=1 -timeout 600s

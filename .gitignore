@@ -16,3 +16,6 @@ winccoa
 
 # PeerLink TLS certificates and private keys
 /certs/
+
+# Python (make.py)
+__pycache__/

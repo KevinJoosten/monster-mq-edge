@@ -3,26 +3,27 @@
 Build a local image (native platform) and save it as a tar file:
 
 ```bash
-./docker/build.sh -n
+python make.py docker -n
 ```
 
 Build multi-arch (`linux/amd64,linux/arm64,linux/arm/v7`) and publish to Docker Hub
 (`rocworks/monstermq-edge:<version>` and `:latest`):
 
 ```bash
-./docker/build.sh -y
+python make.py docker -y
 ```
 
-Without `-n` or `-y`, the script asks. The version comes from `version.txt` at the
+Without `-n` or `-y`, the command asks (without a terminal it builds locally). The version comes from `version.txt` at the
 repository root and is injected into the binary at build time via Go ldflags.
-Override the image repository with `IMAGE_REPO=... ./docker/build.sh`. Override
-the platform list with `PLATFORMS=... ./docker/build.sh -y`.
+Override the image repository with `IMAGE_REPO=... python make.py docker`. Override
+the platform list with `PLATFORMS=... python make.py docker -y`. To publish a release
+(GitHub assets and images, checked before anything is uploaded), use `python make.py publish --all`.
 
 To bump the patch version, tag the release, and write release notes, run from the
 repository root:
 
 ```bash
-./release.sh
+python make.py release
 ```
 
 ## Running the image

@@ -1,0 +1,12 @@
+Release v0.1.18
+Built from commit: 27a73cb
+Date: 2026-10-26 14:40:58
+
+Changes since v0.1.17:
+---
+27a73cb Update release.yml
+b10728a Replace shell/PowerShell scripts with cross-platform make.py
+65a49de feat(publish): allow publishing dev docker images with testing tag
+75644ea fix(docker): support building without buildx plugin
+d3b40ac feat(auth): add default Anonymous user without password and support empty password connect
+e4f927c chore(version): prepare next version 0.1.18-dev
